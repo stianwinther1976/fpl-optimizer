@@ -292,6 +292,30 @@ export default function Dashboard({
           </h1>
         </div>
         <ThemeToggle />
+        {currentEvent != null && (
+          <div
+            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-semibold ${
+              !gwFinished
+                ? "border-accent/40 bg-accent/10 text-accent"
+                : "border-border-c bg-panel text-foreground"
+            }`}
+          >
+            {!gwFinished && (
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-60" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
+              </span>
+            )}
+            GW{currentEvent}
+            <span className={`font-normal ${gwFinished ? "text-muted" : ""}`}>
+              {!gwFinished
+                ? "· Live"
+                : squad?.nextEvent != null
+                  ? "· Finished"
+                  : "· Season finished"}
+            </span>
+          </div>
+        )}
         {squad?.nextEvent != null && (
           <DeadlineChip
             nextEvent={squad.nextEvent}
