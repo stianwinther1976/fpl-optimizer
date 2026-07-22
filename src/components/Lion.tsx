@@ -29,13 +29,13 @@ export default function Lion({
       {showText && (
         <text
           fill="#e2bd52"
-          fontSize="7.6"
+          fontSize="6"
           fontWeight="700"
-          letterSpacing="1.7"
+          letterSpacing="0.9"
           fontFamily="ui-sans-serif, system-ui, sans-serif"
         >
           <textPath href="#lion-arc" startOffset="50%" textAnchor="middle">
-            FPL OPTIMIZER
+            FANTASY PREMIER LEAGUE
           </textPath>
         </text>
       )}
