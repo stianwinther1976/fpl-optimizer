@@ -109,7 +109,7 @@ function PlayerCard({
         </span>
       )}
       <PlayerAvatar el={el} teamShort={team?.short_name} />
-      <div className="mt-1 truncate rounded bg-black/70 px-1 py-0.5 text-[11px] font-semibold leading-tight">
+      <div className="mt-1 truncate rounded bg-black/70 px-1 py-0.5 text-[11px] font-semibold leading-tight text-white">
         {flag ? `${flag} ` : ""}
         {el.web_name}
       </div>
