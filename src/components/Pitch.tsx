@@ -93,7 +93,7 @@ function PlayerCard({
 
   return (
     <div
-      className={`relative w-[4.6rem] sm:w-24 text-center ${onSelect ? "cursor-pointer" : ""}`}
+      className={`relative w-[4.6rem] max-w-full sm:w-24 text-center ${onSelect ? "cursor-pointer" : ""}`}
       title={el.news || undefined}
       onClick={onSelect ? () => onSelect(el) : undefined}
       role={onSelect ? "button" : undefined}
@@ -186,10 +186,12 @@ export default function Pitch({
           <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
             Bench (in order)
           </div>
-          <div className="flex justify-start gap-2 sm:gap-6 overflow-x-auto">
+          <div className="grid grid-cols-4 gap-1 sm:flex sm:justify-start sm:gap-6">
             {bench.map((p, i) => (
-              <div key={p.element.id} className="flex items-end gap-1">
-                <span className="pb-4 text-[10px] text-muted">{i + 1}.</span>
+              <div key={p.element.id} className="relative min-w-0">
+                <span className="absolute -top-1 left-0 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-[9px] font-bold text-white">
+                  {i + 1}
+                </span>
                 <PlayerCard p={p} teams={teams} fixtures={fixtures} nextEvent={nextEvent} onSelect={onSelect} />
               </div>
             ))}
