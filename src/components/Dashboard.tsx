@@ -212,16 +212,15 @@ export default function Dashboard({
       maximumFractionDigits: digits,
     })}`;
 
-  // Total points: points added since the comparison GW; good if above the pace of the window before it.
+  // Total points: points added since the comparison GW. Cumulative — adding
+  // points is always good (the pace comparison lives on the Latest GW card).
   let pointsDelta: StatDelta | null = null;
   if (comparable) {
     const gained = curr.total_points - past.total_points;
-    const prevWindow = rows.find((r) => r.event === past.event - (curr.event - past.event));
-    const prevGained = prevWindow ? past.total_points - prevWindow.total_points : null;
     pointsDelta = {
       text: `${fmtSigned(gained)} pts`,
       period,
-      good: prevGained == null ? null : gained >= prevGained,
+      good: gained > 0 ? true : null,
       direction: "up",
     };
   }
