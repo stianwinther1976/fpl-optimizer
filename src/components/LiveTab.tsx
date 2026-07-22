@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type TeamData } from "@/lib/fpl";
 import type { EventLive, Fixture } from "@/lib/types";
 import { matchMinute, provisionalBonus } from "@/lib/live";
@@ -13,6 +13,8 @@ export default function LiveTab({ data }: { data: TeamData }) {
   const [fixtures, setFixtures] = useState<Fixture[]>(data.fixtures);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const [bandSafety, setBandSafety] = useState<number | null>(null);
+  const bandTried = useRef(false);
 
   const currentEventObj = data.bootstrap.events.find((e) => e.is_current) ?? null;
   const currentEvent = currentEventObj?.id ?? data.squad?.currentEvent ?? null;
@@ -49,6 +51,48 @@ export default function LiveTab({ data }: { data: TeamData }) {
     const t = setInterval(refresh, REFRESH_MS);
     return () => clearInterval(t);
   }, [refresh, currentEvent, gwDone]);
+
+  // Personalised safety score: sample ~20 managers at the user's overall-rank
+  // band (the Overall league is paged in rank order) and take the median of
+  // their net live scores — the score needed to keep pace with your peers.
+  useEffect(() => {
+    if (bandTried.current || live == null || currentEvent == null) return;
+    const rank = data.entry.summary_overall_rank;
+    if (rank == null) return;
+    bandTried.current = true;
+    (async () => {
+      try {
+        const overallId =
+          data.entry.leagues?.classic?.find((l) => l.name === "Overall")?.id ?? 314;
+        const page = Math.max(1, Math.ceil(rank / 50));
+        const standings = await api.league(overallId, page);
+        const sample = standings.standings.results.slice(0, 20);
+        const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
+        const scores = (
+          await Promise.all(
+            sample.map(async (r) => {
+              try {
+                const p = await api.picks(r.entry, currentEvent);
+                const bb = p.active_chip === "bboost";
+                let pts = 0;
+                for (const pk of p.picks) {
+                  const mult = bb && pk.multiplier === 0 ? 1 : pk.multiplier;
+                  pts += (pointsOf.get(pk.element) ?? 0) * mult;
+                }
+                return pts - p.entry_history.event_transfers_cost;
+              } catch {
+                return null;
+              }
+            })
+          )
+        ).filter((x): x is number => x != null);
+        if (scores.length >= 5) {
+          scores.sort((a, b) => a - b);
+          setBandSafety(scores[Math.floor(scores.length / 2)]);
+        }
+      } catch {}
+    })();
+  }, [live, currentEvent, data.entry]);
 
   const teams = useMemo(
     () => new Map(data.bootstrap.teams.map((t) => [t.id, t])),
@@ -170,22 +214,33 @@ export default function LiveTab({ data }: { data: TeamData }) {
           </button>
         </div>
 
-        {/* Safety estimate: the GW average is roughly the score needed to hold overall rank */}
-        {gwAvg != null && (
-          <div
-            className={`w-full rounded-lg border px-3 py-2 text-sm ${
-              total >= gwAvg
-                ? "border-accent/40 bg-accent/10 text-accent"
-                : "border-warn/40 bg-warn/10 text-warn"
-            }`}
-            title="Estimate based on the live gameweek average — score above it and your overall rank usually climbs"
-          >
-            🛡️ Safety score (est.): <b>{gwAvg} pts</b> —{" "}
-            {total >= gwAvg
-              ? `you're ${total - gwAvg} above; on course to climb ▲`
-              : `${gwAvg - total} more needed to hold your rank`}
-          </div>
-        )}
+        {/* Safety score: median live score of ~20 managers at your overall-rank
+            band when available; falls back to the GW average estimate. */}
+        {(bandSafety ?? gwAvg) != null &&
+          (() => {
+            const needed = bandSafety ?? gwAvg!;
+            const personalized = bandSafety != null;
+            return (
+              <div
+                className={`w-full rounded-lg border px-3 py-2 text-sm ${
+                  total >= needed
+                    ? "border-accent/40 bg-accent/10 text-accent"
+                    : "border-warn/40 bg-warn/10 text-warn"
+                }`}
+                title={
+                  personalized
+                    ? "Median live score of ~20 managers ranked right around you in the Overall league — match it to hold your rank"
+                    : "Estimate based on the live gameweek average — a rank-band sample wasn't available"
+                }
+              >
+                🛡️ Safety score {personalized ? "(your rank band)" : "(est.)"}:{" "}
+                <b>{needed} pts</b> —{" "}
+                {total >= needed
+                  ? `you're ${total - needed} above; on course to climb ▲`
+                  : `${needed - total} more needed to hold your rank`}
+              </div>
+            );
+          })()}
       </div>
 
       {/* Match scores — two rows so twice as many fit on screen */}
