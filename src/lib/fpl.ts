@@ -133,3 +133,16 @@ export function fmtRank(rank: number | null | undefined): string {
   if (rank == null) return "–";
   return rank.toLocaleString("en-GB");
 }
+
+/** Official player headshot (110x140) from the Premier League CDN. */
+export function playerPhotoUrl(el: { photo?: string }): string | null {
+  if (!el.photo) return null;
+  const id = el.photo.replace(/\.(jpg|png)$/i, "");
+  return `https://resources.premierleague.com/premierleague/photos/players/110x140/p${id}.png`;
+}
+
+/** Club shirt image from the official FPL site. */
+export function shirtUrl(team: { code?: number }, gk = false): string | null {
+  if (!team.code) return null;
+  return `https://fantasy.premierleague.com/dist/img/shirts/standard/shirt_${team.code}${gk ? "_1" : ""}-66.png`;
+}

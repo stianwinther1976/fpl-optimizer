@@ -203,7 +203,11 @@ export default function Dashboard({ entryId }: { entryId: number }) {
               ? `£${fmtPrice(squad.players.reduce((s, p) => s + p.sellPrice, 0) + squad.bank)}m`
               : "–"
           }
-          sub={squad ? `Bank £${fmtPrice(squad.bank)}m` : undefined}
+          sub={
+            squad
+              ? `£${fmtPrice(squad.players.reduce((s, p) => s + p.sellPrice, 0))}m squad + £${fmtPrice(squad.bank)}m bank`
+              : undefined
+          }
           delta={valueDelta}
         />
         <Stat label="Free transfers" value={squad ? String(squad.freeTransfers) : "–"} />

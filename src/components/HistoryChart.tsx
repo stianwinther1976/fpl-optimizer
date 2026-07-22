@@ -14,6 +14,48 @@ import type { TeamData } from "@/lib/fpl";
 import { CHIP_LABELS } from "@/lib/rules";
 import { SectionTitle } from "./ui";
 
+function PastSeasons({ data }: { data: TeamData }) {
+  const past = data.history.past;
+  if (past.length === 0) return null;
+  const last3 = past.slice(-3);
+  const avgRank = Math.round(last3.reduce((s, p) => s + p.rank, 0) / last3.length);
+  const bestRank = Math.min(...past.map((p) => p.rank));
+  return (
+    <div className="card p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <SectionTitle>Past seasons</SectionTitle>
+        <div className="text-sm text-muted">
+          {past.length} season{past.length > 1 ? "s" : ""} · last {last3.length} avg rank{" "}
+          <span className="font-semibold text-foreground">{avgRank.toLocaleString("en-GB")}</span>{" "}
+          · best <span className="font-semibold text-accent">{bestRank.toLocaleString("en-GB")}</span>
+        </div>
+      </div>
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full min-w-100 text-sm">
+          <thead className="border-b border-border-c text-xs uppercase text-muted">
+            <tr>
+              <th className="px-2 py-1.5 text-left">Season</th>
+              <th className="px-2 py-1.5 text-right">Points</th>
+              <th className="px-2 py-1.5 text-right">Overall rank</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border-c/60">
+            {[...past].reverse().map((p) => (
+              <tr key={p.season_name} className={p.rank === bestRank ? "text-accent" : ""}>
+                <td className="px-2 py-1.5 font-medium">{p.season_name}</td>
+                <td className="px-2 py-1.5 text-right font-mono">{p.total_points}</td>
+                <td className="px-2 py-1.5 text-right font-mono">
+                  {p.rank.toLocaleString("en-GB")}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function HistoryChart({ data }: { data: TeamData }) {
   const rows = data.history.current.map((r) => ({
     gw: r.event,
@@ -27,32 +69,16 @@ export default function HistoryChart({ data }: { data: TeamData }) {
 
   if (rows.length === 0) {
     return (
-      <div className="card p-6 text-muted">
-        No history yet this season.
-        {data.history.past.length > 0 && (
-          <div className="mt-4">
-            <div className="mb-2 font-semibold text-foreground">Past seasons</div>
-            <table className="w-full max-w-md text-sm">
-              <tbody className="divide-y divide-border-c/60">
-                {data.history.past.map((p) => (
-                  <tr key={p.season_name}>
-                    <td className="py-1.5">{p.season_name}</td>
-                    <td className="py-1.5 text-right font-mono">{p.total_points} pts</td>
-                    <td className="py-1.5 text-right font-mono text-muted">
-                      {p.rank.toLocaleString("en-GB")}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+      <div className="space-y-6">
+        <div className="card p-6 text-muted">No history yet this season.</div>
+        <PastSeasons data={data} />
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      <PastSeasons data={data} />
       <div className="card p-4">
         <SectionTitle>Points per gameweek</SectionTitle>
         <div className="mt-4 h-64">

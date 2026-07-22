@@ -53,7 +53,9 @@ export default function FixtureTicker({ data }: { data: TeamData }) {
       <table className="w-full min-w-[560px] text-sm">
         <thead className="border-b border-border-c text-xs uppercase text-muted">
           <tr>
-            <th className="px-3 py-2 text-left">Team (easiest first)</th>
+            <th className="sticky left-0 z-10 bg-[var(--panel)] px-3 py-2 text-left">
+              Team (easiest first)
+            </th>
             {gws.map((g) => (
               <th key={g} className="px-2 py-2 text-center">
                 GW{g}
@@ -65,7 +67,9 @@ export default function FixtureTicker({ data }: { data: TeamData }) {
         <tbody className="divide-y divide-border-c/60">
           {rows.map(({ team, cells, avgFdr }) => (
             <tr key={team.id}>
-              <td className="px-3 py-2 font-medium">{team.name}</td>
+              <td className="sticky left-0 z-10 bg-[var(--panel)] px-3 py-2 font-medium">
+                {team.name}
+              </td>
               {cells.map((cell, i) => (
                 <td key={i} className="px-1 py-1.5 text-center">
                   {cell.length === 0 ? (

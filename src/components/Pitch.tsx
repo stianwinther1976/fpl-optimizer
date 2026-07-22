@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import type { Element, Fixture, Team } from "@/lib/types";
 import { fmtPrice } from "@/lib/rules";
 import { teamFixtures } from "@/lib/xp";
+import { playerPhotoUrl } from "@/lib/fpl";
 
 export interface PitchPlayer {
   element: Element;
@@ -25,6 +27,39 @@ function statusFlag(el: Element): string | null {
   if (el.status === "d") return "⚠️";
   if (el.status === "u" || el.status === "n") return "❌";
   return null;
+}
+
+export function PlayerAvatar({
+  el,
+  teamShort,
+  size = "md",
+}: {
+  el: Element;
+  teamShort?: string;
+  size?: "sm" | "md";
+}) {
+  const [failed, setFailed] = useState(false);
+  const url = playerPhotoUrl(el);
+  const dims = size === "sm" ? "h-7 w-7" : "h-10 w-10 sm:h-12 sm:w-12";
+  if (url && !failed) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- external CDN, no next/image config needed
+      <img
+        src={url}
+        alt={el.web_name}
+        loading="lazy"
+        onError={() => setFailed(true)}
+        className={`mx-auto ${dims} rounded-full bg-panel-2 object-cover object-top shadow`}
+      />
+    );
+  }
+  return (
+    <div
+      className={`mx-auto flex ${dims} items-center justify-center rounded-full ${TYPE_COLORS[el.element_type]} ${size === "sm" ? "text-[10px]" : "text-sm"} font-bold text-black shadow`}
+    >
+      {teamShort?.slice(0, 3) ?? "?"}
+    </div>
+  );
 }
 
 function PlayerCard({
@@ -64,11 +99,7 @@ function PlayerCard({
           V
         </span>
       )}
-      <div
-        className={`mx-auto flex h-10 w-10 sm:h-12 sm:w-12 items-center justify-center rounded-full ${TYPE_COLORS[el.element_type]} text-sm font-bold text-black shadow`}
-      >
-        {team?.short_name?.slice(0, 3) ?? "?"}
-      </div>
+      <PlayerAvatar el={el} teamShort={team?.short_name} />
       <div className="mt-1 truncate rounded bg-black/70 px-1 py-0.5 text-[11px] font-semibold leading-tight">
         {flag ? `${flag} ` : ""}
         {el.web_name}

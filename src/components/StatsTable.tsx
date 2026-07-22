@@ -5,6 +5,7 @@ import type { TeamData } from "@/lib/fpl";
 import { fmtPrice, POSITION_NAMES } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
 import type { ElementType } from "@/lib/types";
+import { PlayerAvatar } from "./Pitch";
 
 type SortKey = "xp" | "total_points" | "form" | "now_cost" | "selected" | "xgi";
 
@@ -107,7 +108,7 @@ export default function StatsTable({ data }: { data: TeamData }) {
         <table className="w-full min-w-[640px] text-sm">
           <thead className="border-b border-border-c text-xs uppercase text-muted">
             <tr>
-              <th className="px-3 py-2 text-left">Player</th>
+              <th className="sticky left-0 z-10 bg-[var(--panel)] px-3 py-2 text-left">Player</th>
               <th className="px-2 py-2 text-left">Pos</th>
               {th("now_cost", "Price")}
               {th("xp", `xP (5 GW)`)}
@@ -120,14 +121,19 @@ export default function StatsTable({ data }: { data: TeamData }) {
           <tbody className="divide-y divide-border-c/60">
             {rows.map((e) => (
               <tr key={e.id} className="hover:bg-panel-2/60">
-                <td className="px-3 py-2">
-                  <span className="font-medium">{e.web_name}</span>{" "}
-                  <span className="text-xs text-muted">{teams.get(e.team)?.short_name}</span>
-                  {e.status !== "a" && (
-                    <span className="ml-1 text-xs" title={e.news}>
-                      {e.status === "d" ? "⚠️" : "🤕"}
+                <td className="sticky left-0 z-10 bg-[var(--panel)] px-3 py-2">
+                  <span className="flex items-center gap-2">
+                    <PlayerAvatar el={e} teamShort={teams.get(e.team)?.short_name} size="sm" />
+                    <span>
+                      <span className="font-medium">{e.web_name}</span>{" "}
+                      <span className="text-xs text-muted">{teams.get(e.team)?.short_name}</span>
+                      {e.status !== "a" && (
+                        <span className="ml-1 text-xs" title={e.news}>
+                          {e.status === "d" ? "⚠️" : "🤕"}
+                        </span>
+                      )}
                     </span>
-                  )}
+                  </span>
                 </td>
                 <td className="px-2 py-2 text-muted">{POSITION_NAMES[e.element_type]}</td>
                 <td className="px-2 py-2 text-right font-mono">£{fmtPrice(e.now_cost)}</td>

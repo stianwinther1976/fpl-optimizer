@@ -8,6 +8,7 @@ export interface Element {
   web_name: string;
   first_name: string;
   second_name: string;
+  photo?: string; // e.g. "223340.jpg" -> player photo id
   team: number;
   element_type: ElementType;
   now_cost: number;
@@ -38,6 +39,7 @@ export interface Element {
 
 export interface Team {
   id: number;
+  code?: number; // kit/badge asset id
   name: string;
   short_name: string;
   strength: number;
