@@ -63,7 +63,7 @@ export default function Home() {
         <ThemeToggle />
       </div>
       <div className="w-full max-w-xl text-center">
-        <Lion className="mx-auto h-14 w-14 sm:h-20 sm:w-20" />
+        <Lion className="mx-auto h-28 w-28 sm:h-36 sm:w-36" />
         <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-5xl">
           FPL <span className="text-accent">Optimizer</span>
         </h1>
