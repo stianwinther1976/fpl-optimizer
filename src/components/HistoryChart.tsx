@@ -30,13 +30,13 @@ function PastSeasons({ data }: { data: TeamData }) {
           · best <span className="font-semibold text-accent">{bestRank.toLocaleString("en-GB")}</span>
         </div>
       </div>
-      <div className="mt-3 overflow-x-auto">
-        <table className="w-full min-w-100 text-sm">
+      <div className="mt-3">
+        <table className="w-full text-sm">
           <thead className="border-b border-border-c text-xs uppercase text-muted">
             <tr>
               <th className="px-2 py-1.5 text-left">Season</th>
               <th className="px-2 py-1.5 text-right">Points</th>
-              <th className="px-2 py-1.5 text-right">Overall rank</th>
+              <th className="px-2 py-1.5 text-right">Rank</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border-c/60">
