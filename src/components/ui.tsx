@@ -51,6 +51,7 @@ export function Stat({
   accent,
   delta,
   trend,
+  onClick,
 }: {
   label: string;
   value: string;
@@ -58,6 +59,7 @@ export function Stat({
   accent?: boolean;
   delta?: StatDelta | null;
   trend?: number[];
+  onClick?: () => void;
 }) {
   const arrow =
     delta && delta.good !== null
@@ -67,8 +69,12 @@ export function Stat({
       : null;
   const deltaColor =
     delta?.good === true ? "text-accent" : delta?.good === false ? "text-danger" : "text-muted";
+  const Tag = onClick ? "button" : "div";
   return (
-    <div className="card px-2.5 py-2 sm:px-4 sm:py-3">
+    <Tag
+      onClick={onClick}
+      className={`card px-2.5 py-2 text-left sm:px-4 sm:py-3 ${onClick ? "cursor-pointer hover:border-accent" : ""}`}
+    >
       <div className="truncate text-[11px] tracking-wide text-muted sm:text-xs">{label}</div>
       <div className={`mt-0.5 text-base font-semibold sm:text-xl ${accent ? "text-accent" : ""}`}>
         {value}
@@ -84,7 +90,7 @@ export function Stat({
         </div>
       )}
       {sub && <div className="mt-0.5 truncate text-[11px] text-muted sm:text-xs" title={sub}>{sub}</div>}
-    </div>
+    </Tag>
   );
 }
 

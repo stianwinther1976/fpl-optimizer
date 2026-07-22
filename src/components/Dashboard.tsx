@@ -6,6 +6,7 @@ import { api, FplApiError, loadTeamData, fmtRank, DEMO_ENTRY_ID, type TeamData }
 import type { Element, EventLive } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import PlayerModal from "./PlayerModal";
+import KpiHistoryModal, { type KpiMetric } from "./KpiHistoryModal";
 import Pitch from "./Pitch";
 import OptimizePanel from "./OptimizePanel";
 import StatsTable from "./StatsTable";
@@ -90,6 +91,7 @@ export default function Dashboard({
   const [error, setError] = useState<string | null>(null);
   const [liveData, setLiveData] = useState<EventLive | null>(null);
   const [selected, setSelected] = useState<Element | null>(null);
+  const [kpiModal, setKpiModal] = useState<KpiMetric | null>(null);
   const [tab, setTab] = useState<TabKey>(
     TABS.some(([k]) => k === initialTab) ? (initialTab as TabKey) : "team"
   );
@@ -309,16 +311,19 @@ export default function Dashboard({
           accent
           delta={pointsDelta}
           trend={pointsTrend.length > 1 ? pointsTrend : undefined}
+          onClick={() => setKpiModal("points")}
         />
         <Stat
           label="Overall rank"
           value={fmtRank(entry.summary_overall_rank)}
           delta={rankDelta}
+          onClick={() => setKpiModal("rank")}
         />
         <Stat
           label="Latest GW"
           value={`${entry.summary_event_points} pts`}
           delta={gwDelta}
+          onClick={() => setKpiModal("gw")}
         />
         <Stat
           label="Team value"
@@ -333,6 +338,7 @@ export default function Dashboard({
               : undefined
           }
           delta={valueDelta}
+          onClick={() => setKpiModal("value")}
         />
         <Stat label="Free transfers" value={squad ? String(squad.freeTransfers) : "–"} />
         <Stat
@@ -435,6 +441,10 @@ export default function Dashboard({
         {tab === "league" && <MiniLeague data={data} entryId={entryId} />}
         {tab === "history" && <HistoryChart data={data} />}
       </div>
+
+      {kpiModal && (
+        <KpiHistoryModal metric={kpiModal} data={data} onClose={() => setKpiModal(null)} />
+      )}
 
       {selected && (
         <PlayerModal
