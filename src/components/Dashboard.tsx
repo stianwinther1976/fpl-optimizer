@@ -346,6 +346,11 @@ export default function Dashboard({
           label="Latest GW"
           value={`${entry.summary_event_points} pts`}
           delta={gwDelta}
+          sub={
+            entry.summary_event_rank != null
+              ? `GW rank ${fmtRank(entry.summary_event_rank)}`
+              : undefined
+          }
           onClick={() => setKpiModal("gw")}
         />
         <Stat

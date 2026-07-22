@@ -158,6 +158,9 @@ export default function LiveTab({ data }: { data: TeamData }) {
         <div className="text-sm text-muted">
           <div>Bench: {benchTotal} pts{bboost ? " (Bench Boost active)" : ""}</div>
           {gwAvg != null && <div>GW average: {gwAvg} pts</div>}
+          {data.picks?.entry_history.rank != null && (
+            <div>GW rank: {data.picks.entry_history.rank.toLocaleString("en-GB")}</div>
+          )}
         </div>
         <div className="ml-auto text-right text-xs text-muted">
           {updatedAt && <div>Updated {updatedAt.toLocaleTimeString("en-GB")}</div>}
@@ -166,6 +169,23 @@ export default function LiveTab({ data }: { data: TeamData }) {
             Refresh now
           </button>
         </div>
+
+        {/* Safety estimate: the GW average is roughly the score needed to hold overall rank */}
+        {gwAvg != null && (
+          <div
+            className={`w-full rounded-lg border px-3 py-2 text-sm ${
+              total >= gwAvg
+                ? "border-accent/40 bg-accent/10 text-accent"
+                : "border-warn/40 bg-warn/10 text-warn"
+            }`}
+            title="Estimate based on the live gameweek average — score above it and your overall rank usually climbs"
+          >
+            🛡️ Safety score (est.): <b>{gwAvg} pts</b> —{" "}
+            {total >= gwAvg
+              ? `you're ${total - gwAvg} above; on course to climb ▲`
+              : `${gwAvg - total} more needed to hold your rank`}
+          </div>
+        )}
       </div>
 
       {/* Match scores — two rows so twice as many fit on screen */}
