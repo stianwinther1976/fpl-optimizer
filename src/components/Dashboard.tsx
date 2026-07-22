@@ -25,8 +25,8 @@ const TABS = [
 
 type TabKey = (typeof TABS)[number][0];
 
-/** ~1 month in FPL terms: compare against the gameweek 4 GWs back (or the earliest available). */
-const MONTH_GWS = 4;
+/** Comparison window for the KPI deltas: 1 = previous gameweek. */
+const COMPARE_GWS = 1;
 
 export default function Dashboard({ entryId }: { entryId: number }) {
   const [data, setData] = useState<TeamData | null>(null);
@@ -84,7 +84,7 @@ export default function Dashboard({ entryId }: { entryId: number }) {
   const curr = rows.length > 0 ? rows[rows.length - 1] : null;
   const past =
     curr != null
-      ? (rows.find((r) => r.event === curr.event - MONTH_GWS) ?? rows[0])
+      ? (rows.find((r) => r.event === curr.event - COMPARE_GWS) ?? rows[0])
       : null;
   const comparable = curr != null && past != null && past.event < curr.event;
   const period = comparable ? `vs GW${past.event}` : "";
@@ -95,7 +95,7 @@ export default function Dashboard({ entryId }: { entryId: number }) {
       maximumFractionDigits: digits,
     })}`;
 
-  // Total points: points added since ~a month ago; good if above the pace of the window before it.
+  // Total points: points added since the comparison GW; good if above the pace of the window before it.
   let pointsDelta: StatDelta | null = null;
   if (comparable) {
     const gained = curr.total_points - past.total_points;
@@ -121,23 +121,16 @@ export default function Dashboard({ entryId }: { entryId: number }) {
     };
   }
 
-  // GW points vs the average of the last month's gameweeks.
+  // Latest GW score vs the comparison GW's score.
   let gwDelta: StatDelta | null = null;
   if (comparable) {
-    const windowRows = rows.filter((r) => r.event > past.event && r.event <= curr.event);
-    const avg =
-      windowRows.length > 1
-        ? windowRows.slice(0, -1).reduce((s, r) => s + r.points, 0) / (windowRows.length - 1)
-        : null;
-    if (avg != null) {
-      const diff = curr.points - avg;
-      gwDelta = {
-        text: `${fmtSigned(diff, 1)} pts`,
-        period: "vs 3-GW avg",
-        good: Math.abs(diff) < 0.05 ? null : diff > 0,
-        direction: diff >= 0 ? "up" : "down",
-      };
-    }
+    const diff = curr.points - past.points;
+    gwDelta = {
+      text: `${fmtSigned(diff)} pts`,
+      period,
+      good: diff === 0 ? null : diff > 0,
+      direction: diff >= 0 ? "up" : "down",
+    };
   }
 
   // Team value (squad + bank), month over month.
