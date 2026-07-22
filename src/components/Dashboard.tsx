@@ -77,10 +77,18 @@ function DeadlineChip({
   );
 }
 
-export default function Dashboard({ entryId }: { entryId: number }) {
+export default function Dashboard({
+  entryId,
+  initialTab,
+}: {
+  entryId: number;
+  initialTab?: string;
+}) {
   const [data, setData] = useState<TeamData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<TabKey>("team");
+  const [tab, setTab] = useState<TabKey>(
+    TABS.some(([k]) => k === initialTab) ? (initialTab as TabKey) : "team"
+  );
 
   useEffect(() => {
     let cancelled = false;
