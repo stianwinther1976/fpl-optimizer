@@ -78,7 +78,7 @@ export default function StatsTable({ data }: { data: TeamData }) {
             <button
               key={t}
               onClick={() => setPosFilter(t)}
-              className={`rounded-md px-3 py-1.5 ${posFilter === t ? "bg-accent text-black font-semibold" : "text-muted"}`}
+              className={`rounded-md px-3 py-1.5 ${posFilter === t ? "btn-primary" : "text-muted"}`}
             >
               {t === 0 ? "All" : POSITION_NAMES[t]}
             </button>

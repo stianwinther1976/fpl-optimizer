@@ -84,15 +84,15 @@ export default function HistoryChart({ data }: { data: TeamData }) {
         <div className="mt-4 h-64">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={rows}>
-              <CartesianGrid stroke="#2b3442" strokeDasharray="3 3" />
-              <XAxis dataKey="gw" stroke="#8b98a9" fontSize={12} />
-              <YAxis stroke="#8b98a9" fontSize={12} width={32} />
+              <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
+              <XAxis dataKey="gw" stroke="var(--muted)" fontSize={12} />
+              <YAxis stroke="var(--muted)" fontSize={12} width={32} />
               <Tooltip
-                contentStyle={{ background: "#161b22", border: "1px solid #2b3442", borderRadius: 8 }}
+                contentStyle={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--foreground)" }}
                 labelFormatter={(gw) => `GW${gw}`}
               />
-              <Line type="monotone" dataKey="points" stroke="#37e08d" strokeWidth={2} dot={false} name="You" />
-              <Line type="monotone" dataKey="average" stroke="#8b98a9" strokeWidth={1.5} strokeDasharray="4 4" dot={false} name="Average" />
+              <Line type="monotone" dataKey="points" stroke="var(--accent)" strokeWidth={2} dot={false} name="You" />
+              <Line type="monotone" dataKey="average" stroke="var(--muted)" strokeWidth={1.5} strokeDasharray="4 4" dot={false} name="Average" />
               {chips.map((c) => {
                 const row = rows.find((r) => r.gw === c.event);
                 return row ? (
@@ -101,12 +101,12 @@ export default function HistoryChart({ data }: { data: TeamData }) {
                     x={c.event}
                     y={row.points}
                     r={5}
-                    fill="#a78bfa"
+                    fill="var(--accent-2)"
                     stroke="none"
                     label={{
                       value: CHIP_LABELS[c.name] ?? c.name,
                       position: "top",
-                      fill: "#a78bfa",
+                      fill: "var(--accent-2)",
                       fontSize: 10,
                     }}
                   />
@@ -122,21 +122,21 @@ export default function HistoryChart({ data }: { data: TeamData }) {
         <div className="mt-4 h-64">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={rows}>
-              <CartesianGrid stroke="#2b3442" strokeDasharray="3 3" />
-              <XAxis dataKey="gw" stroke="#8b98a9" fontSize={12} />
+              <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
+              <XAxis dataKey="gw" stroke="var(--muted)" fontSize={12} />
               <YAxis
-                stroke="#8b98a9"
+                stroke="var(--muted)"
                 fontSize={12}
                 width={60}
                 reversed
                 tickFormatter={(v: number) => (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v))}
               />
               <Tooltip
-                contentStyle={{ background: "#161b22", border: "1px solid #2b3442", borderRadius: 8 }}
+                contentStyle={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--foreground)" }}
                 labelFormatter={(gw) => `GW${gw}`}
                 formatter={(v) => [Number(v).toLocaleString("en-GB"), "Rank"]}
               />
-              <Line type="monotone" dataKey="rank" stroke="#a78bfa" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="rank" stroke="var(--accent-2)" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>

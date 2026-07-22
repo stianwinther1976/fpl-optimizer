@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, FplApiError } from "@/lib/fpl";
 import type { Entry } from "@/lib/types";
+import ThemeToggle from "@/components/ThemeToggle";
 
 export default function Home() {
   const router = useRouter();
@@ -39,7 +40,10 @@ export default function Home() {
   }
 
   return (
-    <main className="flex-1 flex flex-col items-center justify-center px-4 py-16">
+    <main className="relative flex-1 flex flex-col items-center justify-center px-4 py-16">
+      <div className="absolute right-4 top-4">
+        <ThemeToggle />
+      </div>
       <div className="w-full max-w-xl text-center">
         <div className="text-6xl mb-4">⚽</div>
         <h1 className="text-4xl sm:text-5xl font-bold tracking-tight">
@@ -67,7 +71,7 @@ export default function Home() {
             <button
               onClick={check}
               disabled={checking}
-              className="rounded-lg bg-accent px-5 py-3 font-semibold text-black hover:opacity-90 disabled:opacity-50"
+              className="btn-primary rounded-lg px-5 py-3"
             >
               {checking ? "Checking…" : "Load team"}
             </button>
@@ -95,7 +99,7 @@ export default function Home() {
               </div>
               <button
                 onClick={() => router.push(`/team/${entry.id}`)}
-                className="mt-3 w-full rounded-lg bg-accent px-4 py-2.5 font-semibold text-black hover:opacity-90"
+                className="btn-primary mt-3 w-full rounded-lg px-4 py-2.5"
               >
                 Open dashboard →
               </button>

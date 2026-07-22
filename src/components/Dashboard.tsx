@@ -11,6 +11,7 @@ import FixtureTicker from "./FixtureTicker";
 import HistoryChart from "./HistoryChart";
 import LiveTab from "./LiveTab";
 import MiniLeague from "./MiniLeague";
+import ThemeToggle from "./ThemeToggle";
 import { ErrorBox, Skeleton, Stat, type StatDelta } from "./ui";
 
 const TABS = [
@@ -211,13 +212,14 @@ export default function Dashboard({ entryId }: { entryId: number }) {
           <Link href="/" className="text-xs text-muted hover:text-accent">
             ← Switch team
           </Link>
-          <h1 className="text-2xl font-bold">
+          <h1 className="text-xl font-bold sm:text-2xl">
             {entry.name}{" "}
-            <span className="text-base font-normal text-muted">
+            <span className="text-sm font-normal text-muted sm:text-base">
               — {entry.player_first_name} {entry.player_last_name}
             </span>
           </h1>
         </div>
+        <ThemeToggle />
         {squad?.nextEvent != null && (
           <DeadlineChip
             nextEvent={squad.nextEvent}
@@ -229,7 +231,7 @@ export default function Dashboard({ entryId }: { entryId: number }) {
       </div>
 
       {/* KPI row */}
-      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
+      <div className="mt-3 grid grid-cols-3 gap-2 sm:gap-3 lg:grid-cols-6">
         <Stat
           label="Total points"
           value={String(entry.summary_overall_points)}
@@ -270,12 +272,12 @@ export default function Dashboard({ entryId }: { entryId: number }) {
       </div>
 
       {/* Tabs */}
-      <div className="sticky top-0 z-20 mt-6 -mx-4 flex gap-1 overflow-x-auto border-b border-border-c bg-background/85 px-4 backdrop-blur">
+      <div className="sticky top-0 z-20 mt-4 -mx-4 flex gap-1 overflow-x-auto border-b border-border-c bg-background/85 px-4 backdrop-blur">
         {TABS.map(([key, label]) => (
           <button
             key={key}
             onClick={() => setTab(key)}
-            className={`whitespace-nowrap px-4 py-2.5 text-sm font-medium ${
+            className={`whitespace-nowrap px-3 py-2 text-sm font-medium ${
               tab === key
                 ? "border-b-2 border-accent text-accent"
                 : "text-muted hover:text-foreground"
@@ -286,7 +288,7 @@ export default function Dashboard({ entryId }: { entryId: number }) {
         ))}
       </div>
 
-      <div className="mt-6">
+      <div className="mt-4">
         {tab === "team" &&
           (squad ? (
             <div className="space-y-4">

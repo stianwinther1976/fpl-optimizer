@@ -141,13 +141,13 @@ export default function Pitch({
 
   return (
     <div>
-      <div className="pitch-bg rounded-xl px-1 py-4 sm:p-6">
+      <div className="pitch-bg rounded-xl px-1 py-3 sm:p-6">
         {formation && (
           <div className="mb-2 text-center text-xs font-semibold text-emerald-200/80">
             Formation {formation.join("-")}
           </div>
         )}
-        <div className="flex flex-col gap-4 sm:gap-6">
+        <div className="flex flex-col gap-2.5 sm:gap-6">
           {rows.map((row, i) => (
             <div key={i} className="flex justify-center gap-1 sm:gap-6">
               {row.map((p) => (

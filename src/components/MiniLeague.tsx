@@ -114,7 +114,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
         <button
           onClick={() => load()}
           disabled={loading}
-          className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-50"
+          className="btn-primary rounded-lg px-4 py-2 text-sm disabled:opacity-50"
         >
           {loading ? "Loading…" : "Load standings"}
         </button>

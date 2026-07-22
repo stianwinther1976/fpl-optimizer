@@ -13,7 +13,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="h-full antialiased">
+    <html lang="en" className="h-full antialiased" suppressHydrationWarning>
+      <head>
+        <script
+          // Apply the saved theme before first paint to avoid a flash.
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{if(localStorage.getItem('theme')==='light')document.documentElement.classList.add('light')}catch(e){}",
+          }}
+        />
+      </head>
       <body className="min-h-full flex flex-col">
         {children}
         <footer className="mt-auto py-6 text-center text-xs text-muted">

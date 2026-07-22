@@ -68,16 +68,22 @@ export function Stat({
   const deltaColor =
     delta?.good === true ? "text-accent" : delta?.good === false ? "text-danger" : "text-muted";
   return (
-    <div className="card px-4 py-3">
-      <div className="text-xs tracking-wide text-muted">{label}</div>
-      <div className={`mt-1 text-xl font-semibold ${accent ? "text-accent" : ""}`}>{value}</div>
+    <div className="card px-2.5 py-2 sm:px-4 sm:py-3">
+      <div className="truncate text-[11px] tracking-wide text-muted sm:text-xs">{label}</div>
+      <div className={`mt-0.5 text-base font-semibold sm:text-xl ${accent ? "text-accent" : ""}`}>
+        {value}
+      </div>
       {delta && (
-        <div className={`mt-0.5 text-xs font-medium ${deltaColor}`}>
+        <div className={`mt-0.5 text-[11px] font-medium sm:text-xs ${deltaColor}`}>
           {arrow} {delta.text} <span className="font-normal text-muted">{delta.period}</span>
         </div>
       )}
-      {trend && <Sparkline points={trend} />}
-      {sub && <div className="mt-0.5 text-xs text-muted">{sub}</div>}
+      {trend && (
+        <div className="hidden sm:block">
+          <Sparkline points={trend} />
+        </div>
+      )}
+      {sub && <div className="mt-0.5 truncate text-[11px] text-muted sm:text-xs" title={sub}>{sub}</div>}
     </div>
   );
 }

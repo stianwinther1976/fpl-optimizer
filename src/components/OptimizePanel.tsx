@@ -84,7 +84,7 @@ export default function OptimizePanel({ data }: { data: TeamData }) {
         <button
           onClick={run}
           disabled={running}
-          className="ml-auto rounded-lg bg-accent px-5 py-2.5 font-semibold text-black hover:opacity-90 disabled:opacity-50"
+          className="btn-primary ml-auto rounded-lg px-5 py-2.5"
         >
           {running ? "Crunching…" : result ? "Re-run" : "Optimize team 🚀"}
         </button>
@@ -237,7 +237,7 @@ export default function OptimizePanel({ data }: { data: TeamData }) {
                   <button
                     key={key}
                     onClick={() => setView(key)}
-                    className={`rounded-md px-3 py-1.5 ${view === key ? "bg-accent text-black font-semibold" : "text-muted"}`}
+                    className={`rounded-md px-3 py-1.5 ${view === key ? "btn-primary" : "text-muted"}`}
                   >
                     {label}
                   </button>
