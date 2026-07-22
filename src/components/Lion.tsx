@@ -1,107 +1,31 @@
-// Original roaring-lion mascot badge for FPL Optimizer.
-// Hand-drawn vector artwork made for this app (not a trademarked mark).
+// Original golden flame-silhouette lion for FPL Optimizer.
+// Hand-drawn vector artwork made for this app (own composition — not a
+// trademarked or stock mark). Negative space uses the badge background color.
+
+const BADGE_BG = "#241028";
 
 function LionArt() {
   return (
     <g>
-      {/* Mane */}
-      <path
-        d="M44,8 L52,14 L60,6 L66,15 L76,10 L78,21 L88,20 L86,30 L96,34 L90,42 L98,50 L89,55 L94,66 L83,67 L84,78 L73,76 L70,87 L60,81 L54,90 L47,80 L40,84 L38,72 L44,66 L40,28 Z"
-        fill="#171310"
-      />
-      <path
-        d="M46,12 L52,17 L59,11 L64,18 L73,14 L75,23 L84,23 L82,31 L91,35 L86,42 L93,49 L85,53 L89,62 L80,63 L81,73 L71,71 L68,81 L59,76 L54,84 L48,75 L43,78 L42,68 L46,62 L43,30 Z"
-        fill="#b57e22"
-      />
-      <path
-        d="M50,18 L55,22 L62,17 L66,24 L74,22 L74,30 L82,32 L78,38 L85,44 L78,48 L82,56 L74,57 L74,66 L66,64 L63,73 L56,68 L52,75 L48,66 L46,58 L48,34 Z"
-        fill="#d9a441"
-      />
-      {/* Face */}
-      <path
-        d="M46,16 L36,22 L28,27 L20,31 L6,34 L8,43 L12,46 L24,49 L30,54 L34,66 L38,74 L44,72 L48,60 L49,30 Z"
-        fill="#d9a441"
-        stroke="#171310"
-        strokeWidth="2.4"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M8,36 L20,33 L24,40 L22,46 L12,45 L9,43 Z"
-        fill="#f0dcae"
-        stroke="#171310"
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M17,31 L25,29 M18,34.5 L26,32.5"
-        stroke="#171310"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        fill="none"
-      />
-      {/* Mouth */}
-      <path
-        d="M10,44 L24,49 L30,54 L35,65 L27,65 L14,54 Z"
-        fill="#4a1420"
-        stroke="#171310"
-        strokeWidth="2.4"
-        strokeLinejoin="round"
-      />
-      <path d="M22,57 L30,62 L34,65 L27,65 Z" fill="#8a2b3d" />
-      <path
-        d="M13,45 L16,56 L20,47 Z"
-        fill="#fff8ea"
-        stroke="#171310"
-        strokeWidth="1.6"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M22,48 L24,54 L27,50 Z"
-        fill="#fff8ea"
-        stroke="#171310"
-        strokeWidth="1.4"
-        strokeLinejoin="round"
-      />
-      {/* Lower jaw */}
-      <path
-        d="M10,66 L22,66 L33,67 L38,74 L31,80 L18,75 L8,70 Z"
-        fill="#d9a441"
-        stroke="#171310"
-        strokeWidth="2.4"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M18,75 L24,80 L28,76 Z"
-        fill="#f0dcae"
-        stroke="#171310"
-        strokeWidth="1.4"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M14,64 L17,57 L20,65 Z"
-        fill="#fff8ea"
-        stroke="#171310"
-        strokeWidth="1.6"
-        strokeLinejoin="round"
-      />
-      {/* Nose */}
-      <path d="M4,31.5 L16,29.5 L13,40 L6,38 Z" fill="#171310" />
-      {/* Brow + eye */}
-      <path d="M26,25 L40,20 L41,26 L29,30.5 Z" fill="#171310" />
-      <path d="M31,29 L38,26.5 L39,30.5 L33,32.5 Z" fill="#fff8ea" />
-      <circle cx="36" cy="29.3" r="1.7" fill="#171310" />
-      {/* Ear */}
-      <path
-        d="M42,20 L50,13 L52,24 Z"
-        fill="#d9a441"
-        stroke="#171310"
-        strokeWidth="2.2"
-        strokeLinejoin="round"
-      />
-      <path d="M45,20 L49,16.5 L50,22 Z" fill="#171310" />
-      {/* Cheek fur */}
-      <path d="M48,48 L40,52 L48,56 Z" fill="#b57e22" />
-      <path d="M47,58 L40,62 L48,65 Z" fill="#b57e22" />
+      <path d="M56,6 L50,16 L40,10 L40,20 L28,14 L32,24 L18,20 L26,30 L12,28 L22,38 L8,40 L20,46 L6,52 L20,56 L10,66 L24,64 L16,78 L30,72 L26,88 L38,78 L38,94 L48,80 L52,94 L58,82 L60,72 L56,40 L60,20 Z" fill="#d9a441"/>
+      <path d="M40,22 L24,30 L40,32 Z" fill="#241028"/>
+      <path d="M34,38 L14,44 L34,48 Z" fill="#241028"/>
+      <path d="M34,54 L16,62 L36,62 Z" fill="#241028"/>
+      <path d="M42,66 L30,80 L46,72 Z" fill="#241028"/>
+      <path d="M50,14 L44,24 L52,24 Z" fill="#241028"/>
+      <path d="M42,44 L32,52 L44,52 Z" fill="#241028"/>
+      <path d="M54.0,16 L64.0,22 L72.0,27 L80.0,31 L94.0,34 L92.0,43 L88.0,46 L76.0,49 L70.0,54 L66.0,66 L62.0,74 L56.0,72 L52.0,60 L51.0,30 Z" fill="#d9a441"/>
+      <path d="M93,45 L74,50 L64,57 L58,70 L70,67 L88,55 Z" fill="#241028"/>
+      <path d="M87.0,45 L84.0,56 L80.0,47 Z" fill="#f5ead0"/>
+      <path d="M78.0,48 L76.0,54 L73.0,50 Z" fill="#f5ead0"/>
+      <path d="M92,68 L78,68 L66,70 L60,77 L68,83 L82,77 L94,72 Z" fill="#d9a441"/>
+      <path d="M80,77 L74,84 L70,78 Z" fill="#d9a441"/>
+      <path d="M88,66 L85,58 L81,68 Z" fill="#f5ead0"/>
+      <path d="M96.0,31.5 L84.0,29.5 L87.0,40 L94.0,38 Z" fill="#d9a441"/>
+      <path d="M74.0,25 L60.0,20 L59.0,26 L71.0,30.5 Z" fill="#d9a441"/>
+      <path d="M69.0,29 L62.0,26.5 L61.0,30.5 L67.0,32.5 Z" fill="#241028"/>
+      <path d="M58.0,20 L50.0,13 L48.0,24 Z" fill="#d9a441"/>
+      <path d="M83.0,31 L75.0,29 M82.0,34.5 L74.0,32.5" stroke="#241028" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
     </g>
   );
 }
@@ -123,7 +47,7 @@ export default function Lion({
         <path id="lion-arc" d="M 15,50 A 35,35 0 0 1 85,50" fill="none" />
       </defs>
 
-      <circle cx="50" cy="50" r="48" fill="#241028" />
+      <circle cx="50" cy="50" r="48" fill={BADGE_BG} />
       <circle cx="50" cy="50" r="47" fill="none" stroke="url(#lion-gold)" strokeWidth="2.4" />
       <circle cx="50" cy="50" r="42.5" fill="none" stroke="url(#lion-gold)" strokeWidth="0.8" opacity="0.7" />
 
@@ -141,7 +65,7 @@ export default function Lion({
         </text>
       )}
 
-      <g transform="translate(50,56) scale(0.62) translate(-51,-48)">
+      <g transform="translate(50,57) scale(0.6) translate(-50,-50)">
         <LionArt />
       </g>
     </svg>
