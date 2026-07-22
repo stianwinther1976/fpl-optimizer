@@ -92,6 +92,14 @@ export interface Fixture {
   team_a_score: number | null;
 }
 
+export interface EntryLeague {
+  id: number;
+  name: string;
+  league_type: string; // "x" = private classic, "s" = system/public
+  entry_rank: number | null;
+  entry_last_rank: number | null;
+}
+
 export interface Entry {
   id: number;
   player_first_name: string;
@@ -104,6 +112,10 @@ export interface Entry {
   current_event: number | null;
   last_deadline_bank: number;
   last_deadline_value: number;
+  leagues?: {
+    classic?: EntryLeague[];
+    h2h?: EntryLeague[];
+  };
 }
 
 export interface Pick {
@@ -158,6 +170,12 @@ export interface Transfer {
   time: string;
 }
 
+export interface LiveExplainStat {
+  identifier: string; // e.g. "minutes", "goals_scored", "bonus"
+  points: number;
+  value: number;
+}
+
 export interface LiveElement {
   id: number;
   stats: {
@@ -168,6 +186,7 @@ export interface LiveElement {
     goals_scored: number;
     assists: number;
   };
+  explain?: { fixture: number; stats: LiveExplainStat[] }[];
 }
 
 export interface EventLive {

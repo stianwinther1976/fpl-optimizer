@@ -12,6 +12,8 @@ export interface PitchPlayer {
   isCaptain?: boolean;
   isVice?: boolean;
   sellPrice?: number;
+  /** Gameweek points to show under the card; final = round complete (different color) */
+  live?: { points: number; final: boolean };
 }
 
 const TYPE_COLORS: Record<number, string> = {
@@ -67,11 +69,13 @@ function PlayerCard({
   teams,
   fixtures,
   nextEvent,
+  onSelect,
 }: {
   p: PitchPlayer;
   teams: Map<number, Team>;
   fixtures: Fixture[];
   nextEvent: number | null;
+  onSelect?: (el: Element) => void;
 }) {
   const el = p.element;
   const team = teams.get(el.team);
@@ -88,7 +92,12 @@ function PlayerCard({
       : "";
 
   return (
-    <div className="relative w-[4.6rem] sm:w-24 text-center" title={el.news || undefined}>
+    <div
+      className={`relative w-[4.6rem] sm:w-24 text-center ${onSelect ? "cursor-pointer" : ""}`}
+      title={el.news || undefined}
+      onClick={onSelect ? () => onSelect(el) : undefined}
+      role={onSelect ? "button" : undefined}
+    >
       {p.isCaptain && (
         <span className="absolute -top-1 -right-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-black text-[10px] font-bold text-white ring-1 ring-white/40">
           C
@@ -105,8 +114,14 @@ function PlayerCard({
         {el.web_name}
       </div>
       <div className="truncate rounded-b bg-black/50 px-1 py-0.5 text-[10px] text-zinc-300">
-        £{fmtPrice(el.now_cost)}
-        {p.xp != null && <span className="text-accent"> · {p.xp.toFixed(1)}xp</span>}
+        {p.live ? (
+          <span className={`font-bold ${p.live.final ? "text-zinc-100" : "text-[#00ff87]"}`}>
+            {p.live.points} pts
+          </span>
+        ) : (
+          <>£{fmtPrice(el.now_cost)}</>
+        )}
+        {p.xp != null && <span className="text-[#00ff87]"> · {p.xp.toFixed(1)}xp</span>}
       </div>
       {fx && (
         <div className="truncate text-[9px] text-zinc-400" title={fx}>
@@ -124,6 +139,7 @@ export default function Pitch({
   fixtures,
   nextEvent,
   formation,
+  onSelect,
 }: {
   starters: PitchPlayer[];
   bench: PitchPlayer[];
@@ -131,6 +147,7 @@ export default function Pitch({
   fixtures: Fixture[];
   nextEvent: number | null;
   formation?: [number, number, number];
+  onSelect?: (el: Element) => void;
 }) {
   const rows: PitchPlayer[][] = [];
   const gk = starters.filter((p) => p.element.element_type === 1);
@@ -157,6 +174,7 @@ export default function Pitch({
                   teams={teams}
                   fixtures={fixtures}
                   nextEvent={nextEvent}
+                  onSelect={onSelect}
                 />
               ))}
             </div>
@@ -172,7 +190,7 @@ export default function Pitch({
             {bench.map((p, i) => (
               <div key={p.element.id} className="flex items-end gap-1">
                 <span className="pb-4 text-[10px] text-muted">{i + 1}.</span>
-                <PlayerCard p={p} teams={teams} fixtures={fixtures} nextEvent={nextEvent} />
+                <PlayerCard p={p} teams={teams} fixtures={fixtures} nextEvent={nextEvent} onSelect={onSelect} />
               </div>
             ))}
           </div>

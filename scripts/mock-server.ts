@@ -59,6 +59,14 @@ const entry = {
   current_event: 10,
   last_deadline_bank: 20,
   last_deadline_value: owned.reduce((s, o) => s + o.element.now_cost, 0) + 20,
+  leagues: {
+    classic: [
+      { id: 98765, name: "The Winthers", league_type: "x", entry_rank: 3, entry_last_rank: 4 },
+      { id: 98766, name: "Office League", league_type: "x", entry_rank: 1, entry_last_rank: 1 },
+      { id: 314, name: "Overall", league_type: "s", entry_rank: 154321, entry_last_rank: 159321 },
+      { id: 411, name: "Norway", league_type: "s", entry_rank: 2211, entry_last_rank: 2400 },
+    ],
+  },
 };
 
 const picks = {
@@ -117,17 +125,30 @@ const transfers = [
 ];
 
 const live = {
-  elements: bootstrap.elements.map((e) => ({
-    id: e.id,
-    stats: {
-      minutes: e.minutes > 1000 ? 90 : 30,
-      total_points: Math.max(1, Math.round((parseFloat(e.points_per_game) || 2) * 0.9)),
-      bonus: 0,
-      bps: ((e.id * 13) % 45) + (e.minutes > 1000 ? 10 : 0),
-      goals_scored: e.id % 7 === 0 ? 1 : 0,
-      assists: e.id % 11 === 0 ? 1 : 0,
-    },
-  })),
+  elements: bootstrap.elements.map((e) => {
+    const minutes = e.minutes > 1000 ? 90 : 30;
+    const goals = e.id % 7 === 0 ? 1 : 0;
+    const assists = e.id % 11 === 0 ? 1 : 0;
+    const goalPts = goals * ({ 1: 10, 2: 6, 3: 5, 4: 4 } as Record<number, number>)[e.element_type];
+    const total = (minutes >= 60 ? 2 : 1) + goalPts + assists * 3;
+    const stats = [
+      { identifier: "minutes", points: minutes >= 60 ? 2 : 1, value: minutes },
+    ];
+    if (goals) stats.push({ identifier: "goals_scored", points: goalPts, value: goals });
+    if (assists) stats.push({ identifier: "assists", points: assists * 3, value: assists });
+    return {
+      id: e.id,
+      stats: {
+        minutes,
+        total_points: total,
+        bonus: 0,
+        bps: ((e.id * 13) % 45) + (e.minutes > 1000 ? 10 : 0),
+        goals_scored: goals,
+        assists,
+      },
+      explain: [{ fixture: 1000 + (e.team % 10), stats }],
+    };
+  }),
 };
 
 const league = {

@@ -32,12 +32,25 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
     [data.bootstrap]
   );
 
+  // The user's own leagues straight from the FPL entry — no manual IDs needed.
+  const myLeagues = useMemo(() => {
+    const classic = data.entry.leagues?.classic ?? [];
+    return [...classic].sort((a, b) => {
+      const ap = a.league_type === "x" ? 0 : 1; // private mini-leagues first
+      const bp = b.league_type === "x" ? 0 : 1;
+      return ap - bp || a.name.localeCompare(b.name);
+    });
+  }, [data.entry]);
+
   useEffect(() => {
     const saved = localStorage.getItem("fpl-league-id");
-    if (saved) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring persisted input on mount
-      setLeagueId(saved);
-      load(saved);
+    const initial =
+      (saved && myLeagues.some((l) => String(l.id) === saved) ? saved : null) ??
+      (myLeagues[0] ? String(myLeagues[0].id) : saved);
+    if (initial) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring persisted selection on mount
+      setLeagueId(initial);
+      load(initial);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -103,21 +116,86 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
 
   return (
     <div className="space-y-4">
-      <div className="card flex flex-wrap items-center gap-2 p-4">
-        <input
-          value={leagueId}
-          onChange={(e) => setLeagueId(e.target.value.replace(/\D/g, ""))}
-          onKeyDown={(e) => e.key === "Enter" && load()}
-          placeholder="League ID (classic league)"
-          className="flex-1 min-w-40 rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
-        />
-        <button
-          onClick={() => load()}
-          disabled={loading}
-          className="btn-primary rounded-lg px-4 py-2 text-sm disabled:opacity-50"
-        >
-          {loading ? "Loading…" : "Load standings"}
-        </button>
+      <div className="card space-y-3 p-4">
+        {myLeagues.length > 0 ? (
+          <div>
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+              Your leagues
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {myLeagues
+                .filter((l) => l.league_type === "x")
+                .map((l) => (
+                  <button
+                    key={l.id}
+                    onClick={() => {
+                      setLeagueId(String(l.id));
+                      load(String(l.id));
+                    }}
+                    className={`rounded-full border px-3 py-1.5 text-sm ${
+                      String(l.id) === leagueId
+                        ? "border-accent bg-accent/15 font-semibold text-accent"
+                        : "border-border-c bg-panel-2 hover:border-accent"
+                    }`}
+                  >
+                    {l.name}
+                    {l.entry_rank != null && (
+                      <span className="ml-1.5 text-xs opacity-70">#{l.entry_rank}</span>
+                    )}
+                  </button>
+                ))}
+            </div>
+            {myLeagues.some((l) => l.league_type !== "x") && (
+              <select
+                value={
+                  myLeagues.some((l) => String(l.id) === leagueId && l.league_type !== "x")
+                    ? leagueId
+                    : ""
+                }
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setLeagueId(e.target.value);
+                    load(e.target.value);
+                  }
+                }}
+                className="mt-2 w-full rounded-lg border border-border-c bg-panel-2 px-3 py-2 text-sm sm:w-auto"
+              >
+                <option value="">Public leagues (Overall, country, club …)</option>
+                {myLeagues
+                  .filter((l) => l.league_type !== "x")
+                  .map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                      {l.entry_rank != null ? ` — #${l.entry_rank.toLocaleString("en-GB")}` : ""}
+                    </option>
+                  ))}
+              </select>
+            )}
+          </div>
+        ) : (
+          <div className="text-sm text-muted">
+            No leagues found on this FPL account yet.
+          </div>
+        )}
+        <details className="text-xs text-muted">
+          <summary className="cursor-pointer hover:text-accent">Enter a league ID manually</summary>
+          <div className="mt-2 flex gap-2">
+            <input
+              value={leagueId}
+              onChange={(e) => setLeagueId(e.target.value.replace(/\D/g, ""))}
+              onKeyDown={(e) => e.key === "Enter" && load()}
+              placeholder="League ID (classic league)"
+              className="min-w-0 flex-1 rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
+            />
+            <button
+              onClick={() => load()}
+              disabled={loading}
+              className="btn-primary shrink-0 rounded-lg px-4 py-2 text-sm disabled:opacity-50"
+            >
+              {loading ? "Loading…" : "Load"}
+            </button>
+          </div>
+        </details>
       </div>
 
       {error && <ErrorBox message={error} />}

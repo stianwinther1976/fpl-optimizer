@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { FplApiError, loadTeamData, fmtRank, type TeamData } from "@/lib/fpl";
+import { api, FplApiError, loadTeamData, fmtRank, type TeamData } from "@/lib/fpl";
+import type { Element, EventLive } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
+import PlayerModal from "./PlayerModal";
 import Pitch from "./Pitch";
 import OptimizePanel from "./OptimizePanel";
 import StatsTable from "./StatsTable";
@@ -86,6 +88,8 @@ export default function Dashboard({
 }) {
   const [data, setData] = useState<TeamData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [liveData, setLiveData] = useState<EventLive | null>(null);
+  const [selected, setSelected] = useState<Element | null>(null);
   const [tab, setTab] = useState<TabKey>(
     TABS.some(([k]) => k === initialTab) ? (initialTab as TabKey) : "team"
   );
@@ -110,6 +114,34 @@ export default function Dashboard({
     () => (data ? new Map(data.bootstrap.teams.map((t) => [t.id, t])) : new Map()),
     [data]
   );
+
+  const currentEventObj = data?.bootstrap.events.find((e) => e.is_current) ?? null;
+  const currentEvent = currentEventObj?.id ?? data?.squad?.currentEvent ?? null;
+  const gwFinished =
+    (currentEventObj?.finished ?? false) ||
+    (currentEvent != null &&
+      data != null &&
+      data.fixtures.some((f) => f.event === currentEvent) &&
+      data.fixtures.filter((f) => f.event === currentEvent).every((f) => f.finished));
+
+  // One live fetch for the pitch view + player breakdowns (skipped off-season).
+  useEffect(() => {
+    if (currentEvent == null) return;
+    let cancelled = false;
+    api
+      .live(currentEvent)
+      .then((l) => !cancelled && setLiveData(l))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [currentEvent]);
+
+  const livePointsOf = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const e of liveData?.elements ?? []) m.set(e.id, e.stats.total_points);
+    return m;
+  }, [liveData]);
 
   if (error) {
     return (
@@ -307,18 +339,35 @@ export default function Dashboard({
                     element: p.element,
                     isCaptain: p.isCaptain,
                     isVice: p.isViceCaptain,
+                    live: liveData
+                      ? {
+                          points:
+                            (livePointsOf.get(p.element.id) ?? 0) * (p.isCaptain ? 2 : 1),
+                          final: gwFinished,
+                        }
+                      : undefined,
                   }))}
                 bench={squad.players
                   .filter((p) => p.pickPosition > 11)
                   .sort((a, b) => a.pickPosition - b.pickPosition)
-                  .map((p) => ({ element: p.element }))}
+                  .map((p) => ({
+                    element: p.element,
+                    live: liveData
+                      ? { points: livePointsOf.get(p.element.id) ?? 0, final: gwFinished }
+                      : undefined,
+                  }))}
                 teams={teams}
                 fixtures={data.fixtures}
                 nextEvent={squad.nextEvent}
+                onSelect={setSelected}
               />
               <p className="text-xs text-muted">
-                Your squad from GW{squad.currentEvent}. Selling prices follow the official
-                50%-of-profit rule, computed from your actual purchase prices.
+                {liveData
+                  ? gwFinished
+                    ? `Final GW${currentEvent} points shown under each player — tap a player for the full breakdown.`
+                    : `Live GW${currentEvent} points shown in green under each player (captain doubled) — tap a player for the breakdown.`
+                  : "Tap a player for details."}{" "}
+                Selling prices follow the official 50%-of-profit rule.
               </p>
             </div>
           ) : (
@@ -333,6 +382,17 @@ export default function Dashboard({
         {tab === "league" && <MiniLeague data={data} entryId={entryId} />}
         {tab === "history" && <HistoryChart data={data} />}
       </div>
+
+      {selected && (
+        <PlayerModal
+          element={selected}
+          team={teams.get(selected.team)}
+          live={liveData}
+          event={currentEvent}
+          gwFinished={gwFinished}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </main>
   );
 }
