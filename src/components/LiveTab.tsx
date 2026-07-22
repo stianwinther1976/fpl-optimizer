@@ -66,7 +66,9 @@ export default function LiveTab({ data }: { data: TeamData }) {
           data.entry.leagues?.classic?.find((l) => l.name === "Overall")?.id ?? 314;
         const page = Math.max(1, Math.ceil(rank / 50));
         const standings = await api.league(overallId, page);
-        const sample = standings.standings.results.slice(0, 20);
+        // Spread the sample across the whole rank page for a fairer median.
+        const all = standings.standings.results;
+        const sample = all.filter((_, i) => i % Math.max(1, Math.floor(all.length / 20)) === 0).slice(0, 20);
         const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
         const scores = (
           await Promise.all(
