@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { api, FplApiError, loadTeamData, fmtRank, type TeamData } from "@/lib/fpl";
+import { api, FplApiError, loadTeamData, fmtRank, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
 import type { Element, EventLive } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import PlayerModal from "./PlayerModal";
@@ -283,6 +283,11 @@ export default function Dashboard({
             <span className="text-sm font-normal text-muted sm:text-base">
               — {entry.player_first_name} {entry.player_last_name}
             </span>
+            {entryId === DEMO_ENTRY_ID && (
+              <span className="ml-2 align-middle rounded-full border border-warn/50 bg-warn/10 px-2 py-0.5 text-xs font-semibold text-warn">
+                DEMO DATA
+              </span>
+            )}
           </h1>
         </div>
         <ThemeToggle />

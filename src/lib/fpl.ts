@@ -13,6 +13,15 @@ import type {
   Transfer,
 } from "./types";
 import { computeFreeTransfers, purchasePriceFor, sellingPrice } from "./rules";
+import { DEMO_ENTRY_ID } from "./demo";
+
+export { DEMO_ENTRY_ID };
+
+// Demo mode routes all API calls to the built-in synthetic mid-season data.
+let demoMode = false;
+export function setDemoMode(on: boolean) {
+  demoMode = on;
+}
 
 export class FplApiError extends Error {
   constructor(
@@ -24,7 +33,7 @@ export class FplApiError extends Error {
 }
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`/api/fpl/${path}`);
+  const res = await fetch(`${demoMode ? "/api/demo" : "/api/fpl"}/${path}`);
   if (!res.ok) {
     throw new FplApiError(
       res.status === 404
@@ -62,6 +71,7 @@ export interface TeamData {
 
 /** Load everything needed for the dashboard for one FPL ID. */
 export async function loadTeamData(id: number): Promise<TeamData> {
+  setDemoMode(id === DEMO_ENTRY_ID);
   const [bootstrap, fixtures, entry, history, transfers] = await Promise.all([
     api.bootstrap(),
     api.fixtures(),

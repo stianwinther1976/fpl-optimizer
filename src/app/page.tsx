@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, FplApiError } from "@/lib/fpl";
+import { api, FplApiError, DEMO_ENTRY_ID, setDemoMode } from "@/lib/fpl";
 import type { Entry } from "@/lib/types";
 import ThemeToggle from "@/components/ThemeToggle";
 import Lion from "@/components/Lion";
@@ -37,6 +37,7 @@ export default function Home() {
     setError(null);
     setEntry(null);
     try {
+      setDemoMode(num === DEMO_ENTRY_ID);
       const e = await api.entry(num);
       setEntry(e);
       localStorage.setItem("fpl-id", String(num));
@@ -97,7 +98,13 @@ export default function Home() {
           </div>
           <p className="mt-2 text-xs text-muted">
             Find it at fantasy.premierleague.com → “Points” — the number in the URL
-            (…/entry/<b>1234567</b>/event/…).
+            (…/entry/<b>1234567</b>/event/…).{" "}
+            <button
+              onClick={() => router.push(`/team/${DEMO_ENTRY_ID}`)}
+              className="font-medium text-accent hover:underline"
+            >
+              Or try the mid-season demo →
+            </button>
           </p>
 
           {error && (
