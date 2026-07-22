@@ -174,17 +174,40 @@ export default function LiveTab({ data }: { data: TeamData }) {
           {gwFixtures.map((f) => {
             const minute = matchMinute(f, updatedAt ?? undefined);
             const liveNow = f.started && !f.finished;
+            const hs = f.team_h_score ?? 0;
+            const as = f.team_a_score ?? 0;
+            // Result colors (live and FT): winner green, loser red, draw yellow.
+            const hClass = !f.started
+              ? ""
+              : hs > as
+                ? "text-accent"
+                : hs < as
+                  ? "text-danger"
+                  : "text-warn";
+            const aClass = !f.started
+              ? ""
+              : as > hs
+                ? "text-accent"
+                : as < hs
+                  ? "text-danger"
+                  : "text-warn";
             return (
               <div
                 key={f.id}
                 className={`card flex min-w-28 flex-col items-center px-2 py-1.5 text-xs sm:min-w-32 sm:text-sm ${liveNow ? "border-accent/50" : ""}`}
               >
-                <div className="flex items-center gap-2 font-semibold">
-                  <span>{teams.get(f.team_h)?.short_name}</span>
-                  <span className={liveNow ? "text-accent" : ""}>
-                    {f.started ? `${f.team_h_score ?? 0}–${f.team_a_score ?? 0}` : "v"}
-                  </span>
-                  <span>{teams.get(f.team_a)?.short_name}</span>
+                <div className="flex items-center gap-1.5 font-semibold sm:gap-2">
+                  <span className={hClass}>{teams.get(f.team_h)?.short_name}</span>
+                  {f.started ? (
+                    <span>
+                      <span className={hClass}>{hs}</span>
+                      <span className="text-muted">–</span>
+                      <span className={aClass}>{as}</span>
+                    </span>
+                  ) : (
+                    <span>v</span>
+                  )}
+                  <span className={aClass}>{teams.get(f.team_a)?.short_name}</span>
                 </div>
                 <div className={`text-xs ${liveNow ? "font-semibold text-accent" : "text-muted"}`}>
                   {f.started
