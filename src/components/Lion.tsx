@@ -11,9 +11,9 @@ export default function Lion({
   return (
     <svg viewBox="0 0 100 100" className={className} aria-hidden="true">
       <defs>
-        <linearGradient id="lion-gold" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#e8c95c" />
-          <stop offset="1" stopColor="#b8860b" />
+        <linearGradient id="lion-ring" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#00ff87" />
+          <stop offset="1" stopColor="#00a65a" />
         </linearGradient>
         <clipPath id="lion-clip">
           <circle cx="50" cy="50" r="38" />
@@ -23,12 +23,12 @@ export default function Lion({
 
       {/* Badge base */}
       <circle cx="50" cy="50" r="48" fill="#241028" />
-      <circle cx="50" cy="50" r="47" fill="none" stroke="url(#lion-gold)" strokeWidth="2.4" />
+      <circle cx="50" cy="50" r="47" fill="none" stroke="url(#lion-ring)" strokeWidth="2.4" />
 
       {/* Arc text in the dark band around the photo */}
       {showText && (
         <text
-          fill="#e2bd52"
+          fill="#00ff87"
           fontSize="6"
           fontWeight="700"
           letterSpacing="0.9"
@@ -50,7 +50,7 @@ export default function Lion({
         clipPath="url(#lion-clip)"
         preserveAspectRatio="xMidYMid slice"
       />
-      <circle cx="50" cy="50" r="38.5" fill="none" stroke="url(#lion-gold)" strokeWidth="1.6" />
+      <circle cx="50" cy="50" r="38.5" fill="none" stroke="url(#lion-ring)" strokeWidth="1.6" />
     </svg>
   );
 }
