@@ -14,8 +14,8 @@ export default function LiveTab({ data }: { data: TeamData }) {
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
 
-  const currentEvent =
-    data.bootstrap.events.find((e) => e.is_current)?.id ?? data.squad?.currentEvent ?? null;
+  const currentEventObj = data.bootstrap.events.find((e) => e.is_current) ?? null;
+  const currentEvent = currentEventObj?.id ?? data.squad?.currentEvent ?? null;
 
   const refresh = useCallback(async () => {
     if (currentEvent == null) return;
@@ -30,12 +30,25 @@ export default function LiveTab({ data }: { data: TeamData }) {
     }
   }, [currentEvent]);
 
+  // One initial fetch (also shows final points after the GW is done).
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- refresh() only sets state after awaiting the network
     refresh();
+  }, [refresh]);
+
+  // Poll only while the gameweek can still change: not finished, and at least
+  // one fixture not yet completed. Off-season and finished GWs stay quiet.
+  const gwDone =
+    currentEvent == null ||
+    (currentEventObj?.finished ?? false) ||
+    (fixtures.some((f) => f.event === currentEvent) &&
+      fixtures.filter((f) => f.event === currentEvent).every((f) => f.finished));
+
+  useEffect(() => {
+    if (currentEvent == null || gwDone) return;
     const t = setInterval(refresh, REFRESH_MS);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [refresh, currentEvent, gwDone]);
 
   const teams = useMemo(
     () => new Map(data.bootstrap.teams.map((t) => [t.id, t])),
@@ -59,7 +72,20 @@ export default function LiveTab({ data }: { data: TeamData }) {
   );
 
   if (currentEvent == null) {
-    return <div className="card p-6 text-muted">No gameweek in progress right now.</div>;
+    const next = data.bootstrap.events.find((e) => e.is_next);
+    return (
+      <div className="card p-6 text-muted">
+        <div className="text-2xl">🏖️</div>
+        <div className="mt-2 font-semibold text-foreground">It&apos;s the off-season break.</div>
+        <p className="mt-1 text-sm">
+          The live view wakes up automatically on matchday
+          {next?.deadline_time
+            ? ` — ${next.name} kicks things off after the deadline on ${new Date(next.deadline_time).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}.`
+            : "."}{" "}
+          No live data is fetched until then.
+        </p>
+      </div>
+    );
   }
   if (error) return <ErrorBox message={error} />;
   if (!live || !data.squad) return <Skeleton className="h-64" />;
@@ -104,7 +130,7 @@ export default function LiveTab({ data }: { data: TeamData }) {
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
               </span>
             )}
-            {anyLive ? "Live" : "Gameweek"} {currentEvent}
+            {anyLive ? "Live" : gwDone ? "Final — gameweek" : "Gameweek"} {currentEvent}
           </div>
           <div className="text-4xl font-bold text-accent">
             {total}
@@ -117,7 +143,7 @@ export default function LiveTab({ data }: { data: TeamData }) {
         </div>
         <div className="ml-auto text-right text-xs text-muted">
           {updatedAt && <div>Updated {updatedAt.toLocaleTimeString("en-GB")}</div>}
-          <div>Auto-refresh every 30s</div>
+          <div>{gwDone ? "Gameweek complete — auto-refresh off" : "Auto-refresh every 30s"}</div>
           <button onClick={refresh} className="mt-1 rounded-md border border-border-c bg-panel-2 px-3 py-1 hover:border-accent">
             Refresh now
           </button>
