@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type TeamData } from "@/lib/fpl";
 import type { EventLive, LeagueStandings } from "@/lib/types";
 import { CHIP_LABELS } from "@/lib/rules";
-import { ErrorBox, Skeleton, Badge } from "./ui";
+import { ErrorBox, Skeleton } from "./ui";
 
 const MAX_RIVAL_DETAILS = 20;
 
@@ -220,71 +220,72 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               <span className="text-xs text-muted">Loading rival details…</span>
             )}
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] text-sm">
-              <thead className="text-xs uppercase text-muted">
-                <tr className="border-b border-border-c">
-                  <th className="sticky left-0 z-10 w-12 bg-[var(--panel)] px-3 py-2 text-left">#</th>
-                  <th className="sticky left-12 z-10 bg-[var(--panel)] px-2 py-2 text-left">Team</th>
-                  <th className="px-2 py-2 text-left">Captain</th>
-                  <th className="px-2 py-2 text-left">Chip</th>
-                  <th className="px-2 py-2 text-right" title="Live gameweek points minus transfer hits">
-                    GW (live)
-                  </th>
-                  <th className="px-3 py-2 text-right">Total</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border-c/60">
-                {standings.standings.results.map((r) => {
-                  const d = details.get(r.entry);
-                  const mine = r.entry === entryId;
-                  // Sticky cells need an opaque bg; blend in the highlight for the user's row.
-                  const stickyBg = mine
-                    ? "bg-[color-mix(in_srgb,var(--accent)_12%,var(--panel))]"
-                    : "bg-[var(--panel)]";
-                  return (
-                    <tr
-                      key={r.entry}
-                      className={mine ? "bg-accent/10" : "hover:bg-panel-2/60"}
-                    >
-                      <td className={`sticky left-0 z-10 w-12 ${stickyBg} px-3 py-2 font-mono`}>
-                        {r.rank}
-                        {r.last_rank > 0 && r.last_rank !== r.rank && (
-                          <span className={r.rank < r.last_rank ? "text-accent" : "text-danger"}>
-                            {r.rank < r.last_rank ? " ▲" : " ▼"}
+          <table className="w-full text-sm">
+            <thead className="text-xs uppercase text-muted">
+              <tr className="border-b border-border-c">
+                <th className="w-9 px-2 py-1.5 text-left">#</th>
+                <th className="px-1.5 py-1.5 text-left">Team</th>
+                <th
+                  className="w-14 px-1.5 py-1.5 text-right"
+                  title="Live gameweek points minus transfer hits"
+                >
+                  GW
+                </th>
+                <th className="w-16 px-2 py-1.5 text-right">Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border-c/60">
+              {standings.standings.results.map((r) => {
+                const d = details.get(r.entry);
+                const mine = r.entry === entryId;
+                const chipShort: Record<string, string> = {
+                  wildcard: "WC",
+                  freehit: "FH",
+                  bboost: "BB",
+                  "3xc": "TC",
+                };
+                return (
+                  <tr
+                    key={r.entry}
+                    className={mine ? "bg-accent/10" : "hover:bg-panel-2/60"}
+                  >
+                    <td className="px-2 py-1.5 font-mono text-xs">
+                      {r.rank}
+                      {r.last_rank > 0 && r.last_rank !== r.rank && (
+                        <span className={r.rank < r.last_rank ? "text-accent" : "text-danger"}>
+                          {r.rank < r.last_rank ? "▲" : "▼"}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-1.5 py-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate font-medium">{r.entry_name}</span>
+                        {d?.chip && (
+                          <span
+                            className="shrink-0 rounded bg-accent-2/15 px-1 py-px text-[10px] font-bold text-accent-2"
+                            title={CHIP_LABELS[d.chip] ?? d.chip}
+                          >
+                            {chipShort[d.chip] ?? d.chip}
                           </span>
                         )}
-                      </td>
-                      <td className={`sticky left-12 z-10 ${stickyBg} px-2 py-2`}>
-                        <div className="font-medium">{r.entry_name}</div>
-                        <div className="text-xs text-muted">{r.player_name}</div>
-                      </td>
-                      <td className="px-2 py-2">
-                        {d?.captain ?? "–"}
-                        {d?.viceCaptain && (
-                          <span className="text-xs text-muted"> ({d.viceCaptain})</span>
-                        )}
-                      </td>
-                      <td className="px-2 py-2">
-                        {d?.chip ? (
-                          <Badge tone="purple">{CHIP_LABELS[d.chip] ?? d.chip}</Badge>
-                        ) : (
-                          <span className="text-muted">–</span>
-                        )}
-                      </td>
-                      <td className="px-2 py-2 text-right font-mono">
-                        {d?.livePoints ?? r.event_total}
-                        {d && d.hits > 0 && (
-                          <span className="text-xs text-danger"> (−{d.hits})</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono font-bold">{r.total}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                      </div>
+                      <div className="truncate text-[11px] text-muted">
+                        {r.player_name}
+                        {d?.captain && <span> ({d.captain})</span>}
+                      </div>
+                    </td>
+                    <td className="px-1.5 py-1.5 text-right font-mono">
+                      {d?.livePoints ?? r.event_total}
+                      {d && d.hits > 0 && (
+                        <div className="text-[10px] leading-tight text-danger">−{d.hits}</div>
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono font-bold">{r.total}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
           {standings.standings.results.length > MAX_RIVAL_DETAILS && (
             <div className="border-t border-border-c px-4 py-2 text-xs text-muted">
               Captain/chip/live details shown for the top {MAX_RIVAL_DETAILS} teams.
