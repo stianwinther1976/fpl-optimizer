@@ -1,15 +1,36 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api } from "@/lib/fpl";
-import type { LeagueStandings } from "@/lib/types";
-import { ErrorBox, Skeleton } from "./ui";
+import { useEffect, useMemo, useState } from "react";
+import { api, type TeamData } from "@/lib/fpl";
+import type { EventLive, LeagueStandings } from "@/lib/types";
+import { CHIP_LABELS } from "@/lib/rules";
+import { ErrorBox, Skeleton, Badge } from "./ui";
 
-export default function MiniLeague({ entryId }: { entryId: number }) {
+const MAX_RIVAL_DETAILS = 20;
+
+interface RivalDetail {
+  captain: string | null;
+  viceCaptain: string | null;
+  chip: string | null;
+  livePoints: number | null; // incl. hits (net)
+  hits: number;
+}
+
+export default function MiniLeague({ data, entryId }: { data: TeamData; entryId: number }) {
   const [leagueId, setLeagueId] = useState("");
   const [standings, setStandings] = useState<LeagueStandings | null>(null);
+  const [details, setDetails] = useState<Map<number, RivalDetail>>(new Map());
   const [loading, setLoading] = useState(false);
+  const [detailsLoading, setDetailsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const currentEvent =
+    data.bootstrap.events.find((e) => e.is_current)?.id ?? data.squad?.currentEvent ?? null;
+
+  const elementName = useMemo(
+    () => new Map(data.bootstrap.elements.map((e) => [e.id, e.web_name])),
+    [data.bootstrap]
+  );
 
   useEffect(() => {
     const saved = localStorage.getItem("fpl-league-id");
@@ -33,10 +54,50 @@ export default function MiniLeague({ entryId }: { entryId: number }) {
       const s = await api.league(num);
       setStandings(s);
       localStorage.setItem("fpl-league-id", String(num));
+      loadDetails(s);
     } catch {
       setError("League not found — check the ID.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadDetails(s: LeagueStandings) {
+    if (currentEvent == null) return;
+    setDetailsLoading(true);
+    try {
+      const rivals = s.standings.results.slice(0, MAX_RIVAL_DETAILS);
+      const live: EventLive = await api.live(currentEvent);
+      const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
+      const results = await Promise.all(
+        rivals.map(async (r) => {
+          try {
+            const picks = await api.picks(r.entry, currentEvent);
+            const bboost = picks.active_chip === "bboost";
+            let pts = 0;
+            for (const p of picks.picks) {
+              const mult = bboost && p.multiplier === 0 ? 1 : p.multiplier;
+              pts += (pointsOf.get(p.element) ?? 0) * mult;
+            }
+            const hits = picks.entry_history.event_transfers_cost;
+            const cap = picks.picks.find((p) => p.is_captain);
+            const vice = picks.picks.find((p) => p.is_vice_captain);
+            const detail: RivalDetail = {
+              captain: cap ? (elementName.get(cap.element) ?? null) : null,
+              viceCaptain: vice ? (elementName.get(vice.element) ?? null) : null,
+              chip: picks.active_chip,
+              livePoints: pts - hits,
+              hits,
+            };
+            return [r.entry, detail] as const;
+          } catch {
+            return null;
+          }
+        })
+      );
+      setDetails(new Map(results.filter((x): x is NonNullable<typeof x> => x != null)));
+    } finally {
+      setDetailsLoading(false);
     }
   }
 
@@ -64,42 +125,77 @@ export default function MiniLeague({ entryId }: { entryId: number }) {
 
       {standings && !loading && (
         <div className="card overflow-hidden">
-          <div className="border-b border-border-c px-4 py-3 font-semibold">
-            {standings.league.name}
+          <div className="flex items-center justify-between border-b border-border-c px-4 py-3">
+            <span className="font-semibold">{standings.league.name}</span>
+            {detailsLoading && (
+              <span className="text-xs text-muted">Loading rival details…</span>
+            )}
           </div>
-          <table className="w-full text-sm">
-            <thead className="text-xs uppercase text-muted">
-              <tr className="border-b border-border-c">
-                <th className="px-3 py-2 text-left">#</th>
-                <th className="px-2 py-2 text-left">Team</th>
-                <th className="px-2 py-2 text-right">GW</th>
-                <th className="px-3 py-2 text-right">Total</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border-c/60">
-              {standings.standings.results.map((r) => (
-                <tr
-                  key={r.entry}
-                  className={r.entry === entryId ? "bg-accent/10" : "hover:bg-panel-2/60"}
-                >
-                  <td className="px-3 py-2 font-mono">
-                    {r.rank}
-                    {r.last_rank > 0 && r.last_rank !== r.rank && (
-                      <span className={r.rank < r.last_rank ? "text-accent" : "text-danger"}>
-                        {r.rank < r.last_rank ? " ▲" : " ▼"}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-2 py-2">
-                    <div className="font-medium">{r.entry_name}</div>
-                    <div className="text-xs text-muted">{r.player_name}</div>
-                  </td>
-                  <td className="px-2 py-2 text-right font-mono">{r.event_total}</td>
-                  <td className="px-3 py-2 text-right font-mono font-bold">{r.total}</td>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[560px] text-sm">
+              <thead className="text-xs uppercase text-muted">
+                <tr className="border-b border-border-c">
+                  <th className="sticky left-0 z-10 w-12 bg-[var(--panel)] px-3 py-2 text-left">#</th>
+                  <th className="sticky left-12 z-10 bg-[var(--panel)] px-2 py-2 text-left">Team</th>
+                  <th className="px-2 py-2 text-left">Captain</th>
+                  <th className="px-2 py-2 text-left">Chip</th>
+                  <th className="px-2 py-2 text-right" title="Live gameweek points minus transfer hits">
+                    GW (live)
+                  </th>
+                  <th className="px-3 py-2 text-right">Total</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-border-c/60">
+                {standings.standings.results.map((r) => {
+                  const d = details.get(r.entry);
+                  return (
+                    <tr
+                      key={r.entry}
+                      className={r.entry === entryId ? "bg-accent/10" : "hover:bg-panel-2/60"}
+                    >
+                      <td className="sticky left-0 z-10 w-12 bg-[var(--panel)] px-3 py-2 font-mono">
+                        {r.rank}
+                        {r.last_rank > 0 && r.last_rank !== r.rank && (
+                          <span className={r.rank < r.last_rank ? "text-accent" : "text-danger"}>
+                            {r.rank < r.last_rank ? " ▲" : " ▼"}
+                          </span>
+                        )}
+                      </td>
+                      <td className="sticky left-12 z-10 bg-[var(--panel)] px-2 py-2">
+                        <div className="font-medium">{r.entry_name}</div>
+                        <div className="text-xs text-muted">{r.player_name}</div>
+                      </td>
+                      <td className="px-2 py-2">
+                        {d?.captain ?? "–"}
+                        {d?.viceCaptain && (
+                          <span className="text-xs text-muted"> ({d.viceCaptain})</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2">
+                        {d?.chip ? (
+                          <Badge tone="purple">{CHIP_LABELS[d.chip] ?? d.chip}</Badge>
+                        ) : (
+                          <span className="text-muted">–</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2 text-right font-mono">
+                        {d?.livePoints ?? r.event_total}
+                        {d && d.hits > 0 && (
+                          <span className="text-xs text-danger"> (−{d.hits})</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono font-bold">{r.total}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {standings.standings.results.length > MAX_RIVAL_DETAILS && (
+            <div className="border-t border-border-c px-4 py-2 text-xs text-muted">
+              Captain/chip/live details shown for the top {MAX_RIVAL_DETAILS} teams.
+            </div>
+          )}
         </div>
       )}
     </div>

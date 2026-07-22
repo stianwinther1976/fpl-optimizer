@@ -17,6 +17,36 @@ const bootstrap = makeMockBootstrap();
 const fixtures = makeMockFixtures();
 const owned = makeMockOwned(bootstrap);
 
+// GW10 fixtures for the live view: finished, in-play and upcoming.
+{
+  let fid = 1000;
+  const now = Date.now();
+  for (let i = 0; i < 10; i++) {
+    const home = i * 2 + 1;
+    const away = i * 2 + 2;
+    const state =
+      i < 4 ? "finished" : i < 7 ? "live" : "upcoming"; // 4 FT, 3 live, 3 later
+    fixtures.push({
+      id: fid++,
+      event: 10,
+      team_h: home,
+      team_a: away,
+      team_h_difficulty: 3,
+      team_a_difficulty: 3,
+      kickoff_time:
+        state === "finished"
+          ? new Date(now - 5 * 3600_000).toISOString()
+          : state === "live"
+            ? new Date(now - 55 * 60_000).toISOString()
+            : new Date(now + 3 * 3600_000).toISOString(),
+      finished: state === "finished",
+      started: state !== "upcoming",
+      team_h_score: state === "upcoming" ? null : (home % 3),
+      team_a_score: state === "upcoming" ? null : (away % 2),
+    });
+  }
+}
+
 const entry = {
   id: 1234567,
   player_first_name: "Stian",
@@ -93,9 +123,9 @@ const live = {
       minutes: e.minutes > 1000 ? 90 : 30,
       total_points: Math.max(1, Math.round((parseFloat(e.points_per_game) || 2) * 0.9)),
       bonus: 0,
-      bps: 20,
-      goals_scored: 0,
-      assists: 0,
+      bps: ((e.id * 13) % 45) + (e.minutes > 1000 ? 10 : 0),
+      goals_scored: e.id % 7 === 0 ? 1 : 0,
+      assists: e.id % 11 === 0 ? 1 : 0,
     },
   })),
 };

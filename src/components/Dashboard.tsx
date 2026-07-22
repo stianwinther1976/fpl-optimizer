@@ -28,6 +28,54 @@ type TabKey = (typeof TABS)[number][0];
 /** Comparison window for the KPI deltas: 1 = previous gameweek. */
 const COMPARE_GWS = 1;
 
+function DeadlineChip({
+  nextEvent,
+  deadline,
+}: {
+  nextEvent: number;
+  deadline: string | null;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  let countdown: string | null = null;
+  let urgent = false;
+  if (deadline) {
+    const ms = new Date(deadline).getTime() - now;
+    if (ms > 0) {
+      const d = Math.floor(ms / 86_400_000);
+      const h = Math.floor((ms % 86_400_000) / 3_600_000);
+      const m = Math.floor((ms % 3_600_000) / 60_000);
+      countdown = d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+      urgent = ms < 24 * 3_600_000;
+    }
+  }
+  return (
+    <div
+      className={`rounded-lg border px-3 py-1.5 text-sm font-semibold ${
+        urgent
+          ? "border-warn/50 bg-warn/10 text-warn"
+          : "border-accent/40 bg-accent/10 text-accent"
+      }`}
+    >
+      GW{nextEvent} deadline{countdown ? `: ${countdown}` : ""}
+      {deadline && (
+        <span className="ml-1 hidden font-normal opacity-75 sm:inline">
+          (
+          {new Date(deadline).toLocaleString("en-GB", {
+            weekday: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+          )
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function Dashboard({ entryId }: { entryId: number }) {
   const [data, setData] = useState<TeamData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -171,9 +219,12 @@ export default function Dashboard({ entryId }: { entryId: number }) {
           </h1>
         </div>
         {squad?.nextEvent != null && (
-          <div className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-sm font-semibold text-accent">
-            Next: GW{squad.nextEvent}
-          </div>
+          <DeadlineChip
+            nextEvent={squad.nextEvent}
+            deadline={
+              data.bootstrap.events.find((e) => e.id === squad.nextEvent)?.deadline_time ?? null
+            }
+          />
         )}
       </div>
 
@@ -219,7 +270,7 @@ export default function Dashboard({ entryId }: { entryId: number }) {
       </div>
 
       {/* Tabs */}
-      <div className="mt-6 flex gap-1 overflow-x-auto border-b border-border-c">
+      <div className="sticky top-0 z-20 mt-6 -mx-4 flex gap-1 overflow-x-auto border-b border-border-c bg-background/85 px-4 backdrop-blur">
         {TABS.map(([key, label]) => (
           <button
             key={key}
@@ -269,7 +320,7 @@ export default function Dashboard({ entryId }: { entryId: number }) {
         {tab === "stats" && <StatsTable data={data} />}
         {tab === "fixtures" && <FixtureTicker data={data} />}
         {tab === "live" && <LiveTab data={data} />}
-        {tab === "league" && <MiniLeague entryId={entryId} />}
+        {tab === "league" && <MiniLeague data={data} entryId={entryId} />}
         {tab === "history" && <HistoryChart data={data} />}
       </div>
     </main>
