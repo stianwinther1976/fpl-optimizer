@@ -25,8 +25,18 @@ export default function RootLayout({
       </head>
       <body className="min-h-full flex flex-col">
         {children}
-        <footer className="mt-auto py-6 text-center text-xs text-muted">
-          Unofficial app — not affiliated with the Premier League or FPL.
+        <footer className="mt-auto space-y-1.5 py-6 text-center text-xs text-muted">
+          <div>
+            <a
+              href={process.env.NEXT_PUBLIC_SUPPORT_URL ?? "https://github.com/stianwinther1976/fpl-optimizer"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-full border border-border-c bg-panel px-3 py-1 font-medium text-foreground hover:border-accent"
+            >
+              <span className="text-danger">♥</span> Support this project
+            </a>
+          </div>
+          <div>Unofficial app — not affiliated with the Premier League or FPL.</div>
         </footer>
       </body>
     </html>
