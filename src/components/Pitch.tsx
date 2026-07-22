@@ -142,6 +142,7 @@ export default function Pitch({
   nextEvent,
   formation,
   onSelect,
+  cornerTotal,
 }: {
   starters: PitchPlayer[];
   bench: PitchPlayer[];
@@ -150,6 +151,8 @@ export default function Pitch({
   nextEvent: number | null;
   formation?: [number, number, number];
   onSelect?: (el: Element) => void;
+  /** Total GW points shown in the top-left corner of the pitch */
+  cornerTotal?: { title: string; points: number; final: boolean } | null;
 }) {
   const rows: PitchPlayer[][] = [];
   const gk = starters.filter((p) => p.element.element_type === 1);
@@ -160,7 +163,22 @@ export default function Pitch({
 
   return (
     <div>
-      <div className="pitch-bg rounded-xl px-1 py-3 sm:p-6">
+      <div className="pitch-bg relative rounded-xl px-1 py-3 sm:p-6">
+        {cornerTotal && (
+          <div className="absolute left-2 top-2 z-10 rounded-lg bg-black/70 px-2.5 py-1 text-center shadow">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-300">
+              {cornerTotal.title}
+            </div>
+            <div
+              className={`text-lg font-bold leading-tight ${
+                cornerTotal.final ? "text-white" : "text-[#00ff87]"
+              }`}
+            >
+              {cornerTotal.points}
+              <span className="ml-0.5 text-[10px] font-medium text-zinc-300">pts</span>
+            </div>
+          </div>
+        )}
         {formation && (
           <div className="mb-2 text-center text-xs font-semibold text-emerald-200/80">
             Formation {formation.join("-")}

@@ -393,6 +393,26 @@ export default function Dashboard({
                 fixtures={data.fixtures}
                 nextEvent={squad.nextEvent}
                 onSelect={setSelected}
+                cornerTotal={
+                  liveData && currentEvent != null
+                    ? {
+                        title: `GW${currentEvent}`,
+                        points:
+                          squad.players
+                            .filter(
+                              (p) => p.pickPosition <= 11 || squad.activeChip === "bboost"
+                            )
+                            .reduce(
+                              (s, p) =>
+                                s +
+                                (livePointsOf.get(p.element.id) ?? 0) *
+                                  (p.element.id === effCaptainId ? capMult : 1),
+                              0
+                            ) - (data.picks?.entry_history.event_transfers_cost ?? 0),
+                        final: gwFinished,
+                      }
+                    : null
+                }
               />
               <p className="text-xs text-muted">
                 {liveData
