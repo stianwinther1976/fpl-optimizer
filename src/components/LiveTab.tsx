@@ -168,16 +168,16 @@ export default function LiveTab({ data }: { data: TeamData }) {
         </div>
       </div>
 
-      {/* Match scores */}
+      {/* Match scores — two rows so twice as many fit on screen */}
       {gwFixtures.length > 0 && (
-        <div className="flex gap-2 overflow-x-auto pb-1">
+        <div className="grid grid-flow-col grid-rows-2 gap-1.5 overflow-x-auto pb-1 auto-cols-max">
           {gwFixtures.map((f) => {
             const minute = matchMinute(f, updatedAt ?? undefined);
             const liveNow = f.started && !f.finished;
             return (
               <div
                 key={f.id}
-                className={`card flex min-w-32 shrink-0 flex-col items-center px-3 py-2 text-sm ${liveNow ? "border-accent/50" : ""}`}
+                className={`card flex min-w-28 flex-col items-center px-2 py-1.5 text-xs sm:min-w-32 sm:text-sm ${liveNow ? "border-accent/50" : ""}`}
               >
                 <div className="flex items-center gap-2 font-semibold">
                   <span>{teams.get(f.team_h)?.short_name}</span>
