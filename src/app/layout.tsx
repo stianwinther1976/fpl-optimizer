@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import UpdateToast from "@/components/UpdateToast";
 
 export const metadata: Metadata = {
   title: "FPL Optimizer — your best team every gameweek",
@@ -25,6 +26,7 @@ export default function RootLayout({
       </head>
       <body className="min-h-full flex flex-col">
         {children}
+        <UpdateToast />
         <footer className="mt-auto py-6 text-center text-xs text-muted">
           {process.env.NEXT_PUBLIC_SUPPORT_URL && (
             <div className="mb-1.5">
