@@ -35,14 +35,16 @@ export function PlayerAvatar({
   el,
   teamShort,
   size = "md",
+  center = true,
 }: {
   el: Element;
   teamShort?: string;
   size?: "sm" | "md";
+  center?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
   const url = playerPhotoUrl(el);
-  const dims = size === "sm" ? "h-7 w-7" : "h-10 w-10 sm:h-12 sm:w-12";
+  const dims = `${size === "sm" ? "h-7 w-7" : "h-10 w-10 sm:h-12 sm:w-12"} ${center ? "mx-auto" : "shrink-0"}`;
   if (url && !failed) {
     return (
       // eslint-disable-next-line @next/next/no-img-element -- external CDN, no next/image config needed
@@ -51,13 +53,13 @@ export function PlayerAvatar({
         alt={el.web_name}
         loading="lazy"
         onError={() => setFailed(true)}
-        className={`mx-auto ${dims} rounded-full bg-panel-2 object-cover object-top shadow`}
+        className={`${dims} rounded-full bg-panel-2 object-cover object-top shadow`}
       />
     );
   }
   return (
     <div
-      className={`mx-auto flex ${dims} items-center justify-center rounded-full ${TYPE_COLORS[el.element_type]} ${size === "sm" ? "text-[10px]" : "text-sm"} font-bold text-black shadow`}
+      className={`flex ${dims} items-center justify-center rounded-full ${TYPE_COLORS[el.element_type]} ${size === "sm" ? "text-[10px]" : "text-sm"} font-bold text-black shadow`}
     >
       {teamShort?.slice(0, 3) ?? "?"}
     </div>

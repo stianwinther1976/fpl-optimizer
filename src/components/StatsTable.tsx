@@ -123,7 +123,12 @@ export default function StatsTable({ data }: { data: TeamData }) {
               <tr key={e.id} className="hover:bg-panel-2/60">
                 <td className="sticky left-0 z-10 bg-[var(--panel)] px-3 py-2">
                   <span className="flex items-center gap-2">
-                    <PlayerAvatar el={e} teamShort={teams.get(e.team)?.short_name} size="sm" />
+                    <PlayerAvatar
+                      el={e}
+                      teamShort={teams.get(e.team)?.short_name}
+                      size="sm"
+                      center={false}
+                    />
                     <span>
                       <span className="font-medium">{e.web_name}</span>{" "}
                       <span className="text-xs text-muted">{teams.get(e.team)?.short_name}</span>
