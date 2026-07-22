@@ -118,13 +118,27 @@ export default function OptimizePanel({ data }: { data: TeamData }) {
                 best={!result.plans.some((p) => p.gainVsKeep > 0.05)}
               />
               {result.plans.map((plan) => (
-                <div key={plan.transfers.length} className="card p-4">
+                <div
+                  key={plan.transfers.length}
+                  className={`card p-4 ${
+                    plan.gainVsKeep > 0.05 &&
+                    plan.netXp === Math.max(...result.plans.map((p) => p.netXp))
+                      ? "border-accent/60"
+                      : ""
+                  }`}
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="font-semibold">
                       {plan.transfers.length} transfer{plan.transfers.length > 1 ? "s" : ""}
                       {plan.hitCost > 0 && (
                         <span className="text-danger"> (−{plan.hitCost} hit)</span>
                       )}
+                      {plan.gainVsKeep > 0.05 &&
+                        plan.netXp === Math.max(...result.plans.map((p) => p.netXp)) && (
+                          <span className="ml-2">
+                            <Badge tone="green">Recommended</Badge>
+                          </span>
+                        )}
                     </div>
                     <div className="text-sm">
                       <span

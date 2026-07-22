@@ -21,8 +21,9 @@ const ALLOWED: RegExp[] = [
 // Cache lifetime (seconds) per endpoint type.
 function cacheSeconds(path: string): number {
   if (path.startsWith("bootstrap-static")) return 300;
-  if (path.startsWith("fixtures")) return 300;
-  if (path.includes("/live/")) return 60;
+  // Fixtures and live scores drive the in-play view (30s UI poll) — keep fresh.
+  if (path.startsWith("fixtures")) return 25;
+  if (path.includes("/live/")) return 25;
   if (path.includes("/history/") || path.includes("/transfers/")) return 300;
   return 120;
 }

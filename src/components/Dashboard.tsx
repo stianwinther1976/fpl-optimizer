@@ -143,6 +143,32 @@ export default function Dashboard({
     return m;
   }, [liveData]);
 
+  const liveMinutesOf = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const e of liveData?.elements ?? []) m.set(e.id, e.stats.minutes);
+    return m;
+  }, [liveData]);
+
+  // Effective captain: Triple Captain aware; once the GW is final, the vice
+  // takes over if the captain played 0 minutes (official rule).
+  const capMult = data?.squad?.activeChip === "3xc" ? 3 : 2;
+  const effCaptainId = useMemo(() => {
+    const squad = data?.squad;
+    if (!squad) return null;
+    const cap = squad.players.find((p) => p.isCaptain);
+    const vice = squad.players.find((p) => p.isViceCaptain);
+    if (
+      gwFinished &&
+      cap &&
+      (liveMinutesOf.get(cap.element.id) ?? 0) === 0 &&
+      vice &&
+      (liveMinutesOf.get(vice.element.id) ?? 0) > 0
+    ) {
+      return vice.element.id;
+    }
+    return cap?.element.id ?? null;
+  }, [data, gwFinished, liveMinutesOf]);
+
   if (error) {
     return (
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-16">
@@ -342,7 +368,8 @@ export default function Dashboard({
                     live: liveData
                       ? {
                           points:
-                            (livePointsOf.get(p.element.id) ?? 0) * (p.isCaptain ? 2 : 1),
+                            (livePointsOf.get(p.element.id) ?? 0) *
+                            (p.element.id === effCaptainId ? capMult : 1),
                           final: gwFinished,
                         }
                       : undefined,

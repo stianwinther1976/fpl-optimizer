@@ -64,10 +64,21 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
     setLoading(true);
     setError(null);
     try {
-      const s = await api.league(num);
-      setStandings(s);
+      // Follow pagination so leagues larger than one page (~50 entries)
+      // still include everyone — capped to keep request counts sane.
+      const MAX_PAGES = 6;
+      const first = await api.league(num);
+      let page = 1;
+      let hasNext = first.standings.has_next;
+      while (hasNext && page < MAX_PAGES) {
+        page += 1;
+        const next = await api.league(num, page);
+        first.standings.results.push(...next.standings.results);
+        hasNext = next.standings.has_next;
+      }
+      setStandings(first);
       localStorage.setItem("fpl-league-id", String(num));
-      loadDetails(s);
+      loadDetails(first);
     } catch {
       setError("League not found — check the ID.");
     } finally {
@@ -226,12 +237,17 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               <tbody className="divide-y divide-border-c/60">
                 {standings.standings.results.map((r) => {
                   const d = details.get(r.entry);
+                  const mine = r.entry === entryId;
+                  // Sticky cells need an opaque bg; blend in the highlight for the user's row.
+                  const stickyBg = mine
+                    ? "bg-[color-mix(in_srgb,var(--accent)_12%,var(--panel))]"
+                    : "bg-[var(--panel)]";
                   return (
                     <tr
                       key={r.entry}
-                      className={r.entry === entryId ? "bg-accent/10" : "hover:bg-panel-2/60"}
+                      className={mine ? "bg-accent/10" : "hover:bg-panel-2/60"}
                     >
-                      <td className="sticky left-0 z-10 w-12 bg-[var(--panel)] px-3 py-2 font-mono">
+                      <td className={`sticky left-0 z-10 w-12 ${stickyBg} px-3 py-2 font-mono`}>
                         {r.rank}
                         {r.last_rank > 0 && r.last_rank !== r.rank && (
                           <span className={r.rank < r.last_rank ? "text-accent" : "text-danger"}>
@@ -239,7 +255,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                           </span>
                         )}
                       </td>
-                      <td className="sticky left-12 z-10 bg-[var(--panel)] px-2 py-2">
+                      <td className={`sticky left-12 z-10 ${stickyBg} px-2 py-2`}>
                         <div className="font-medium">{r.entry_name}</div>
                         <div className="text-xs text-muted">{r.player_name}</div>
                       </td>

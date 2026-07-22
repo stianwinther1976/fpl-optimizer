@@ -125,7 +125,9 @@ export function computeFreeTransfers(
     const chip = chipEvents.get(row.event);
     const freeTransferChip = chip === "wildcard" || chip === "freehit";
     if (freeTransferChip) {
-      // Transfers don't consume FTs; banked FTs carry through unchanged.
+      // Transfers don't consume FTs; banked FTs carry over AND the normal
+      // +1 for the following gameweek is still granted (official rule).
+      ft = Math.min(MAX_FREE_TRANSFERS, ft + 1);
       continue;
     }
     // Paid hits imply all FTs were used; otherwise subtract used transfers.

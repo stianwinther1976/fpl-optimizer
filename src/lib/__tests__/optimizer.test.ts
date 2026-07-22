@@ -37,10 +37,10 @@ describe("pickBestXi", () => {
     expect(xi.starters.length).toBe(11);
     expect(xi.bench.length).toBe(4);
   });
-  it("bench has exactly one GK, placed last", () => {
+  it("bench has exactly one GK, in slot 1 (FPL convention)", () => {
     const benchGks = xi.bench.filter((p) => p.element.element_type === 1);
     expect(benchGks.length).toBe(1);
-    expect(xi.bench[xi.bench.length - 1].element.element_type).toBe(1);
+    expect(xi.bench[0].element.element_type).toBe(1);
   });
   it("captain is the highest-xP starter and doubles the total", () => {
     const maxXp = Math.max(...xi.starters.map((s) => s.xp));

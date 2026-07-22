@@ -127,10 +127,11 @@ describe("computeFreeTransfers", () => {
     const rows = [row(1, 0), row(2, 3, 8)];
     expect(computeFreeTransfers(rows, new Map())).toBe(1);
   });
-  it("wildcard week preserves banked FTs", () => {
-    // GW2: no transfers -> bank to 2. GW3: wildcard with 10 transfers -> keep 2.
+  it("wildcard week preserves banked FTs and still grants +1", () => {
+    // GW2: no transfers -> bank to 2 for GW3. GW3: wildcard with 10 transfers
+    // -> the 2 carry over untouched and +1 accrues for GW4 => 3.
     const rows = [row(1, 0), row(2, 0), row(3, 10)];
-    expect(computeFreeTransfers(rows, new Map([[3, "wildcard"]]))).toBe(2);
+    expect(computeFreeTransfers(rows, new Map([[3, "wildcard"]]))).toBe(3);
   });
   it("never returns less than 1", () => {
     const rows = [row(1, 0), row(2, 5, 16)];

@@ -93,12 +93,27 @@ export default function LiveTab({ data }: { data: TeamData }) {
   const anyLive = gwFixtures.some((f) => f.started && !f.finished);
   const statById = new Map(live.elements.map((e) => [e.id, e.stats]));
   const bboost = data.squad.activeChip === "bboost";
+  const hits = data.picks?.entry_history.event_transfers_cost ?? 0;
+
+  // Effective captain: vice takes over once the GW is final and the captain
+  // played 0 minutes (official rule). Triple Captain aware.
+  const capMult = data.squad.activeChip === "3xc" ? 3 : 2;
+  const cap = data.squad.players.find((p) => p.isCaptain);
+  const vice = data.squad.players.find((p) => p.isViceCaptain);
+  const effCapId =
+    gwDone &&
+    cap &&
+    (statById.get(cap.element.id)?.minutes ?? 0) === 0 &&
+    vice &&
+    (statById.get(vice.element.id)?.minutes ?? 0) > 0
+      ? vice.element.id
+      : cap?.element.id;
 
   const rows = data.squad.players
     .map((p) => {
       const s = statById.get(p.element.id);
       const counts = p.pickPosition <= 11 || bboost;
-      const mult = p.isCaptain ? (data.squad!.activeChip === "3xc" ? 3 : 2) : 1;
+      const mult = p.element.id === effCapId ? capMult : 1;
       const raw = s?.total_points ?? 0;
       const proj = bonus?.byElement.get(p.element.id) ?? 0;
       return {
@@ -111,7 +126,7 @@ export default function LiveTab({ data }: { data: TeamData }) {
     })
     .sort((a, b) => a.p.pickPosition - b.p.pickPosition);
 
-  const total = rows.reduce((sum, r) => sum + r.points, 0);
+  const total = rows.reduce((sum, r) => sum + r.points, 0) - hits;
   const benchTotal = rows
     .filter((r) => r.p.pickPosition > 11)
     .reduce((s, r) => s + r.display, 0);
@@ -135,6 +150,9 @@ export default function LiveTab({ data }: { data: TeamData }) {
           <div className="text-4xl font-bold text-accent">
             {total}
             <span className="ml-1 text-base font-medium text-muted">pts</span>
+            {hits > 0 && (
+              <span className="ml-2 text-sm font-semibold text-danger">(−{hits} hit)</span>
+            )}
           </div>
         </div>
         <div className="text-sm text-muted">
@@ -154,7 +172,7 @@ export default function LiveTab({ data }: { data: TeamData }) {
       {gwFixtures.length > 0 && (
         <div className="flex gap-2 overflow-x-auto pb-1">
           {gwFixtures.map((f) => {
-            const minute = matchMinute(f, updatedAt ?? new Date(0));
+            const minute = matchMinute(f, updatedAt ?? undefined);
             const liveNow = f.started && !f.finished;
             return (
               <div

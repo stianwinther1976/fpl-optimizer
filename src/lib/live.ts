@@ -51,7 +51,7 @@ export function provisionalBonus(
 }
 
 /** Approximate match minute from kickoff time (display only). */
-export function matchMinute(f: Fixture, now: Date): string {
+export function matchMinute(f: Fixture, now: Date = new Date()): string {
   if (f.finished) return "FT";
   if (!f.started || !f.kickoff_time) return "";
   const mins = Math.floor((now.getTime() - new Date(f.kickoff_time).getTime()) / 60000);

@@ -72,7 +72,8 @@ export function pickBestXi(
       const benchOutfield = [...defs.slice(d), ...mids.slice(m), ...fwds.slice(f)].sort(
         (a, b) => b.xp - a.xp
       );
-      const bench = [...benchOutfield, ...gks.slice(1)];
+      // FPL convention: the substitute GK occupies bench slot 1.
+      const bench = [...gks.slice(1), ...benchOutfield];
       best = {
         formation: [d, m, f],
         starters,
