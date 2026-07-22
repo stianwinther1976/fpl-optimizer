@@ -17,13 +17,13 @@ import ThemeToggle from "./ThemeToggle";
 import { ErrorBox, Skeleton, Stat, type StatDelta } from "./ui";
 
 const TABS = [
-  ["team", "My team"],
-  ["optimize", "Optimize"],
-  ["stats", "Stats"],
-  ["fixtures", "Fixtures"],
-  ["live", "Live"],
-  ["league", "Mini-league"],
-  ["history", "History"],
+  ["team", "My team", "Team"],
+  ["optimize", "Optimize", "Optimize"],
+  ["stats", "Stats", "Stats"],
+  ["fixtures", "Fixtures", "Fixtures"],
+  ["live", "Live", "Live"],
+  ["league", "Mini-league", "League"],
+  ["history", "History", "History"],
 ] as const;
 
 type TabKey = (typeof TABS)[number][0];
@@ -338,18 +338,19 @@ export default function Dashboard({
       </div>
 
       {/* Tabs */}
-      <div className="sticky top-0 z-20 mt-4 -mx-4 flex gap-1 overflow-x-auto border-b border-border-c bg-background/85 px-4 backdrop-blur">
-        {TABS.map(([key, label]) => (
+      <div className="sticky top-0 z-20 mt-4 -mx-4 flex justify-between border-b border-border-c bg-background/85 px-2 backdrop-blur sm:justify-start sm:gap-1 sm:px-4">
+        {TABS.map(([key, label, short]) => (
           <button
             key={key}
             onClick={() => setTab(key)}
-            className={`whitespace-nowrap px-3 py-2 text-sm font-medium ${
+            className={`whitespace-nowrap px-1 py-2 text-xs font-medium sm:px-3 sm:text-sm ${
               tab === key
                 ? "border-b-2 border-accent text-accent"
                 : "text-muted hover:text-foreground"
             }`}
           >
-            {label}
+            <span className="sm:hidden">{short}</span>
+            <span className="hidden sm:inline">{label}</span>
           </button>
         ))}
       </div>
