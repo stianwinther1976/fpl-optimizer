@@ -12,22 +12,72 @@ export function ErrorBox({ message }: { message: string }) {
   );
 }
 
+export interface StatDelta {
+  /** Signed, human-formatted change, e.g. "+187" or "−0.4" */
+  text: string;
+  /** The period compared against, e.g. "vs GW6" */
+  period: string;
+  /** true = favorable (green), false = unfavorable (red), null = neutral */
+  good: boolean | null;
+  /** Direction of the arrow; defaults to the sign implied by `good` */
+  direction?: "up" | "down";
+}
+
+function Sparkline({ points }: { points: number[] }) {
+  if (points.length < 2) return null;
+  const w = 72;
+  const h = 22;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const span = max - min || 1;
+  const step = w / (points.length - 1);
+  const coords = points.map(
+    (p, i) => [i * step, h - 2 - ((p - min) / span) * (h - 4)] as const
+  );
+  const path = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const [lx, ly] = coords[coords.length - 1];
+  return (
+    <svg width={w} height={h} className="mt-1" aria-hidden="true">
+      <path d={path} fill="none" stroke="var(--muted)" strokeWidth="1.5" opacity="0.7" />
+      <circle cx={lx} cy={ly} r="2.5" fill="var(--accent)" />
+    </svg>
+  );
+}
+
 export function Stat({
   label,
   value,
   sub,
   accent,
+  delta,
+  trend,
 }: {
   label: string;
   value: string;
   sub?: string;
   accent?: boolean;
+  delta?: StatDelta | null;
+  trend?: number[];
 }) {
+  const arrow =
+    delta && delta.good !== null
+      ? (delta.direction ?? (delta.good === false ? "down" : "up")) === "up"
+        ? "▲"
+        : "▼"
+      : null;
+  const deltaColor =
+    delta?.good === true ? "text-accent" : delta?.good === false ? "text-danger" : "text-muted";
   return (
     <div className="card px-4 py-3">
-      <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
-      <div className={`mt-1 text-xl font-bold ${accent ? "text-accent" : ""}`}>{value}</div>
-      {sub && <div className="text-xs text-muted">{sub}</div>}
+      <div className="text-xs tracking-wide text-muted">{label}</div>
+      <div className={`mt-1 text-xl font-semibold ${accent ? "text-accent" : ""}`}>{value}</div>
+      {delta && (
+        <div className={`mt-0.5 text-xs font-medium ${deltaColor}`}>
+          {arrow} {delta.text} <span className="font-normal text-muted">{delta.period}</span>
+        </div>
+      )}
+      {trend && <Sparkline points={trend} />}
+      {sub && <div className="mt-0.5 text-xs text-muted">{sub}</div>}
     </div>
   );
 }

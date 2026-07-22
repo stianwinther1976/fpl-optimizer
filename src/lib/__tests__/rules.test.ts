@@ -34,12 +34,12 @@ describe("validateSquad", () => {
   it("rejects more than 3 from one club", () => {
     const s = squad([2, 5, 5, 3]);
     s[0].teamId = s[1].teamId = s[2].teamId = s[3].teamId = 7;
-    expect(validateSquad(s).some((e) => e.includes("samme klubb"))).toBe(true);
+    expect(validateSquad(s).some((e) => e.includes("same club"))).toBe(true);
   });
   it("rejects duplicates", () => {
     const s = squad([2, 5, 5, 3]);
     s[1].id = s[0].id;
-    expect(validateSquad(s).some((e) => e.includes("duplikate"))).toBe(true);
+    expect(validateSquad(s).some((e) => e.includes("duplicate"))).toBe(true);
   });
 });
 

@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "FPL Optimizer — beste lag hver runde",
+  title: "FPL Optimizer — your best team every gameweek",
   description:
-    "Legg inn FPL-ID-en din og få optimalt lag, transferforslag, kapteinsvalg og chip-råd — basert på alle offisielle FPL-regler.",
+    "Enter your FPL ID and get the optimal team, transfer suggestions, captain picks and chip advice — built on every official FPL rule.",
 };
 
 export default function RootLayout({
@@ -13,11 +13,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="nb" className="h-full antialiased">
+    <html lang="en" className="h-full antialiased">
       <body className="min-h-full flex flex-col">
         {children}
         <footer className="mt-auto py-6 text-center text-xs text-muted">
-          Uoffisiell app — ikke tilknyttet Premier League eller FPL.
+          Unofficial app — not affiliated with the Premier League or FPL.
         </footer>
       </body>
     </html>

@@ -47,7 +47,7 @@ function PlayerCard({
           .map((f) => {
             const home = f.team_h === el.team;
             const opp = teams.get(home ? f.team_a : f.team_h);
-            return `${opp?.short_name ?? "?"} (${home ? "H" : "B"})`;
+            return `${opp?.short_name ?? "?"} (${home ? "H" : "A"})`;
           })
           .join(", ")
       : "";
@@ -79,7 +79,7 @@ function PlayerCard({
       </div>
       {fx && (
         <div className="truncate text-[9px] text-zinc-400" title={fx}>
-          {fx || "Ingen kamp"}
+          {fx || "No fixture"}
         </div>
       )}
     </div>
@@ -113,7 +113,7 @@ export default function Pitch({
       <div className="pitch-bg rounded-xl px-1 py-4 sm:p-6">
         {formation && (
           <div className="mb-2 text-center text-xs font-semibold text-emerald-200/80">
-            Formasjon {formation.join("-")}
+            Formation {formation.join("-")}
           </div>
         )}
         <div className="flex flex-col gap-4 sm:gap-6">
@@ -135,7 +135,7 @@ export default function Pitch({
       {bench.length > 0 && (
         <div className="mt-2 rounded-xl border border-border-c bg-panel-2 p-3">
           <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-            Benk (i rekkefølge)
+            Bench (in order)
           </div>
           <div className="flex justify-start gap-2 sm:gap-6 overflow-x-auto">
             {bench.map((p, i) => (

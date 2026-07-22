@@ -28,10 +28,10 @@ async function get<T>(path: string): Promise<T> {
   if (!res.ok) {
     throw new FplApiError(
       res.status === 404
-        ? "Fant ikke data — sjekk at FPL-ID-en er riktig."
+        ? "No data found — check that the FPL ID is correct."
         : res.status === 503
-          ? "FPL oppdaterer spillet akkurat nå. Prøv igjen om noen minutter."
-          : `FPL-API-feil (${res.status})`,
+          ? "FPL is updating the game right now. Try again in a few minutes."
+          : `FPL API error (${res.status})`,
       res.status
     );
   }
@@ -131,5 +131,5 @@ export function buildSquadState(
 
 export function fmtRank(rank: number | null | undefined): string {
   if (rank == null) return "–";
-  return rank.toLocaleString("nb-NO");
+  return rank.toLocaleString("en-GB");
 }

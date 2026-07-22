@@ -34,7 +34,7 @@ export default function FixtureTicker({ data }: { data: TeamData }) {
               (t) => t.id === (home ? f.team_a : f.team_h)
             );
             const fdr = home ? f.team_h_difficulty : f.team_a_difficulty;
-            return { label: `${opp?.short_name ?? "?"} (${home ? "H" : "B"})`, fdr };
+            return { label: `${opp?.short_name ?? "?"} (${home ? "H" : "A"})`, fdr };
           });
         });
         const avgFdr =
@@ -45,7 +45,7 @@ export default function FixtureTicker({ data }: { data: TeamData }) {
   }, [data, gws]);
 
   if (nextEvent == null) {
-    return <div className="card p-6 text-muted">Ingen kommende runder — sesongen er ferdig.</div>;
+    return <div className="card p-6 text-muted">No upcoming gameweeks — the season is over.</div>;
   }
 
   return (
@@ -53,13 +53,13 @@ export default function FixtureTicker({ data }: { data: TeamData }) {
       <table className="w-full min-w-[560px] text-sm">
         <thead className="border-b border-border-c text-xs uppercase text-muted">
           <tr>
-            <th className="px-3 py-2 text-left">Lag (lettest først)</th>
+            <th className="px-3 py-2 text-left">Team (easiest first)</th>
             {gws.map((g) => (
               <th key={g} className="px-2 py-2 text-center">
                 GW{g}
               </th>
             ))}
-            <th className="px-2 py-2 text-right">Snitt-FDR</th>
+            <th className="px-2 py-2 text-right">Avg FDR</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border-c/60">

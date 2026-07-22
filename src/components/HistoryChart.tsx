@@ -17,9 +17,9 @@ import { SectionTitle } from "./ui";
 export default function HistoryChart({ data }: { data: TeamData }) {
   const rows = data.history.current.map((r) => ({
     gw: r.event,
-    poeng: r.points,
-    snitt: data.bootstrap.events.find((e) => e.id === r.event)?.average_entry_score ?? null,
-    totalt: r.total_points,
+    points: r.points,
+    average: data.bootstrap.events.find((e) => e.id === r.event)?.average_entry_score ?? null,
+    total: r.total_points,
     rank: r.overall_rank,
   }));
 
@@ -28,18 +28,18 @@ export default function HistoryChart({ data }: { data: TeamData }) {
   if (rows.length === 0) {
     return (
       <div className="card p-6 text-muted">
-        Ingen historikk ennå denne sesongen.
+        No history yet this season.
         {data.history.past.length > 0 && (
           <div className="mt-4">
-            <div className="mb-2 font-semibold text-foreground">Tidligere sesonger</div>
+            <div className="mb-2 font-semibold text-foreground">Past seasons</div>
             <table className="w-full max-w-md text-sm">
               <tbody className="divide-y divide-border-c/60">
                 {data.history.past.map((p) => (
                   <tr key={p.season_name}>
                     <td className="py-1.5">{p.season_name}</td>
-                    <td className="py-1.5 text-right font-mono">{p.total_points} p</td>
+                    <td className="py-1.5 text-right font-mono">{p.total_points} pts</td>
                     <td className="py-1.5 text-right font-mono text-muted">
-                      {p.rank.toLocaleString("nb-NO")}
+                      {p.rank.toLocaleString("en-GB")}
                     </td>
                   </tr>
                 ))}
@@ -54,7 +54,7 @@ export default function HistoryChart({ data }: { data: TeamData }) {
   return (
     <div className="space-y-6">
       <div className="card p-4">
-        <SectionTitle>Poeng per runde</SectionTitle>
+        <SectionTitle>Points per gameweek</SectionTitle>
         <div className="mt-4 h-64">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={rows}>
@@ -65,15 +65,15 @@ export default function HistoryChart({ data }: { data: TeamData }) {
                 contentStyle={{ background: "#161b22", border: "1px solid #2b3442", borderRadius: 8 }}
                 labelFormatter={(gw) => `GW${gw}`}
               />
-              <Line type="monotone" dataKey="poeng" stroke="#37e08d" strokeWidth={2} dot={false} name="Deg" />
-              <Line type="monotone" dataKey="snitt" stroke="#8b98a9" strokeWidth={1.5} strokeDasharray="4 4" dot={false} name="Snitt" />
+              <Line type="monotone" dataKey="points" stroke="#37e08d" strokeWidth={2} dot={false} name="You" />
+              <Line type="monotone" dataKey="average" stroke="#8b98a9" strokeWidth={1.5} strokeDasharray="4 4" dot={false} name="Average" />
               {chips.map((c) => {
                 const row = rows.find((r) => r.gw === c.event);
                 return row ? (
                   <ReferenceDot
                     key={`${c.name}-${c.event}`}
                     x={c.event}
-                    y={row.poeng}
+                    y={row.points}
                     r={5}
                     fill="#a78bfa"
                     stroke="none"
@@ -108,7 +108,7 @@ export default function HistoryChart({ data }: { data: TeamData }) {
               <Tooltip
                 contentStyle={{ background: "#161b22", border: "1px solid #2b3442", borderRadius: 8 }}
                 labelFormatter={(gw) => `GW${gw}`}
-                formatter={(v) => [Number(v).toLocaleString("nb-NO"), "Rank"]}
+                formatter={(v) => [Number(v).toLocaleString("en-GB"), "Rank"]}
               />
               <Line type="monotone" dataKey="rank" stroke="#a78bfa" strokeWidth={2} dot={false} />
             </LineChart>

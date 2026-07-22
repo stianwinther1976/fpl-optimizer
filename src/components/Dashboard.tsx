@@ -11,19 +11,22 @@ import FixtureTicker from "./FixtureTicker";
 import HistoryChart from "./HistoryChart";
 import LiveTab from "./LiveTab";
 import MiniLeague from "./MiniLeague";
-import { ErrorBox, Skeleton, Stat } from "./ui";
+import { ErrorBox, Skeleton, Stat, type StatDelta } from "./ui";
 
 const TABS = [
-  ["team", "Laget mitt"],
-  ["optimize", "Optimalisér"],
+  ["team", "My team"],
+  ["optimize", "Optimize"],
   ["stats", "Stats"],
   ["fixtures", "Fixtures"],
   ["live", "Live"],
-  ["league", "Mini-liga"],
-  ["history", "Historikk"],
+  ["league", "Mini-league"],
+  ["history", "History"],
 ] as const;
 
 type TabKey = (typeof TABS)[number][0];
+
+/** ~1 month in FPL terms: compare against the gameweek 4 GWs back (or the earliest available). */
+const MONTH_GWS = 4;
 
 export default function Dashboard({ entryId }: { entryId: number }) {
   const [data, setData] = useState<TeamData | null>(null);
@@ -39,7 +42,7 @@ export default function Dashboard({ entryId }: { entryId: number }) {
       .then((d) => !cancelled && setData(d))
       .catch((e) =>
         !cancelled &&
-        setError(e instanceof FplApiError ? e.message : "Klarte ikke å laste laget.")
+        setError(e instanceof FplApiError ? e.message : "Could not load this team.")
       );
     return () => {
       cancelled = true;
@@ -56,7 +59,7 @@ export default function Dashboard({ entryId }: { entryId: number }) {
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-16">
         <ErrorBox message={error} />
         <Link href="/" className="mt-4 inline-block text-accent hover:underline">
-          ← Prøv en annen FPL-ID
+          ← Try another FPL ID
         </Link>
       </main>
     );
@@ -77,12 +80,79 @@ export default function Dashboard({ entryId }: { entryId: number }) {
   }
 
   const { entry, squad, history } = data;
-  const prev = history.current.length > 1 ? history.current[history.current.length - 2] : null;
-  const curr = history.current.length > 0 ? history.current[history.current.length - 1] : null;
-  const rankDelta =
-    prev?.overall_rank != null && curr?.overall_rank != null
-      ? prev.overall_rank - curr.overall_rank
+  const rows = history.current;
+  const curr = rows.length > 0 ? rows[rows.length - 1] : null;
+  const past =
+    curr != null
+      ? (rows.find((r) => r.event === curr.event - MONTH_GWS) ?? rows[0])
       : null;
+  const comparable = curr != null && past != null && past.event < curr.event;
+  const period = comparable ? `vs GW${past.event}` : "";
+
+  const fmtSigned = (n: number, digits = 0) =>
+    `${n > 0 ? "+" : n < 0 ? "−" : "±"}${Math.abs(n).toLocaleString("en-GB", {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    })}`;
+
+  // Total points: points added since ~a month ago; good if above the pace of the window before it.
+  let pointsDelta: StatDelta | null = null;
+  if (comparable) {
+    const gained = curr.total_points - past.total_points;
+    const prevWindow = rows.find((r) => r.event === past.event - (curr.event - past.event));
+    const prevGained = prevWindow ? past.total_points - prevWindow.total_points : null;
+    pointsDelta = {
+      text: `${fmtSigned(gained)} pts`,
+      period,
+      good: prevGained == null ? null : gained >= prevGained,
+      direction: "up",
+    };
+  }
+
+  // Overall rank: falling number = climbing the table.
+  let rankDelta: StatDelta | null = null;
+  if (comparable && curr.overall_rank != null && past.overall_rank != null) {
+    const improved = past.overall_rank - curr.overall_rank; // positive = better
+    rankDelta = {
+      text: Math.abs(improved).toLocaleString("en-GB"),
+      period,
+      good: improved === 0 ? null : improved > 0,
+      direction: improved >= 0 ? "up" : "down",
+    };
+  }
+
+  // GW points vs the average of the last month's gameweeks.
+  let gwDelta: StatDelta | null = null;
+  if (comparable) {
+    const windowRows = rows.filter((r) => r.event > past.event && r.event <= curr.event);
+    const avg =
+      windowRows.length > 1
+        ? windowRows.slice(0, -1).reduce((s, r) => s + r.points, 0) / (windowRows.length - 1)
+        : null;
+    if (avg != null) {
+      const diff = curr.points - avg;
+      gwDelta = {
+        text: `${fmtSigned(diff, 1)} pts`,
+        period: "vs 3-GW avg",
+        good: Math.abs(diff) < 0.05 ? null : diff > 0,
+        direction: diff >= 0 ? "up" : "down",
+      };
+    }
+  }
+
+  // Team value (squad + bank), month over month.
+  let valueDelta: StatDelta | null = null;
+  if (comparable) {
+    const diff = curr.value + curr.bank - (past.value + past.bank);
+    valueDelta = {
+      text: `${fmtSigned(diff / 10, 1)}m`,
+      period,
+      good: diff === 0 ? null : diff > 0,
+      direction: diff >= 0 ? "up" : "down",
+    };
+  }
+
+  const pointsTrend = rows.slice(-8).map((r) => r.points);
 
   const chipsLeft = squad
     ? remainingChips(
@@ -98,7 +168,7 @@ export default function Dashboard({ entryId }: { entryId: number }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <Link href="/" className="text-xs text-muted hover:text-accent">
-            ← Bytt lag
+            ← Switch team
           </Link>
           <h1 className="text-2xl font-bold">
             {entry.name}{" "}
@@ -109,36 +179,45 @@ export default function Dashboard({ entryId }: { entryId: number }) {
         </div>
         {squad?.nextEvent != null && (
           <div className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-sm font-semibold text-accent">
-            Neste: GW{squad.nextEvent}
+            Next: GW{squad.nextEvent}
           </div>
         )}
       </div>
 
-      {/* Stat row */}
+      {/* KPI row */}
       <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
-        <Stat label="Totalpoeng" value={String(entry.summary_overall_points)} accent />
+        <Stat
+          label="Total points"
+          value={String(entry.summary_overall_points)}
+          accent
+          delta={pointsDelta}
+          trend={pointsTrend.length > 1 ? pointsTrend : undefined}
+        />
         <Stat
           label="Overall rank"
           value={fmtRank(entry.summary_overall_rank)}
-          sub={
-            rankDelta != null
-              ? rankDelta > 0
-                ? `▲ ${rankDelta.toLocaleString("nb-NO")}`
-                : `▼ ${Math.abs(rankDelta).toLocaleString("nb-NO")}`
-              : undefined
+          delta={rankDelta}
+        />
+        <Stat
+          label="Latest GW"
+          value={`${entry.summary_event_points} pts`}
+          delta={gwDelta}
+        />
+        <Stat
+          label="Team value"
+          value={
+            squad
+              ? `£${fmtPrice(squad.players.reduce((s, p) => s + p.sellPrice, 0) + squad.bank)}m`
+              : "–"
           }
+          sub={squad ? `Bank £${fmtPrice(squad.bank)}m` : undefined}
+          delta={valueDelta}
         />
-        <Stat label="Siste GW" value={`${entry.summary_event_points} p`} />
+        <Stat label="Free transfers" value={squad ? String(squad.freeTransfers) : "–"} />
         <Stat
-          label="Lagverdi"
-          value={squad ? `£${fmtPrice(squad.players.reduce((s, p) => s + p.sellPrice, 0) + squad.bank)}` : "–"}
-          sub={squad ? `Bank £${fmtPrice(squad.bank)}` : undefined}
-        />
-        <Stat label="Gratis bytter" value={squad ? String(squad.freeTransfers) : "–"} />
-        <Stat
-          label="Chips igjen"
+          label="Chips left"
           value={String(chipsLeft.length)}
-          sub={chipsLeft.map((c) => c.label).join(", ") || "Ingen"}
+          sub={chipsLeft.map((c) => c.label).join(", ") || "None"}
         />
       </div>
 
@@ -180,13 +259,13 @@ export default function Dashboard({ entryId }: { entryId: number }) {
                 nextEvent={squad.nextEvent}
               />
               <p className="text-xs text-muted">
-                Laget ditt fra GW{squad.currentEvent}. Salgspriser er beregnet etter
-                50%-regelen fra kjøpsprisene dine.
+                Your squad from GW{squad.currentEvent}. Selling prices follow the official
+                50%-of-profit rule, computed from your actual purchase prices.
               </p>
             </div>
           ) : (
             <div className="card p-6 text-muted">
-              Fant ikke lagoppstilling — har laget spilt en runde denne sesongen ennå?
+              No squad found — has this team played a gameweek this season yet?
             </div>
           ))}
         {tab === "optimize" && <OptimizePanel data={data} />}

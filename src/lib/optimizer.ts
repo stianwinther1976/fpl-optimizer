@@ -83,7 +83,7 @@ export function pickBestXi(
       };
     }
   }
-  if (!best) throw new Error("Ingen gyldig formasjon for troppen");
+  if (!best) throw new Error("No valid formation for this squad");
   const ranked = [...best.starters].sort((a, b) => b.xp - a.xp);
   best.captain = ranked[0] ?? null;
   best.vice = ranked[1] ?? null;
@@ -277,21 +277,21 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     chip: "bboost",
     label: "Bench Boost",
     projectedGain: benchNextXp,
-    detail: `Benken din er ventet å score ${benchNextXp.toFixed(1)} poeng neste runde.`,
+    detail: `Your bench is projected to score ${benchNextXp.toFixed(1)} points next gameweek.`,
   });
   const capXp = keepXi.captain?.xp ?? 0;
   chipAdvice.push({
     chip: "3xc",
     label: "Triple Captain",
     projectedGain: capXp,
-    detail: `${keepXi.captain?.element.web_name ?? "Kapteinen"} ville gitt ~${capXp.toFixed(1)} ekstra poeng (3x i stedet for 2x).`,
+    detail: `${keepXi.captain?.element.web_name ?? "Your captain"} would add ~${capXp.toFixed(1)} extra points (3x instead of 2x).`,
   });
   const wcGain = Math.max(0, horizonScore(dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank)), xp, gws) - keepHorizonXp);
   chipAdvice.push({
     chip: "wildcard",
     label: "Wildcard",
     projectedGain: wcGain,
-    detail: `Et optimalt lag innenfor lagverdien din er ventet å gi ~${wcGain.toFixed(1)} flere poeng over de neste ${gws.length} rundene.`,
+    detail: `An optimal squad within your team value is projected to gain ~${wcGain.toFixed(1)} points over the next ${gws.length} gameweeks.`,
   });
   const fhSquad = dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank));
   const fhXi = pickBestXi(fhSquad, (id) => xp.get(id)?.next ?? 0);
@@ -300,7 +300,7 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     chip: "freehit",
     label: "Free Hit",
     projectedGain: fhGain,
-    detail: `Et optimalt engangslag neste runde er ventet å gi ~${fhGain.toFixed(1)} flere poeng enn ditt nåværende lag.`,
+    detail: `An optimal one-week squad is projected to score ~${fhGain.toFixed(1)} more points than your current team next gameweek.`,
   });
   chipAdvice.sort((a, b) => b.projectedGain - a.projectedGain);
 

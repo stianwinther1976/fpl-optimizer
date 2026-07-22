@@ -1,82 +1,83 @@
 # ⚽ FPL Optimizer
 
-Et komplett Fantasy Premier League-dashbord som finner **det best mulige laget ditt for neste runde** — basert på laget du hadde forrige runde, med alle offisielle FPL-regler innebygd.
+A complete Fantasy Premier League dashboard that finds **the best possible team for the next gameweek** — starting from the squad you had last week, with every official FPL rule built in.
 
-Legg inn FPL-ID-en din og få:
+Enter your FPL ID and get:
 
-- **Optimalt lag**: beste XI, formasjon og benkerekkefølge ut fra forventede poeng (xP)
-- **Transferplaner** for 1–3 bytter, vurdert mot −4-hits — appen sier fra når det lønner seg å beholde laget
-- **Kapteinsrangering** for neste runde
-- **Chip-rådgiver**: forventet gevinst av Wildcard, Free Hit, Bench Boost og Triple Captain akkurat nå
-- **Stats**: sorterbar spillertabell med xP, form, xGI, pris og eierandel
-- **Fixture-ticker** med FDR for de neste 5 rundene (lettest først)
-- **Live-poeng** med auto-refresh, **mini-liga-tabell** og **sesonghistorikk** med grafer
+- **Optimal team**: best XI, formation and bench order from expected points (xP)
+- **Transfer plans** for 1–3 moves, weighed against −4 hits — the app tells you when keeping your team is the better play
+- **Captaincy ranking** for the next gameweek
+- **Chip advisor**: projected gain from Wildcard, Free Hit, Bench Boost and Triple Captain right now
+- **Stats**: sortable player table with xP, form, xGI, price and ownership
+- **Fixture ticker** with FDR for the next 5 gameweeks (easiest first)
+- **Live points** with auto-refresh, **mini-league standings** and **season history** charts
+- A finance-style KPI row: every headline card shows its **change vs ~a month ago** (4 gameweeks), color-coded by direction
 
-Norsk UI, mørkt tema, mobilvennlig.
+Dark theme, mobile-first.
 
-## Kom i gang lokalt
+## Getting started locally
 
 ```bash
 npm install
 npm run dev        # http://localhost:3000
-npm test           # 39 enhetstester (regelmotor + optimaliserer)
+npm test           # 39 unit tests (rules engine + optimizer)
 ```
 
-I sandkasser uten tilgang til FPL-API-et kan du kjøre mot en innebygd mock:
+In sandboxes without access to the FPL API you can run against a built-in mock:
 
 ```bash
-npm run mock-api                          # mock-FPL-API på :4100
+npm run mock-api                          # mock FPL API on :4100
 FPL_API_BASE=http://localhost:4100 npm run dev
 ```
 
-## Deploy til GitHub + Vercel
+## Deploy to GitHub + Vercel
 
-1. **GitHub**: opprett et tomt repo (f.eks. `fpl-optimizer`) på github.com, og push:
+1. **GitHub**: create an empty repo (e.g. `fpl-optimizer`) on github.com, then push:
 
    ```bash
-   git remote add origin https://github.com/<brukernavn>/fpl-optimizer.git
+   git remote add origin https://github.com/<username>/fpl-optimizer.git
    git push -u origin main
    ```
 
-   (Eller med GitHub CLI: `gh repo create fpl-optimizer --public --source=. --push`)
+   (Or with the GitHub CLI: `gh repo create fpl-optimizer --public --source=. --push`)
 
-2. **Vercel**: gå til [vercel.com/new](https://vercel.com/new), logg inn med GitHub, velg repoet og trykk **Deploy**. Next.js trenger null konfigurasjon. Ferdig — siden er live, og hver push til `main` deployes automatisk.
+2. **Vercel**: go to [vercel.com/new](https://vercel.com/new), sign in with GitHub, pick the repo and hit **Deploy**. Next.js needs zero configuration. Done — the site is live, and every push to `main` deploys automatically.
 
-CI (lint + test + build) kjører på GitHub Actions ved hver push.
+CI (lint + test + build) runs on GitHub Actions on every push.
 
-## Arkitektur
+## Architecture
 
 ```
 src/
 ├── app/
-│   ├── page.tsx                  # Landing: FPL-ID-inntasting + validering
-│   ├── team/[id]/page.tsx        # Dashbordet
-│   └── api/fpl/[...path]/route.ts# Proxy mot fantasy.premierleague.com (påkrevd: ingen CORS)
+│   ├── page.tsx                  # Landing: FPL ID input + validation
+│   ├── team/[id]/page.tsx        # The dashboard
+│   └── api/fpl/[...path]/route.ts# Proxy to fantasy.premierleague.com (required: no CORS)
 ├── lib/
-│   ├── rules.ts                  # FPL-regelmotoren (se under)
-│   ├── xp.ts                     # Forventet poeng-modell — alle vekter i XP_CONFIG
-│   ├── optimizer.ts              # Beste XI + beam search over transferkombinasjoner
-│   ├── fpl.ts                    # Datalag: henter og setter sammen lagtilstand
-│   └── types.ts                  # Typer for FPL-API-et
-└── components/                   # Pitch, OptimizePanel, StatsTable, m.m.
+│   ├── rules.ts                  # The FPL rules engine (see below)
+│   ├── xp.ts                     # Expected-points model — every weight in XP_CONFIG
+│   ├── optimizer.ts              # Best XI + beam search over transfer combinations
+│   ├── fpl.ts                    # Data layer: fetches and assembles squad state
+│   └── types.ts                  # Types for the FPL API
+└── components/                   # Pitch, OptimizePanel, StatsTable, etc.
 ```
 
-### Regelmotoren (`lib/rules.ts`)
+### The rules engine (`lib/rules.ts`)
 
-Implementerer og enhetstester de offisielle reglene: tropp på 15 (2 GK / 5 DEF / 5 MID / 3 FWD), maks 3 per klubb, alle 8 gyldige formasjoner, **salgspriser** (kjøpspris + 50 % av prisstigning, rundet ned til nærmeste £0.1m — beregnet fra transferhistorikken din), gratis bytter med banking (opptil 5) og −4-hits, og chips. Chip-tilgjengelighet leses **dynamisk** fra API-et (vinduer og antall), så appen overlever regelendringer mellom sesonger.
+Implements and unit-tests the official rules: a 15-man squad (2 GK / 5 DEF / 5 MID / 3 FWD), max 3 per club, all 8 valid formations, **selling prices** (purchase price + 50% of any rise, rounded down to the nearest £0.1m — computed from your actual transfer history), free transfers with banking (up to 5) and −4 hits, and chips. Chip availability is read **dynamically** from the API (windows and counts), so the app survives rule changes between seasons.
 
-### xP-modellen (`lib/xp.ts`)
+### The xP model (`lib/xp.ts`)
 
-Per spiller per runde: xG/xA per 90 vektet med fixture-vanskelighet (FDR) og hjemme/borte, clean sheet-sannsynlighet for GK/DEF, forventet baklengs-trekk, bonuspoeng fra ICT, og spilletidssannsynlighet fra status/skadegrad og minuttandel. Blandes med form (poeng per kamp) og FPL-s egen `ep_next` for neste runde. Doble og blanke runder håndteres automatisk via fixtures-endepunktet. Alle vekter ligger i `XP_CONFIG` — juster og se hva som skjer.
+Per player per gameweek: xG/xA per 90 weighted by fixture difficulty (FDR) and home/away, clean-sheet probability for GK/DEF, expected goals-conceded penalty, bonus points from ICT, and minutes probability from status/injury flags and minutes share. Blended with form (points per game) and FPL's own `ep_next` for the immediate gameweek. Double and blank gameweeks are handled automatically via the fixtures endpoint. Every weight lives in `XP_CONFIG` — tune it and see what happens.
 
-### Optimalisereren (`lib/optimizer.ts`)
+### The optimizer (`lib/optimizer.ts`)
 
-Beste XI finnes eksakt ved å enumerere alle gyldige formasjoner. Transferforslag finnes med **beam search**: alle lovlige 1-bytter evalueres (posisjon, budsjett med ekte salgspriser, klubbgrense), de beste tilstandene utvides til 2 og 3 bytter. Målfunksjonen er summen av beste-XI-xP (inkl. kaptein) over valgt horisont, minus hits. Chip-gevinster beregnes fra samme modell (Bench Boost = benkens xP, Triple Captain = kapteinens xP, Wildcard/Free Hit = optimalt lag innenfor lagverdien din vs. dagens lag).
+The best XI is found exactly by enumerating all valid formations. Transfer suggestions use **beam search**: every legal 1-move swap is evaluated (position, budget with true selling prices, club limit), and the best states are expanded to 2 and 3 moves. The objective is the sum of best-XI xP (incl. captain) over the chosen horizon, minus hits. Chip gains come from the same model (Bench Boost = bench xP, Triple Captain = captain's xP, Wildcard/Free Hit = optimal squad within your team value vs your current squad).
 
-## Datakilde
+## Data source
 
-Det offisielle, åpne FPL-API-et (`https://fantasy.premierleague.com/api/…`) via en server-side proxy med caching (5 min for bootstrap/fixtures, 60 s for live). Ingen innlogging, ingen database — alt beregnes fra FPL-ID-en.
+The official, public FPL API (`https://fantasy.premierleague.com/api/…`) via a server-side proxy with caching (5 min for bootstrap/fixtures, 60 s for live). No login, no database — everything is computed from your FPL ID.
 
 ---
 
-Uoffisiell app — ikke tilknyttet Premier League eller FPL.
+Unofficial app — not affiliated with the Premier League or FPL.

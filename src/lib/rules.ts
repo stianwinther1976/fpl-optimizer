@@ -45,11 +45,11 @@ export interface SquadPlayerLite {
 export function validateSquad(players: SquadPlayerLite[]): string[] {
   const errors: string[] = [];
   if (players.length !== SQUAD_SIZE) {
-    errors.push(`Troppen må ha ${SQUAD_SIZE} spillere (har ${players.length}).`);
+    errors.push(`Squad must have ${SQUAD_SIZE} players (has ${players.length}).`);
   }
   const ids = new Set(players.map((p) => p.id));
   if (ids.size !== players.length) {
-    errors.push("Troppen har duplikate spillere.");
+    errors.push("Squad contains duplicate players.");
   }
   const byType: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
   const byClub = new Map<number, number>();
@@ -60,13 +60,13 @@ export function validateSquad(players: SquadPlayerLite[]): string[] {
   for (const t of [1, 2, 3, 4] as ElementType[]) {
     if (byType[t] !== SQUAD_COMPOSITION[t]) {
       errors.push(
-        `Troppen må ha ${SQUAD_COMPOSITION[t]} ${POSITION_NAMES[t]} (har ${byType[t]}).`
+        `Squad must have ${SQUAD_COMPOSITION[t]} ${POSITION_NAMES[t]} (has ${byType[t]}).`
       );
     }
   }
   for (const [teamId, count] of byClub) {
     if (count > MAX_PER_CLUB) {
-      errors.push(`Maks ${MAX_PER_CLUB} spillere fra samme klubb (klubb ${teamId} har ${count}).`);
+      errors.push(`Max ${MAX_PER_CLUB} players from the same club (club ${teamId} has ${count}).`);
     }
   }
   return errors;

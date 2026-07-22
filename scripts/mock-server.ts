@@ -101,12 +101,12 @@ const live = {
 };
 
 const league = {
-  league: { id: 98765, name: "Kontorligaen" },
+  league: { id: 98765, name: "The Office League" },
   standings: {
     has_next: false,
     results: Array.from({ length: 12 }, (_, i) => ({
       entry: i === 2 ? entry.id : 1000 + i,
-      entry_name: i === 2 ? entry.name : `Lag ${i + 1}`,
+      entry_name: i === 2 ? entry.name : `Team ${i + 1}`,
       player_name: i === 2 ? "Stian Winther" : `Manager ${i + 1}`,
       rank: i + 1,
       last_rank: i + (i % 2 === 0 ? 2 : 0),

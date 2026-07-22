@@ -36,7 +36,7 @@ export async function GET(
   if (!joined.endsWith("/")) joined += "/";
 
   if (!ALLOWED.some((re) => re.test(joined))) {
-    return NextResponse.json({ error: "Ukjent endepunkt" }, { status: 400 });
+    return NextResponse.json({ error: "Unknown endpoint" }, { status: 400 });
   }
 
   const search = req.nextUrl.search ?? "";
@@ -56,14 +56,14 @@ export async function GET(
       // FPL returns 503/maintenance pages while the game updates.
       const status = upstream.status === 404 ? 404 : 503;
       return NextResponse.json(
-        { error: status === 404 ? "Ikke funnet" : "FPL oppdaterer spillet" },
+        { error: status === 404 ? "Not found" : "FPL is updating the game" },
         { status }
       );
     }
 
     const contentType = upstream.headers.get("content-type") ?? "";
     if (!contentType.includes("application/json")) {
-      return NextResponse.json({ error: "FPL oppdaterer spillet" }, { status: 503 });
+      return NextResponse.json({ error: "FPL is updating the game" }, { status: 503 });
     }
 
     const data = await upstream.json();
@@ -73,6 +73,6 @@ export async function GET(
       },
     });
   } catch {
-    return NextResponse.json({ error: "Fikk ikke kontakt med FPL-API-et" }, { status: 502 });
+    return NextResponse.json({ error: "Could not reach the FPL API" }, { status: 502 });
   }
 }

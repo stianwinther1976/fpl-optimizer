@@ -24,7 +24,7 @@ export default function MiniLeague({ entryId }: { entryId: number }) {
   async function load(idStr?: string) {
     const num = parseInt(idStr ?? leagueId, 10);
     if (!num) {
-      setError("Skriv inn en liga-ID (tallet i URL-en på ligasiden).");
+      setError("Enter a league ID (the number in the URL on the league page).");
       return;
     }
     setLoading(true);
@@ -34,7 +34,7 @@ export default function MiniLeague({ entryId }: { entryId: number }) {
       setStandings(s);
       localStorage.setItem("fpl-league-id", String(num));
     } catch {
-      setError("Fant ikke ligaen — sjekk ID-en.");
+      setError("League not found — check the ID.");
     } finally {
       setLoading(false);
     }
@@ -47,7 +47,7 @@ export default function MiniLeague({ entryId }: { entryId: number }) {
           value={leagueId}
           onChange={(e) => setLeagueId(e.target.value.replace(/\D/g, ""))}
           onKeyDown={(e) => e.key === "Enter" && load()}
-          placeholder="Liga-ID (classic league)"
+          placeholder="League ID (classic league)"
           className="flex-1 min-w-40 rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
         />
         <button
@@ -55,7 +55,7 @@ export default function MiniLeague({ entryId }: { entryId: number }) {
           disabled={loading}
           className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-50"
         >
-          {loading ? "Henter…" : "Hent tabell"}
+          {loading ? "Loading…" : "Load standings"}
         </button>
       </div>
 
@@ -71,9 +71,9 @@ export default function MiniLeague({ entryId }: { entryId: number }) {
             <thead className="text-xs uppercase text-muted">
               <tr className="border-b border-border-c">
                 <th className="px-3 py-2 text-left">#</th>
-                <th className="px-2 py-2 text-left">Lag</th>
+                <th className="px-2 py-2 text-left">Team</th>
                 <th className="px-2 py-2 text-right">GW</th>
-                <th className="px-3 py-2 text-right">Totalt</th>
+                <th className="px-3 py-2 text-right">Total</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border-c/60">

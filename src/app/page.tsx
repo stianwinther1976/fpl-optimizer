@@ -21,7 +21,7 @@ export default function Home() {
   async function check() {
     const num = parseInt(id, 10);
     if (!num || num <= 0) {
-      setError("Skriv inn et gyldig tall — ID-en finner du i URL-en på FPL-siden.");
+      setError("Enter a valid number — you can find your ID in the URL on the FPL site.");
       return;
     }
     setChecking(true);
@@ -32,7 +32,7 @@ export default function Home() {
       setEntry(e);
       localStorage.setItem("fpl-id", String(num));
     } catch (err) {
-      setError(err instanceof FplApiError ? err.message : "Noe gikk galt. Prøv igjen.");
+      setError(err instanceof FplApiError ? err.message : "Something went wrong. Please try again.");
     } finally {
       setChecking(false);
     }
@@ -46,13 +46,13 @@ export default function Home() {
           FPL <span className="text-accent">Optimizer</span>
         </h1>
         <p className="mt-4 text-lg text-muted">
-          Legg inn FPL-ID-en din og få det matematisk beste laget for neste runde —
-          transfers, kaptein og chips, med alle offisielle regler innebygd.
+          Enter your FPL ID and get the mathematically best team for the next gameweek —
+          transfers, captaincy and chips, with every official rule built in.
         </p>
 
         <div className="mt-8 card p-6 text-left">
           <label htmlFor="fpl-id" className="block text-sm font-medium text-muted">
-            Din FPL-ID
+            Your FPL ID
           </label>
           <div className="mt-2 flex gap-2">
             <input
@@ -61,7 +61,7 @@ export default function Home() {
               value={id}
               onChange={(e) => setId(e.target.value.replace(/\D/g, ""))}
               onKeyDown={(e) => e.key === "Enter" && check()}
-              placeholder="F.eks. 1234567"
+              placeholder="e.g. 1234567"
               className="flex-1 rounded-lg bg-panel-2 border border-border-c px-4 py-3 text-lg outline-none focus:border-accent"
             />
             <button
@@ -69,12 +69,12 @@ export default function Home() {
               disabled={checking}
               className="rounded-lg bg-accent px-5 py-3 font-semibold text-black hover:opacity-90 disabled:opacity-50"
             >
-              {checking ? "Sjekker…" : "Hent lag"}
+              {checking ? "Checking…" : "Load team"}
             </button>
           </div>
           <p className="mt-3 text-xs text-muted">
-            Finn ID-en din: logg inn på fantasy.premierleague.com → «Points» — tallet i
-            URL-en (…/entry/<b>1234567</b>/event/…) er ID-en din.
+            Find your ID: log in at fantasy.premierleague.com → “Points” — the number in the
+            URL (…/entry/<b>1234567</b>/event/…) is your ID.
           </p>
 
           {error && (
@@ -86,18 +86,18 @@ export default function Home() {
           {entry && (
             <div className="mt-4 rounded-lg border border-accent/40 bg-accent/10 px-4 py-3">
               <div className="font-semibold">
-                {entry.player_first_name} {entry.player_last_name} — «{entry.name}»
+                {entry.player_first_name} {entry.player_last_name} — “{entry.name}”
               </div>
               <div className="text-sm text-muted">
-                {entry.summary_overall_points} poeng
+                {entry.summary_overall_points} points
                 {entry.summary_overall_rank != null &&
-                  ` · rank ${entry.summary_overall_rank.toLocaleString("nb-NO")}`}
+                  ` · rank ${entry.summary_overall_rank.toLocaleString("en-GB")}`}
               </div>
               <button
                 onClick={() => router.push(`/team/${entry.id}`)}
                 className="mt-3 w-full rounded-lg bg-accent px-4 py-2.5 font-semibold text-black hover:opacity-90"
               >
-                Åpne dashbordet →
+                Open dashboard →
               </button>
             </div>
           )}
@@ -105,9 +105,9 @@ export default function Home() {
 
         <div className="mt-10 grid grid-cols-1 sm:grid-cols-3 gap-4 text-left">
           {[
-            ["🧠", "Optimalt lag", "Beste XI, formasjon og benkerekkefølge ut fra forventede poeng."],
-            ["🔄", "Transferplaner", "0–3 bytter vurdert mot -4-hits — kun bytter som lønner seg."],
-            ["🃏", "Chip-rådgiver", "Når Wildcard, Free Hit, Bench Boost og Triple Captain gir mest."],
+            ["🧠", "Optimal team", "Best XI, formation and bench order from expected points."],
+            ["🔄", "Transfer plans", "0–3 moves weighed against -4 hits — only moves that pay off."],
+            ["🃏", "Chip advisor", "When Wildcard, Free Hit, Bench Boost and Triple Captain gain the most."],
           ].map(([icon, title, desc]) => (
             <div key={title} className="card p-4">
               <div className="text-2xl">{icon}</div>

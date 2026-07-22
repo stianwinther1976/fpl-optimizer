@@ -21,7 +21,7 @@ export default function LiveTab({ data }: { data: TeamData }) {
       setUpdatedAt(new Date());
       setError(null);
     } catch {
-      setError("Klarte ikke hente live-data.");
+      setError("Could not fetch live data.");
     }
   }, [currentEvent]);
 
@@ -33,7 +33,7 @@ export default function LiveTab({ data }: { data: TeamData }) {
   }, [refresh]);
 
   if (currentEvent == null) {
-    return <div className="card p-6 text-muted">Ingen aktiv runde akkurat nå.</div>;
+    return <div className="card p-6 text-muted">No gameweek in progress right now.</div>;
   }
   if (error) return <ErrorBox message={error} />;
   if (!live || !data.squad) return <Skeleton className="h-64" />;
@@ -60,13 +60,13 @@ export default function LiveTab({ data }: { data: TeamData }) {
       <div className="card flex flex-wrap items-center gap-4 p-4">
         <div>
           <div className="text-xs uppercase text-muted">Live GW{currentEvent}</div>
-          <div className="text-3xl font-bold text-accent">{total} p</div>
+          <div className="text-3xl font-bold text-accent">{total} pts</div>
         </div>
         <div className="text-sm text-muted">
-          Benk: {benchTotal} p
+          Bench: {benchTotal} pts
           {updatedAt && (
             <div className="text-xs">
-              Oppdatert {updatedAt.toLocaleTimeString("nb-NO")} · auto-refresh 60s
+              Updated {updatedAt.toLocaleTimeString("en-GB")} · auto-refresh 60s
             </div>
           )}
         </div>
@@ -74,7 +74,7 @@ export default function LiveTab({ data }: { data: TeamData }) {
           onClick={refresh}
           className="ml-auto rounded-lg border border-border-c bg-panel-2 px-4 py-2 text-sm hover:border-accent"
         >
-          Oppdater nå
+          Refresh now
         </button>
       </div>
 
@@ -86,10 +86,10 @@ export default function LiveTab({ data }: { data: TeamData }) {
               {p.element.web_name}
               {p.isCaptain && <Badge tone="green"> C </Badge>}
               {p.isViceCaptain && <Badge> V </Badge>}
-              {p.pickPosition > 11 && <span className="ml-1 text-xs text-muted">(benk)</span>}
+              {p.pickPosition > 11 && <span className="ml-1 text-xs text-muted">(bench)</span>}
             </span>
             <span className="text-xs text-muted">
-              {stats ? `${stats.minutes}' · ${stats.goals_scored}m ${stats.assists}a · bps ${stats.bps}` : "–"}
+              {stats ? `${stats.minutes}' · ${stats.goals_scored}g ${stats.assists}a · bps ${stats.bps}` : "–"}
             </span>
             <span className="w-10 text-right font-mono font-bold">
               {p.pickPosition <= 11 ? points : rawPoints}

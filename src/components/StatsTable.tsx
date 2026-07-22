@@ -79,12 +79,12 @@ export default function StatsTable({ data }: { data: TeamData }) {
               onClick={() => setPosFilter(t)}
               className={`rounded-md px-3 py-1.5 ${posFilter === t ? "bg-accent text-black font-semibold" : "text-muted"}`}
             >
-              {t === 0 ? "Alle" : POSITION_NAMES[t]}
+              {t === 0 ? "All" : POSITION_NAMES[t]}
             </button>
           ))}
         </div>
         <label className="flex items-center gap-2 text-muted">
-          Maks pris: £{fmtPrice(maxPrice)}
+          Max price: £{fmtPrice(maxPrice)}m
           <input
             type="range"
             min={40}
@@ -98,7 +98,7 @@ export default function StatsTable({ data }: { data: TeamData }) {
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Søk spiller/klubb…"
+          placeholder="Search player/club…"
           className="ml-auto rounded-lg bg-panel-2 border border-border-c px-3 py-2"
         />
       </div>
@@ -107,14 +107,14 @@ export default function StatsTable({ data }: { data: TeamData }) {
         <table className="w-full min-w-[640px] text-sm">
           <thead className="border-b border-border-c text-xs uppercase text-muted">
             <tr>
-              <th className="px-3 py-2 text-left">Spiller</th>
+              <th className="px-3 py-2 text-left">Player</th>
               <th className="px-2 py-2 text-left">Pos</th>
-              {th("now_cost", "Pris")}
+              {th("now_cost", "Price")}
               {th("xp", `xP (5 GW)`)}
               {th("form", "Form")}
-              {th("total_points", "Poeng")}
+              {th("total_points", "Pts")}
               {th("xgi", "xGI")}
-              {th("selected", "Eid %")}
+              {th("selected", "Own %")}
             </tr>
           </thead>
           <tbody className="divide-y divide-border-c/60">
