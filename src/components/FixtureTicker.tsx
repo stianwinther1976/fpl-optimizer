@@ -73,7 +73,7 @@ export default function FixtureTicker({ data }: { data: TeamData }) {
               {cells.map((cell, i) => (
                 <td key={i} className="px-1 py-1.5 text-center">
                   {cell.length === 0 ? (
-                    <span className="inline-block w-full rounded bg-panel-2 px-1 py-1 text-xs text-muted">
+                    <span className="flex h-7 w-full items-center justify-center whitespace-nowrap rounded bg-panel-2 px-1 text-[11px] text-muted">
                       BLANK
                     </span>
                   ) : (
@@ -81,7 +81,7 @@ export default function FixtureTicker({ data }: { data: TeamData }) {
                       {cell.map((c, j) => (
                         <span
                           key={j}
-                          className={`inline-block rounded px-1 py-1 text-xs font-semibold ${FDR_COLORS[c.fdr] ?? FDR_COLORS[3]}`}
+                          className={`flex h-7 w-full items-center justify-center whitespace-nowrap rounded px-1 text-[11px] font-semibold ${FDR_COLORS[c.fdr] ?? FDR_COLORS[3]}`}
                         >
                           {c.label}
                         </span>
