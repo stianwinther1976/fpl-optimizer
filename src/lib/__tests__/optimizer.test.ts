@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { makeMockBootstrap, makeMockFixtures, makeMockOwned } from "./mockdata";
-import { optimize, pickBestXi } from "../optimizer";
+import { optimize, pickBestXi, buildLaunchSquad } from "../optimizer";
 import { validateSquad } from "../rules";
 import { projectAll } from "../xp";
 
@@ -177,5 +177,30 @@ describe("xp model — opponent strength & priors", () => {
     cheap.team = el.team;
     const xp = projectAll({ bootstrap: b, fixtures: makeMockFixtures(), nextEvent: 11, horizon: 1 });
     expect(xp.get(el.id)!.next).toBeGreaterThan(xp.get(cheap.id)!.next);
+  });
+});
+
+describe("buildLaunchSquad (pre-season)", () => {
+  it("drafts a legal 15-man squad within £100m even with zero minutes played", () => {
+    const b = makeMockBootstrap();
+    // Simulate season launch: nobody has played, prices are the only signal.
+    b.events.forEach((e) => { e.finished = false; e.is_current = false; e.is_next = e.id === 1; });
+    b.elements.forEach((e) => {
+      e.minutes = 0; e.starts = 0; e.total_points = 0;
+      e.form = "0.0"; e.points_per_game = "0.0";
+      e.expected_goals = "0.0"; e.expected_assists = "0.0";
+    });
+    const fx = makeMockFixtures().map((f) => ({ ...f, event: f.event - 10 })); // GW1-5
+    const launch = buildLaunchSquad(b, fx, 1, 5);
+    expect(
+      validateSquad(launch.squad.map((e) => ({ id: e.id, elementType: e.element_type, teamId: e.team })))
+    ).toEqual([]);
+    expect(launch.cost).toBeLessThanOrEqual(1000);
+    expect(launch.xi.starters.length).toBe(11);
+    expect(launch.xi.totalXp).toBeGreaterThan(0); // price prior keeps projections meaningful
+    // The draft should prefer expensive (better) players, not random cheap ones.
+    const avgPrice = launch.squad.reduce((s, e) => s + e.now_cost, 0) / 15;
+    const leagueAvg = b.elements.reduce((s, e) => s + e.now_cost, 0) / b.elements.length;
+    expect(avgPrice).toBeGreaterThan(leagueAvg);
   });
 });

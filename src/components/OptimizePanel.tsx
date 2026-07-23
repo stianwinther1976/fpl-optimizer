@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { TeamData } from "@/lib/fpl";
-import { optimize, type OptimizerResult } from "@/lib/optimizer";
+import { optimize, buildLaunchSquad, type LaunchSquad, type OptimizerResult } from "@/lib/optimizer";
 import { fmtPrice, remainingChips, CHIP_LABELS } from "@/lib/rules";
 import { Badge, SectionTitle } from "./ui";
 import Pitch from "./Pitch";
@@ -19,12 +19,105 @@ export default function OptimizePanel({
   const [running, setRunning] = useState(false);
   const [view, setView] = useState<"plans" | "xi" | "dream">("plans");
   const [infoOpen, setInfoOpen] = useState<{ title: string; body: string[] } | null>(null);
+  const [launch, setLaunch] = useState<LaunchSquad | null>(null);
+  const [launchRunning, setLaunchRunning] = useState(false);
 
   const squad = data.squad;
   const teams = useMemo(
     () => new Map(data.bootstrap.teams.map((t) => [t.id, t])),
     [data.bootstrap]
   );
+
+  const upcomingEvent = data.bootstrap.events.find((e) => e.is_next)?.id ?? null;
+
+  // Season-launch mode: no squad yet (pre-GW1) but the new season's data is live.
+  if ((!squad || squad.nextEvent == null) && upcomingEvent != null) {
+    const runLaunch = () => {
+      setLaunchRunning(true);
+      setTimeout(() => {
+        try {
+          setLaunch(buildLaunchSquad(data.bootstrap, data.fixtures, upcomingEvent, 5));
+        } finally {
+          setLaunchRunning(false);
+        }
+      }, 30);
+    };
+    return (
+      <div className="space-y-4">
+        <div className="card p-5">
+          <div className="text-lg font-bold">🚀 Season launch: build your £100m squad</div>
+          <p className="mt-1 text-sm text-muted">
+            No squad registered yet — perfect timing. Based on the new season&apos;s prices,
+            FPL&apos;s own projections, team strengths and the opening fixtures (GW
+            {upcomingEvent}–{upcomingEvent + 4}), the optimizer can draft the strongest legal
+            15-man squad within the £100.0m budget: 2 GK, 5 DEF, 5 MID, 3 FWD, max 3 per club.
+          </p>
+          <button onClick={runLaunch} disabled={launchRunning} className="btn-primary mt-3 rounded-lg px-5 py-2.5">
+            {launchRunning ? "Drafting…" : launch ? "Re-draft" : "Build my launch squad"}
+          </button>
+        </div>
+
+        {launch && (
+          <>
+            <div className="card flex flex-wrap items-center gap-4 p-4 text-sm">
+              <div>
+                <span className="text-muted">Squad cost:</span>{" "}
+                <b>£{fmtPrice(launch.cost)}m</b>
+              </div>
+              <div>
+                <span className="text-muted">In the bank:</span>{" "}
+                <b>£{fmtPrice(1000 - launch.cost)}m</b>
+              </div>
+              <div>
+                <span className="text-muted">Projected (GW{upcomingEvent}, incl. captain):</span>{" "}
+                <b className="text-accent">{launch.xi.totalXp.toFixed(1)} xp</b>
+              </div>
+            </div>
+            <Pitch
+              starters={launch.xi.starters.map((s) => ({
+                element: s.element,
+                xp: s.xp,
+                isCaptain: s.isCaptain,
+                isVice: s.isVice,
+              }))}
+              bench={launch.xi.bench.map((s) => ({ element: s.element, xp: s.xp }))}
+              teams={teams}
+              fixtures={data.fixtures}
+              nextEvent={upcomingEvent}
+              formation={launch.xi.formation}
+              onSelect={onSelect}
+            />
+            <div className="card p-4">
+              <div className="text-sm font-semibold">Type this into fantasy.premierleague.com:</div>
+              <div className="mt-2 grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
+                {launch.squad
+                  .slice()
+                  .sort((a, b) => a.element_type - b.element_type || b.now_cost - a.now_cost)
+                  .map((e) => (
+                    <button
+                      key={e.id}
+                      onClick={onSelect ? () => onSelect(e) : undefined}
+                      className="flex items-center justify-between rounded-lg bg-panel-2 px-3 py-1.5 text-left hover:border-accent"
+                    >
+                      <span className="truncate">
+                        <span className="mr-1.5 text-xs text-muted">
+                          {["GK", "DEF", "MID", "FWD"][e.element_type - 1]}
+                        </span>
+                        {e.web_name}{" "}
+                        <span className="text-xs text-muted">
+                          {teams.get(e.team)?.short_name}
+                        </span>
+                      </span>
+                      <span className="ml-2 shrink-0 font-mono">£{fmtPrice(e.now_cost)}m</span>
+                    </button>
+                  ))}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
 
   if (!squad || squad.nextEvent == null) {
     return (

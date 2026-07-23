@@ -383,6 +383,30 @@ function buildDreamSquad(elements: Element[], xp: Map<number, PlayerXp>) {
   return buildSquadWithinBudget(elements, xp, 1000);
 }
 
+export interface LaunchSquad {
+  squad: Element[];
+  cost: number; // tenths
+  xi: BestXi;
+  xp: Map<number, PlayerXp>;
+}
+
+/**
+ * Season-launch mode: build the best £100m squad from scratch — no existing
+ * team required. Pre-season the xP model leans on the price prior, FPL's
+ * ep_next, team strengths and the opening fixtures.
+ */
+export function buildLaunchSquad(
+  bootstrap: Bootstrap,
+  fixtures: Fixture[],
+  nextEvent: number,
+  horizon = 5
+): LaunchSquad {
+  const xp = projectAll({ bootstrap, fixtures, nextEvent, horizon });
+  const { squad, cost } = buildSquadWithinBudget(bootstrap.elements, xp, 1000);
+  const xi = pickBestXi(squad, (id) => xp.get(id)?.next ?? 0);
+  return { squad, cost, xi, xp };
+}
+
 function dreamSquadWithinValue(
   elements: Element[],
   xp: Map<number, PlayerXp>,
