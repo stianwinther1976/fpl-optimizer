@@ -47,9 +47,13 @@ export const XP_CONFIG = {
   bonusPerIct90: 0.045,
   bonusActualWeight: 0.6,
   bonusCap: 1.5,
-  // Defensive contribution: expected points per full match from season rate
+  // Defensive contribution: the API reports a COUNT of tackles/CBI(/recoveries)
+  // per season; FPL awards +2 when a match count reaches the threshold.
+  // Expected points = 2 × P(count ≥ threshold), Poisson on the per-90 rate.
   dcWeight: 1.0,
-  dcCap: 1.6,
+  dcPoints: 2,
+  dcThresholdDef: 10, // GK/DEF
+  dcThresholdMid: 12, // MID/FWD
   // GK save points: 1pt per 3 saves, scaled by opponent attack
   savesGamma: 0.5,
   savesCap: 1.5,
@@ -142,6 +146,18 @@ export function makeFixtureIndex(fixtures: Fixture[]): Map<number, Map<number, F
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/** P(N >= k) for N ~ Poisson(lambda). */
+function poissonTail(lambda: number, k: number): number {
+  if (lambda <= 0) return 0;
+  let term = Math.exp(-lambda);
+  let cdf = term;
+  for (let i = 1; i < k; i++) {
+    term *= lambda / i;
+    cdf += term;
+  }
+  return Math.max(0, Math.min(1, 1 - cdf));
+}
 
 /**
  * Availability for a specific horizon offset (0 = next GW).
@@ -366,10 +382,11 @@ function fixtureXp(
     (1 - cfg.bonusActualWeight) * rates.ict90 * cfg.bonusPerIct90;
   xp += p60 * Math.min(cfg.bonusCap, bonusExp) * clamp(attackMult, 0.8, 1.2);
 
-  // Defensive-contribution points (season rate per full match), if the API exposes them.
+  // Defensive-contribution points: the API count per 90 vs the +2 threshold.
   if (el.defensive_contribution != null && el.defensive_contribution > 0) {
-    const dcPerMatch = (el.defensive_contribution / Math.max(el.minutes, 1)) * 90;
-    xp += p60 * Math.min(cfg.dcCap, dcPerMatch * cfg.dcWeight);
+    const dcCount90 = (el.defensive_contribution / Math.max(el.minutes, 1)) * 90;
+    const threshold = el.element_type <= 2 ? cfg.dcThresholdDef : cfg.dcThresholdMid;
+    xp += p60 * cfg.dcPoints * poissonTail(dcCount90, threshold) * cfg.dcWeight;
   }
 
   // Form component: recency-weighted, fixture-adjusted (venue is already part
