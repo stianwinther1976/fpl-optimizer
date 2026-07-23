@@ -92,10 +92,17 @@ export function sellingPrice(purchasePrice: number, currentPrice: number): numbe
  * Determine the purchase price for a currently-owned player.
  * Uses the most recent transfer-in from the transfers endpoint; falls back to
  * the season-start price (now_cost - cost_change_start) for original-squad players.
+ * Transfers made in a Free Hit gameweek revert and must be ignored — pass
+ * chipEvents (event -> chip name) so they can be skipped.
  */
-export function purchasePriceFor(element: Element, transfers: Transfer[]): number {
+export function purchasePriceFor(
+  element: Element,
+  transfers: Transfer[],
+  chipEvents?: Map<number, string>
+): number {
   let latest: Transfer | null = null;
   for (const t of transfers) {
+    if (chipEvents?.get(t.event) === "freehit") continue; // FH transfers revert
     if (t.element_in === element.id) {
       if (!latest || t.event > latest.event || (t.event === latest.event && t.time > latest.time)) {
         latest = t;
@@ -165,32 +172,41 @@ export const CHIP_LABELS: Record<string, string> = {
 /**
  * Remaining chips, computed dynamically. If bootstrap provides a `chips`
  * definition (with per-window counts), use it; otherwise fall back to the
- * classic set and subtract chips already played (from entry history).
+ * 2025/26+ structure (two of each chip, one per half-season, split at GW19/20).
+ *
+ * mode "now": only chips usable at nextEvent (window includes it) — for chip
+ * advice. mode "season": every chip still available this season (window has
+ * not closed yet) — for the "Chips left" overview.
  */
 export function remainingChips(
   usedChips: { name: string; event: number }[],
   bootstrapChips?: { name: string; start_event: number; stop_event: number; number?: number }[] | null,
-  nextEvent?: number | null
+  nextEvent?: number | null,
+  mode: "now" | "season" = "now"
 ): { name: string; label: string }[] {
-  if (bootstrapChips && bootstrapChips.length > 0) {
-    const out: { name: string; label: string }[] = [];
-    for (const c of bootstrapChips) {
-      if (nextEvent != null && (nextEvent < c.start_event || nextEvent > c.stop_event)) continue;
-      const usedInWindow = usedChips.filter(
-        (u) => u.name === c.name && u.event >= c.start_event && u.event <= c.stop_event
-      ).length;
-      const total = c.number ?? 1;
-      for (let i = usedInWindow; i < total; i++) {
-        out.push({ name: c.name, label: CHIP_LABELS[c.name] ?? c.name });
-      }
+  const windows =
+    bootstrapChips && bootstrapChips.length > 0
+      ? bootstrapChips
+      : // Fallback mirrors the current season structure: one of each chip per half.
+        ALL_CHIPS.flatMap((name) => [
+          { name, start_event: 1, stop_event: 19, number: 1 },
+          { name, start_event: 20, stop_event: 38, number: 1 },
+        ]);
+  const out: { name: string; label: string }[] = [];
+  for (const c of windows) {
+    if (nextEvent != null) {
+      if (mode === "now" && (nextEvent < c.start_event || nextEvent > c.stop_event)) continue;
+      if (mode === "season" && nextEvent > c.stop_event) continue; // window closed
     }
-    return out;
+    const usedInWindow = usedChips.filter(
+      (u) => u.name === c.name && u.event >= c.start_event && u.event <= c.stop_event
+    ).length;
+    const total = c.number ?? 1;
+    for (let i = usedInWindow; i < total; i++) {
+      out.push({ name: c.name, label: CHIP_LABELS[c.name] ?? c.name });
+    }
   }
-  const usedNames = usedChips.map((u) => u.name);
-  return ALL_CHIPS.filter((c) => {
-    const used = usedNames.filter((n) => n === c).length;
-    return used === 0;
-  }).map((c) => ({ name: c, label: CHIP_LABELS[c] }));
+  return out;
 }
 
 /** Format tenths-of-£m as display string, e.g. 55 -> "5.5". */

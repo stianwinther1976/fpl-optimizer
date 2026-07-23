@@ -106,12 +106,13 @@ function PlayerCard({
           .join(", ")
       : "";
 
+  const Tag = onSelect ? "button" : "div";
   return (
-    <div
-      className={`relative w-[4.6rem] max-w-full sm:w-24 text-center ${onSelect ? "cursor-pointer" : ""}`}
+    <Tag
+      type={onSelect ? "button" : undefined}
+      className={`relative w-[4.6rem] max-w-full text-center sm:w-24 ${onSelect ? "cursor-pointer active:scale-[0.98]" : ""}`}
       title={el.news || undefined}
       onClick={onSelect ? () => onSelect(el) : undefined}
-      role={onSelect ? "button" : undefined}
     >
       {p.isCaptain && (
         <span className="absolute -top-1 -right-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-black text-[10px] font-bold text-white ring-1 ring-white/40">
@@ -128,12 +129,12 @@ function PlayerCard({
         {flag ? `${flag} ` : ""}
         {el.web_name}
       </div>
-      <div className="truncate rounded-b bg-black/50 px-1 py-0.5 text-[10px] text-zinc-300">
+      <div className={`truncate ${fx ? "" : "rounded-b"} bg-black/50 px-1 py-0.5 text-[10px] text-zinc-300`}>
         {info === "auto" && (
           <>
             {p.live ? (
               <span className={`font-bold ${p.live.final ? "text-zinc-100" : "text-[#00ff87]"}`}>
-                {p.live.points} pts
+                {p.live.points} {p.live.points === 1 ? "pt" : "pts"}
               </span>
             ) : (
               <>£{fmtPrice(el.now_cost)}</>
@@ -179,11 +180,11 @@ function PlayerCard({
           })()}
       </div>
       {fx && (
-        <div className="truncate text-[9px] text-zinc-400" title={fx}>
-          {fx || "No fixture"}
+        <div className="truncate rounded-b bg-black/50 px-1 py-0.5 text-[10px] text-zinc-200" title={fx}>
+          {fx}
         </div>
       )}
-    </div>
+    </Tag>
   );
 }
 

@@ -44,7 +44,7 @@ export default function UpdateToast() {
   if (!updateAvailable) return null;
 
   return (
-    <div className="fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
+    <div className="fixed inset-x-0 z-50 flex justify-center px-4" style={{ bottom: "max(1rem, env(safe-area-inset-bottom))" }}>
       <div className="card flex items-center gap-3 border-accent/50 px-4 py-2.5 shadow-lg">
         <span className="text-sm font-medium">✨ App updated — refresh for the latest version</span>
         <button

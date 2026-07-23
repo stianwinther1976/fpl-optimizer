@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
+import { api, DEMO_ENTRY_ID, fmtNum, type TeamData } from "@/lib/fpl";
 import type { EventLive, LeagueStandings } from "@/lib/types";
 import { CHIP_LABELS } from "@/lib/rules";
+import { projectAutoSubs } from "@/lib/live";
 import { ErrorBox, Skeleton } from "./ui";
 
 const MAX_RIVAL_DETAILS = 20;
@@ -17,6 +18,12 @@ interface RivalDetail {
   hits: number;
 }
 
+interface LeagueOwnership {
+  sample: number; // rivals sampled (excluding you)
+  /** elementId -> effective ownership share 0..2 (captaincy counts double) */
+  eo: Map<number, number>;
+}
+
 export default function MiniLeague({ data, entryId }: { data: TeamData; entryId: number }) {
   const router = useRouter();
   // Rival dashboards only work with real FPL data, not the demo universe.
@@ -24,6 +31,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
   const [leagueId, setLeagueId] = useState("");
   const [standings, setStandings] = useState<LeagueStandings | null>(null);
   const [details, setDetails] = useState<Map<number, RivalDetail>>(new Map());
+  const [ownership, setOwnership] = useState<LeagueOwnership | null>(null);
   const [loading, setLoading] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +41,10 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
 
   const elementName = useMemo(
     () => new Map(data.bootstrap.elements.map((e) => [e.id, e.web_name])),
+    [data.bootstrap]
+  );
+  const elementById = useMemo(
+    () => new Map(data.bootstrap.elements.map((e) => [e.id, e])),
     [data.bootstrap]
   );
 
@@ -97,19 +109,34 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
       const rivals = s.standings.results.slice(0, MAX_RIVAL_DETAILS);
       const live: EventLive = await api.live(currentEvent);
       const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
+      const eoCount = new Map<number, number>();
+      let eoSample = 0;
       const results = await Promise.all(
         rivals.map(async (r) => {
           try {
             const picks = await api.picks(r.entry, currentEvent);
             const bboost = picks.active_chip === "bboost";
+            // Auto-subs projected so live scores match what FPL will process.
+            const subs = projectAutoSubs(picks.picks, elementById, live, data.fixtures, currentEvent);
+            const effXi = new Set(subs.effectiveXi);
             let pts = 0;
             for (const p of picks.picks) {
-              const mult = bboost && p.multiplier === 0 ? 1 : p.multiplier;
+              if (!bboost && !effXi.has(p.element)) continue;
+              const mult = p.multiplier > 1 ? p.multiplier : 1;
               pts += (pointsOf.get(p.element) ?? 0) * mult;
             }
             const hits = picks.entry_history.event_transfers_cost;
             const cap = picks.picks.find((p) => p.is_captain);
             const vice = picks.picks.find((p) => p.is_vice_captain);
+            // League effective ownership: starters count 1, captain counts 2.
+            if (r.entry !== entryId) {
+              eoSample++;
+              for (const p of picks.picks) {
+                if (p.position <= 11 || bboost) {
+                  eoCount.set(p.element, (eoCount.get(p.element) ?? 0) + (p.is_captain ? 2 : 1));
+                }
+              }
+            }
             const detail: RivalDetail = {
               captain: cap ? (elementName.get(cap.element) ?? null) : null,
               viceCaptain: vice ? (elementName.get(vice.element) ?? null) : null,
@@ -124,6 +151,13 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
         })
       );
       setDetails(new Map(results.filter((x): x is NonNullable<typeof x> => x != null)));
+      if (eoSample >= 3) {
+        const eo = new Map<number, number>();
+        for (const [id, c] of eoCount) eo.set(id, c / eoSample);
+        setOwnership({ sample: eoSample, eo });
+      } else {
+        setOwnership(null);
+      }
     } finally {
       setDetailsLoading(false);
     }
@@ -213,7 +247,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
         </details>
       </div>
 
-      {error && <ErrorBox message={error} />}
+      {error && <ErrorBox message={error} onRetry={() => load()} />}
       {loading && <Skeleton className="h-64" />}
 
       {standings && !loading && (
@@ -252,8 +286,20 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                 return (
                   <tr
                     key={r.entry}
-                    className={`${mine ? "bg-accent/10" : "hover:bg-panel-2/60"} ${clickable ? "cursor-pointer" : ""}`}
+                    className={`${mine ? "bg-accent/10" : "hover:bg-panel-2/60 active:bg-panel-2"} ${clickable ? "cursor-pointer" : ""}`}
                     onClick={clickable ? () => router.push(`/team/${r.entry}`) : undefined}
+                    role={clickable ? "button" : undefined}
+                    tabIndex={clickable ? 0 : undefined}
+                    onKeyDown={
+                      clickable
+                        ? (ev) => {
+                            if (ev.key === "Enter" || ev.key === " ") {
+                              ev.preventDefault();
+                              router.push(`/team/${r.entry}`);
+                            }
+                          }
+                        : undefined
+                    }
                     title={clickable ? "Open this manager's dashboard" : undefined}
                   >
                     <td className="px-2 py-1.5 font-mono text-xs">
@@ -288,7 +334,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                         <div className="text-[10px] leading-tight text-danger">−{d.hits}</div>
                       )}
                     </td>
-                    <td className="px-2 py-1.5 text-right font-mono font-bold">{r.total}</td>
+                    <td className="px-2 py-1.5 text-right font-mono font-bold">{fmtNum(r.total)}</td>
                   </tr>
                 );
               })}
@@ -300,6 +346,66 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
             </div>
           )}
         </div>
+      )}
+
+      {/* League effective ownership: who you must own (threats), who protects
+          your rank (shields), and where you differ (differentials). */}
+      {ownership && data.squad && !loading && (
+        (() => {
+          const myIds = new Set(data.squad.players.map((p) => p.element.id));
+          const pct = (v: number) => `${Math.round(v * 100)}%`;
+          const ranked = [...ownership.eo.entries()].sort((a, b) => b[1] - a[1]);
+          const threats = ranked
+            .filter(([id, v]) => !myIds.has(id) && v >= 0.4)
+            .slice(0, 5);
+          const shields = ranked.filter(([id]) => myIds.has(id)).slice(0, 5);
+          const diffs = data.squad.players
+            .filter((p) => p.pickPosition <= 11 && (ownership.eo.get(p.element.id) ?? 0) <= 0.2)
+            .slice(0, 5);
+          const Item = ({ id, v }: { id: number; v: number }) => (
+            <li className="flex items-center justify-between gap-2">
+              <span className="truncate">{elementName.get(id) ?? `#${id}`}</span>
+              <span className="shrink-0 font-mono text-xs text-muted">{pct(v)} EO</span>
+            </li>
+          );
+          return (
+            <div className="card p-4">
+              <div className="text-sm font-semibold">
+                League ownership <span className="font-normal text-muted">(top {ownership.sample} rivals, captains count double)</span>
+              </div>
+              <div className="mt-3 grid gap-4 text-sm sm:grid-cols-3">
+                <div>
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-danger">⚔️ Threats — they own, you don&apos;t</div>
+                  {threats.length > 0 ? (
+                    <ul className="space-y-1">{threats.map(([id, v]) => <Item key={id} id={id} v={v} />)}</ul>
+                  ) : (
+                    <div className="text-xs text-muted">No high-ownership player is missing from your team. 💪</div>
+                  )}
+                </div>
+                <div>
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-accent">🛡️ Shields — protect your rank</div>
+                  {shields.length > 0 ? (
+                    <ul className="space-y-1">{shields.map(([id, v]) => <Item key={id} id={id} v={v} />)}</ul>
+                  ) : (
+                    <div className="text-xs text-muted">None of your players are widely owned here.</div>
+                  )}
+                </div>
+                <div>
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-accent-2">🎯 Differentials — your edge</div>
+                  {diffs.length > 0 ? (
+                    <ul className="space-y-1">
+                      {diffs.map((p) => (
+                        <Item key={p.element.id} id={p.element.id} v={ownership.eo.get(p.element.id) ?? 0} />
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="text-xs text-muted">Your XI matches the league template.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()
       )}
     </div>
   );

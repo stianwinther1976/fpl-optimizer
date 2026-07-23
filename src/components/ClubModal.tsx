@@ -4,6 +4,7 @@ import type { Element, Fixture, Team } from "@/lib/types";
 import { fmtPrice, POSITION_NAMES } from "@/lib/rules";
 import { teamFixtures } from "@/lib/xp";
 import { PlayerAvatar } from "./Pitch";
+import Sheet, { SheetClose } from "./Sheet";
 
 const FDR_BADGE: Record<number, string> = {
   1: "bg-emerald-600 text-white",
@@ -51,25 +52,11 @@ export default function ClubModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-6"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-    >
-      <div
-        className="card max-h-[80vh] w-full max-w-md overflow-y-auto rounded-b-none rounded-t-2xl p-5 sm:rounded-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Sheet onClose={onClose} labelledBy="club-modal-title" maxWidth="max-w-md">
+      <div>
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold">{team.name}</h2>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-lg border border-border-c bg-panel-2 px-2.5 py-1 text-sm hover:border-accent"
-          >
-            ✕
-          </button>
+          <h2 id="club-modal-title" className="text-lg font-bold">{team.name}</h2>
+          <SheetClose onClose={onClose} />
         </div>
 
         {upcoming.length > 0 && (
@@ -97,7 +84,8 @@ export default function ClubModal({
             <button
               key={el.id}
               onClick={() => onPlayerSelect(el)}
-              className="flex w-full items-center gap-2.5 px-1 py-2 text-left text-sm hover:bg-panel-2/60"
+              type="button"
+              className="flex w-full items-center gap-2.5 px-1 py-2 text-left text-sm hover:bg-panel-2/60 active:bg-panel-2"
             >
               <PlayerAvatar el={el} teamShort={team.short_name} size="sm" center={false} />
               <span className="min-w-0 flex-1">
@@ -119,6 +107,6 @@ export default function ClubModal({
           ))}
         </div>
       </div>
-    </div>
+    </Sheet>
   );
 }

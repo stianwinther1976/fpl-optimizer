@@ -4,7 +4,7 @@
 
 import type { Bootstrap, Element, ElementType, Fixture, OwnedPlayer } from "./types";
 import { MAX_PER_CLUB, TRANSFER_HIT, VALID_FORMATIONS } from "./rules";
-import { projectAll, type PlayerXp, type XpContext } from "./xp";
+import { makeFixtureIndex, projectAll, XP_CONFIG, type PlayerXp, type XpContext } from "./xp";
 
 export interface XiSlot {
   element: Element;
@@ -96,17 +96,33 @@ export function pickBestXi(
   return best;
 }
 
-/** Horizon score for a squad: sum over horizon GWs of best-XI xP incl. captain. */
+/**
+ * Horizon score for a squad: sum over horizon GWs of best-XI xP incl. captain,
+ * with future GWs discounted (they are less certain). Optionally memoized by
+ * squad composition — the beam search revisits many identical squads.
+ */
 function horizonScore(
   squad: Element[],
   xp: Map<number, PlayerXp>,
-  events: number[]
+  events: number[],
+  cache?: Map<string, number>
 ): number {
-  let sum = 0;
-  for (const gw of events) {
-    const xi = pickBestXi(squad, (id) => xp.get(id)?.perGw.get(gw) ?? 0);
-    sum += xi.totalXp;
+  let key = "";
+  if (cache) {
+    key = squad
+      .map((e) => e.id)
+      .sort((a, b) => a - b)
+      .join(",");
+    const hit = cache.get(key);
+    if (hit != null) return hit;
   }
+  let sum = 0;
+  for (let i = 0; i < events.length; i++) {
+    const gw = events[i];
+    const xi = pickBestXi(squad, (id) => xp.get(id)?.perGw.get(gw) ?? 0);
+    sum += xi.totalXp * Math.pow(XP_CONFIG.gwDecay, i);
+  }
+  if (cache) cache.set(key, sum);
   return sum;
 }
 
@@ -131,6 +147,8 @@ export interface OptimizerInput {
   maxTransfers?: number; // default 3
   candidatesPerPosition?: number; // default 22
   beamWidth?: number; // default 8
+  /** Reuse an already-computed projection (must match nextEvent/horizon). */
+  precomputedXp?: Map<number, PlayerXp>;
 }
 
 export interface OptimizerResult {
@@ -159,7 +177,7 @@ export function optimize(input: OptimizerInput): OptimizerResult {
   const beamWidth = input.beamWidth ?? 8;
 
   const ctx: XpContext = { bootstrap, fixtures, nextEvent, horizon };
-  const xp = projectAll(ctx);
+  const xp = input.precomputedXp ?? projectAll(ctx);
   const lastEvent = bootstrap.events.length > 0 ? bootstrap.events[bootstrap.events.length - 1].id : 38;
   const gws: number[] = [];
   for (let g = nextEvent; g < nextEvent + horizon && g <= lastEvent; g++) gws.push(g);
@@ -182,7 +200,9 @@ export function optimize(input: OptimizerInput): OptimizerResult {
           e.status !== "u" &&
           (xp.get(e.id)?.total ?? 0) > 0
       )
-      .sort((a, b) => (xp.get(b.id)?.total ?? 0) - (xp.get(a.id)?.total ?? 0))
+      .sort(
+        (a, b) => (xp.get(b.id)?.totalDiscounted ?? 0) - (xp.get(a.id)?.totalDiscounted ?? 0)
+      )
       .slice(0, candN);
     candidates.set(t, pool);
   }
@@ -194,6 +214,7 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     moves: [],
   };
   const bestPerCount = new Map<number, { s: SquadEval; score: number }>();
+  const scoreCache = new Map<string, number>();
   let beam: SquadEval[] = [start];
 
   for (let depth = 1; depth <= maxTransfers; depth++) {
@@ -221,7 +242,7 @@ export function optimize(input: OptimizerInput): OptimizerResult {
             .join(",");
           if (seen.has(key)) continue;
           seen.add(key);
-          const score = horizonScore(els, xp, gws);
+          const score = horizonScore(els, xp, gws, scoreCache);
           next.push({
             s: {
               players: newPlayers,
@@ -271,37 +292,74 @@ export function optimize(input: OptimizerInput): OptimizerResult {
   const { squad: dreamSquad } = buildDreamSquad(bootstrap.elements, xp);
   const dreamTeam = pickBestXi(dreamSquad, (id) => xp.get(id)?.next ?? 0);
 
-  // --- Chip advisor ---
+  // --- Chip advisor: evaluate each chip across EVERY GW in the horizon, so
+  // double/blank gameweeks (the highest-leverage chip moments) are found. ---
   const chipAdvice: ChipAdvice[] = [];
-  const benchNextXp = keepXi.bench.reduce((s, p) => s + p.xp, 0);
+  const fxIndex = makeFixtureIndex(fixtures);
+  const squadTeams = new Set(squadEls.map((e) => e.team));
+  const gwNote = (gw: number): string => {
+    const byTeam = fxIndex.get(gw);
+    if (!byTeam) return "";
+    let dbl = 0;
+    let blank = 0;
+    for (const t of squadTeams) {
+      const n = byTeam.get(t)?.length ?? 0;
+      if (n >= 2) dbl++;
+      else if (n === 0) blank++;
+    }
+    if (dbl > 0) return ` — double gameweek for ${dbl} of your clubs`;
+    if (blank > 0) return ` — ${blank} of your clubs blank`;
+    return "";
+  };
+  const xiAt = (squad: Element[], gw: number) =>
+    pickBestXi(squad, (id) => xp.get(id)?.perGw.get(gw) ?? 0);
+
+  // Bench Boost: GW where the bench of the best XI scores the most.
+  let bbBest = { gw: nextEvent, gain: 0 };
+  // Triple Captain: GW + player with the highest single-GW xP (the chip adds 1x).
+  let tcBest = { gw: nextEvent, gain: 0, name: keepXi.captain?.element.web_name ?? "Your captain" };
+  // Free Hit: GW where a one-week optimal squad beats your own XI the most.
+  const fhSquad = dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank));
+  let fhBest = { gw: nextEvent, gain: 0 };
+  for (const gw of gws) {
+    const ownXi = xiAt(squadEls, gw);
+    const benchXp = ownXi.bench.reduce((s, p) => s + p.xp, 0);
+    if (benchXp > bbBest.gain) bbBest = { gw, gain: benchXp };
+    for (const e of squadEls) {
+      const v = xp.get(e.id)?.perGw.get(gw) ?? 0;
+      if (v > tcBest.gain) tcBest = { gw, gain: v, name: e.web_name };
+    }
+    const fhGwGain = xiAt(fhSquad, gw).totalXp - ownXi.totalXp;
+    if (fhGwGain > fhBest.gain) fhBest = { gw, gain: fhGwGain };
+  }
   chipAdvice.push({
     chip: "bboost",
     label: "Bench Boost",
-    projectedGain: benchNextXp,
-    detail: `Your bench is projected to score ${benchNextXp.toFixed(1)} points next gameweek.`,
+    projectedGain: bbBest.gain,
+    detail: `Best in GW${bbBest.gw}${gwNote(bbBest.gw)}: your bench projects ${bbBest.gain.toFixed(1)} pts that week.`,
   });
-  const capXp = keepXi.captain?.xp ?? 0;
   chipAdvice.push({
     chip: "3xc",
     label: "Triple Captain",
-    projectedGain: capXp,
-    detail: `${keepXi.captain?.element.web_name ?? "Your captain"} would add ~${capXp.toFixed(1)} extra points (3x instead of 2x).`,
+    projectedGain: tcBest.gain,
+    detail: `Best in GW${tcBest.gw}${gwNote(tcBest.gw)}: ${tcBest.name} would add ~${tcBest.gain.toFixed(1)} extra points (3x instead of 2x).`,
   });
-  const wcGain = Math.max(0, horizonScore(dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank)), xp, gws) - keepHorizonXp);
+  const wcGain = Math.max(
+    0,
+    horizonScore(dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank)), xp, gws, scoreCache) -
+      keepHorizonXp
+  );
   chipAdvice.push({
     chip: "wildcard",
     label: "Wildcard",
     projectedGain: wcGain,
     detail: `An optimal squad within your team value is projected to gain ~${wcGain.toFixed(1)} points over the next ${gws.length} gameweeks.`,
   });
-  const fhSquad = dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank));
-  const fhXi = pickBestXi(fhSquad, (id) => xp.get(id)?.next ?? 0);
-  const fhGain = Math.max(0, fhXi.totalXp - keepXi.totalXp);
   chipAdvice.push({
     chip: "freehit",
     label: "Free Hit",
-    projectedGain: fhGain,
-    detail: `An optimal one-week squad is projected to score ~${fhGain.toFixed(1)} more points than your current team next gameweek.`,
+    projectedGain: Math.max(0, fhBest.gain),
+    detail: `Best in GW${fhBest.gw}${gwNote(fhBest.gw)}: an optimal one-week squad projects ~${Math.max(0, fhBest.gain).toFixed(1)} pts more than your team that week.`,
   });
   chipAdvice.sort((a, b) => b.projectedGain - a.projectedGain);
 
@@ -334,7 +392,9 @@ function buildSquadWithinBudget(
       t,
       elements
         .filter((e) => e.element_type === t && e.status !== "u" && (xp.get(e.id)?.total ?? 0) > 0)
-        .sort((a, b) => (xp.get(b.id)?.total ?? 0) - (xp.get(a.id)?.total ?? 0))
+        .sort(
+          (a, b) => (xp.get(b.id)?.totalDiscounted ?? 0) - (xp.get(a.id)?.totalDiscounted ?? 0)
+        )
         .slice(0, 40)
     );
   }
@@ -363,7 +423,8 @@ function buildSquadWithinBudget(
         const clubOk =
           (clubCount.get(inEl.team) ?? 0) + (inEl.team === out.team ? -1 : 0) < MAX_PER_CLUB;
         if (!clubOk) continue;
-        const xpLoss = (xp.get(out.id)?.total ?? 0) - (xp.get(inEl.id)?.total ?? 0);
+        const xpLoss =
+          (xp.get(out.id)?.totalDiscounted ?? 0) - (xp.get(inEl.id)?.totalDiscounted ?? 0);
         const saved = out.now_cost - inEl.now_cost;
         const delta = xpLoss / Math.max(1, saved); // xp lost per tenth saved
         if (!bestSwap || delta < bestSwap.delta) bestSwap = { outIdx: i, inEl, delta };

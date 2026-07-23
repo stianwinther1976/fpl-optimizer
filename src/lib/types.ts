@@ -37,6 +37,12 @@ export interface Element {
   defensive_contribution?: number;
   ep_next: string | null;
   penalties_order?: number | null;
+  corners_and_indirect_freekicks_order?: number | null;
+  direct_freekicks_order?: number | null;
+  saves?: number;
+  bps?: number;
+  transfers_in_event?: number;
+  transfers_out_event?: number;
 }
 
 export interface Team {

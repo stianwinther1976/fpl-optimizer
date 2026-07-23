@@ -40,7 +40,14 @@ export async function GET(
     return NextResponse.json({ error: "Unknown endpoint" }, { status: 400 });
   }
 
-  const search = req.nextUrl.search ?? "";
+  // Rebuild the upstream URL canonically — never forward raw query strings.
+  // Only league standings take a (validated) parameter; anything else would
+  // let clients mint unlimited cache entries and bypass the TTL.
+  let search = "";
+  if (/^leagues-classic\/\d+\/standings\/$/.test(joined)) {
+    const page = req.nextUrl.searchParams.get("page_standings") ?? "1";
+    search = `?page_standings=${/^\d{1,4}$/.test(page) ? page : "1"}`;
+  }
   const url = `${FPL_BASE}/${joined}${search}`;
   const ttl = cacheSeconds(joined);
 

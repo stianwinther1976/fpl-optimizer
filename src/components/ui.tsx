@@ -1,13 +1,22 @@
 "use client";
 
 export function Skeleton({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded-lg bg-panel-2 ${className}`} />;
+  return <div className={`motion-safe:animate-pulse rounded-lg bg-panel-2 ${className}`} />;
 }
 
-export function ErrorBox({ message }: { message: string }) {
+export function ErrorBox({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <div className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
-      {message}
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
+      <span className="min-w-0 flex-1">{message}</span>
+      {onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="shrink-0 rounded-lg border border-danger/40 px-3 py-1.5 text-xs font-semibold text-danger active:bg-danger/20"
+        >
+          Try again
+        </button>
+      )}
     </div>
   );
 }
@@ -73,7 +82,7 @@ export function Stat({
   return (
     <Tag
       onClick={onClick}
-      className={`card px-2.5 py-2 text-left sm:px-4 sm:py-3 ${onClick ? "cursor-pointer hover:border-accent" : ""}`}
+      className={`card px-2.5 py-2 text-left sm:px-4 sm:py-3 ${onClick ? "cursor-pointer hover:border-accent active:border-accent active:bg-panel-2/60" : ""}`}
     >
       <div className="truncate text-[11px] tracking-wide text-muted sm:text-xs">{label}</div>
       <div className={`mt-0.5 text-base font-semibold sm:text-xl ${accent ? "text-accent" : ""}`}>
@@ -89,7 +98,11 @@ export function Stat({
           <Sparkline points={trend} />
         </div>
       )}
-      {sub && <div className="mt-0.5 truncate text-[11px] text-muted sm:text-xs" title={sub}>{sub}</div>}
+      {sub && (
+        <div className="mt-0.5 line-clamp-2 text-[11px] leading-tight text-muted sm:text-xs" title={sub}>
+          {sub}
+        </div>
+      )}
     </Tag>
   );
 }

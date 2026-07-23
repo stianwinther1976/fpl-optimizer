@@ -180,6 +180,45 @@ describe("xp model — opponent strength & priors", () => {
   });
 });
 
+describe("xp model — DGW/blank GWs and discounting", () => {
+  it("blank GW yields zero xP (no phantom ep_next points)", () => {
+    const b = makeMockBootstrap();
+    const el = b.elements.find((e) => e.element_type === 3 && e.minutes > 1000)!;
+    el.ep_next = "6.0";
+    const fx = makeMockFixtures().filter(
+      (f) => !(f.event === 11 && (f.team_h === el.team || f.team_a === el.team))
+    );
+    const xp = projectAll({ bootstrap: b, fixtures: fx, nextEvent: 11, horizon: 1 });
+    expect(xp.get(el.id)!.next).toBe(0);
+  });
+  it("a double gameweek projects more than a single", () => {
+    const b = makeMockBootstrap();
+    const el = b.elements.find((e) => e.element_type === 3 && e.minutes > 1000)!;
+    const base = makeMockFixtures();
+    const single = projectAll({ bootstrap: b, fixtures: base, nextEvent: 11, horizon: 1 });
+    const extra = {
+      id: 9999,
+      event: 11,
+      team_h: el.team,
+      team_a: b.teams.find((t) => t.id !== el.team)!.id,
+      team_h_difficulty: 3,
+      team_a_difficulty: 3,
+      kickoff_time: null,
+      finished: false,
+      team_h_score: null,
+      team_a_score: null,
+    };
+    const dgw = projectAll({ bootstrap: b, fixtures: [...base, extra], nextEvent: 11, horizon: 1 });
+    expect(dgw.get(el.id)!.next).toBeGreaterThan(single.get(el.id)!.next * 1.5);
+  });
+  it("totalDiscounted is below total over a multi-GW horizon", () => {
+    const xp = projectAll({ bootstrap, fixtures, nextEvent: 11, horizon: 5 });
+    const p = [...xp.values()].find((v) => v.total > 5)!;
+    expect(p.totalDiscounted).toBeLessThan(p.total);
+    expect(p.totalDiscounted).toBeGreaterThan(p.total * 0.6);
+  });
+});
+
 describe("buildLaunchSquad (pre-season)", () => {
   it("drafts a legal 15-man squad within £100m even with zero minutes played", () => {
     const b = makeMockBootstrap();
@@ -190,7 +229,7 @@ describe("buildLaunchSquad (pre-season)", () => {
       e.form = "0.0"; e.points_per_game = "0.0";
       e.expected_goals = "0.0"; e.expected_assists = "0.0";
     });
-    const fx = makeMockFixtures().map((f) => ({ ...f, event: f.event - 10 })); // GW1-5
+    const fx = makeMockFixtures().map((f) => ({ ...f, event: (f.event ?? 11) - 10, finished: false })); // GW1-5
     const launch = buildLaunchSquad(b, fx, 1, 5);
     expect(
       validateSquad(launch.squad.map((e) => ({ id: e.id, elementType: e.element_type, teamId: e.team })))

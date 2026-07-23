@@ -1,11 +1,39 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { TeamData } from "@/lib/fpl";
 import { optimize, buildLaunchSquad, type LaunchSquad, type OptimizerResult } from "@/lib/optimizer";
 import { fmtPrice, remainingChips, CHIP_LABELS } from "@/lib/rules";
 import { Badge, SectionTitle } from "./ui";
 import Pitch from "./Pitch";
+import Sheet, { SheetClose } from "./Sheet";
+
+/** Compact deadline countdown so the decision-critical time lives where the
+ * decisions are made. */
+function DeadlineNote({ gw, deadline }: { gw: number; deadline: string | null }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  if (!deadline) return null;
+  const ms = new Date(deadline).getTime() - now;
+  if (ms <= 0) return null;
+  const d = Math.floor(ms / 86_400_000);
+  const h = Math.floor((ms % 86_400_000) / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  const txt = d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+  const urgent = ms < 24 * 3_600_000;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold ${
+        urgent ? "border-warn/50 bg-warn/10 text-warn" : "border-accent/40 bg-accent/10 text-accent"
+      }`}
+    >
+      ⏰ GW{gw} deadline: {txt}
+    </span>
+  );
+}
 
 export default function OptimizePanel({
   data,
@@ -96,8 +124,9 @@ export default function OptimizePanel({
                   .map((e) => (
                     <button
                       key={e.id}
+                      type="button"
                       onClick={onSelect ? () => onSelect(e) : undefined}
-                      className="flex items-center justify-between rounded-lg bg-panel-2 px-3 py-1.5 text-left hover:border-accent"
+                      className="flex items-center justify-between rounded-lg border border-transparent bg-panel-2 px-3 py-2 text-left hover:border-accent active:border-accent"
                     >
                       <span className="truncate">
                         <span className="mr-1.5 text-xs text-muted">
@@ -158,25 +187,11 @@ export default function OptimizePanel({
   return (
     <div className="space-y-6">
       {infoOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-6"
-          onClick={() => setInfoOpen(null)}
-          role="dialog"
-          aria-modal="true"
-        >
-          <div
-            className="card w-full max-w-md rounded-b-none rounded-t-2xl p-5 sm:rounded-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <Sheet onClose={() => setInfoOpen(null)} labelledBy="opt-info-title" maxWidth="max-w-md">
+          <div>
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold">{infoOpen.title}</h2>
-              <button
-                onClick={() => setInfoOpen(null)}
-                aria-label="Close"
-                className="rounded-lg border border-border-c bg-panel-2 px-2.5 py-1 text-sm hover:border-accent"
-              >
-                ✕
-              </button>
+              <h2 id="opt-info-title" className="text-lg font-bold">{infoOpen.title}</h2>
+              <SheetClose onClose={() => setInfoOpen(null)} />
             </div>
             <div className="mt-3 space-y-2 text-sm text-muted">
               {infoOpen.body.map((line, i) => (
@@ -184,9 +199,17 @@ export default function OptimizePanel({
               ))}
             </div>
           </div>
-        </div>
+        </Sheet>
       )}
       <div className="card flex flex-wrap items-center gap-4 p-4">
+        <div className="w-full">
+          <DeadlineNote
+            gw={squad.nextEvent}
+            deadline={
+              data.bootstrap.events.find((e) => e.id === squad.nextEvent)?.deadline_time ?? null
+            }
+          />
+        </div>
         <div className="flex items-center gap-2">
           <label className="text-sm text-muted">Horizon:</label>
           <select
@@ -203,6 +226,8 @@ export default function OptimizePanel({
         </div>
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
           <button
+            type="button"
+            className="-m-1.5 p-1.5"
             onClick={() =>
               setInfoOpen({
                 title: `${squad.freeTransfers} free transfer${squad.freeTransfers === 1 ? "" : "s"}`,
@@ -219,6 +244,8 @@ export default function OptimizePanel({
             </Badge>
           </button>
           <button
+            type="button"
+            className="-m-1.5 p-1.5"
             onClick={() =>
               setInfoOpen({
                 title: `Bank £${fmtPrice(squad.bank)}m`,
@@ -248,6 +275,8 @@ export default function OptimizePanel({
             return (
               <button
                 key={i}
+                type="button"
+                className="-m-1.5 p-1.5"
                 onClick={() =>
                   setInfoOpen({
                     title: `${c.label} — available`,
@@ -381,11 +410,11 @@ export default function OptimizePanel({
             <SectionTitle>©️ Captaincy (GW{squad.nextEvent})</SectionTitle>
             <div className="mt-3 card divide-y divide-border-c">
               {result.captainRanking.map((c, i) => (
-                <div
+                <button
                   key={c.element.id}
-                  className={`flex items-center gap-3 px-4 py-3 ${onSelect ? "cursor-pointer hover:bg-panel-2/60" : ""}`}
+                  type="button"
+                  className={`flex w-full items-center gap-3 px-4 py-3 text-left ${onSelect ? "cursor-pointer hover:bg-panel-2/60 active:bg-panel-2" : ""}`}
                   onClick={onSelect ? () => onSelect(c.element) : undefined}
-                  role={onSelect ? "button" : undefined}
                 >
                   <span className="w-6 text-center font-bold text-muted">{i + 1}</span>
                   <div className="min-w-0 flex-1">
@@ -400,7 +429,7 @@ export default function OptimizePanel({
                   </div>
                   {i === 0 && <Badge tone="green">Captain</Badge>}
                   {i === 1 && <Badge>Vice</Badge>}
-                </div>
+                </button>
               ))}
             </div>
           </div>

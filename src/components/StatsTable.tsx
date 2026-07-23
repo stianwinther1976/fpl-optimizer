@@ -68,11 +68,17 @@ export default function StatsTable({
 
   const th = (key: SortKey, label: string) => (
     <th
-      className={`cursor-pointer px-2 py-2 text-right hover:text-accent ${sortKey === key ? "text-accent" : ""}`}
-      onClick={() => setSortKey(key)}
+      className="px-2 py-2 text-right"
+      aria-sort={sortKey === key ? "descending" : undefined}
     >
-      {label}
-      {sortKey === key ? " ↓" : ""}
+      <button
+        type="button"
+        onClick={() => setSortKey(key)}
+        className={`-m-1 p-1 uppercase hover:text-accent active:text-accent ${sortKey === key ? "text-accent" : ""}`}
+      >
+        {label}
+        {sortKey === key ? " ↓" : ""}
+      </button>
     </th>
   );
 
@@ -125,11 +131,25 @@ export default function StatsTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-border-c/60">
-            {rows.map((e) => (
+            {rows.map((e) => {
+              const netT = (e.transfers_in_event ?? 0) - (e.transfers_out_event ?? 0);
+              return (
               <tr
                 key={e.id}
-                className={`hover:bg-panel-2/60 ${onSelect ? "cursor-pointer" : ""}`}
+                className={`hover:bg-panel-2/60 active:bg-panel-2 ${onSelect ? "cursor-pointer" : ""}`}
                 onClick={onSelect ? () => onSelect(e) : undefined}
+                role={onSelect ? "button" : undefined}
+                tabIndex={onSelect ? 0 : undefined}
+                onKeyDown={
+                  onSelect
+                    ? (ev) => {
+                        if (ev.key === "Enter" || ev.key === " ") {
+                          ev.preventDefault();
+                          onSelect(e);
+                        }
+                      }
+                    : undefined
+                }
               >
                 <td className="sticky left-0 z-10 bg-[var(--panel)] px-3 py-2">
                   <span className="flex items-center gap-2">
@@ -151,7 +171,19 @@ export default function StatsTable({
                   </span>
                 </td>
                 <td className="px-2 py-2 text-muted">{POSITION_NAMES[e.element_type]}</td>
-                <td className="px-2 py-2 text-right font-mono">£{fmtPrice(e.now_cost)}</td>
+                <td className="px-2 py-2 text-right font-mono">
+                  £{fmtPrice(e.now_cost)}
+                  {netT > 25_000 && (
+                    <span className="ml-0.5 text-accent" title={`${netT.toLocaleString("en-GB")} net transfers in this GW — price-rise pressure`}>
+                      ▲
+                    </span>
+                  )}
+                  {netT < -25_000 && (
+                    <span className="ml-0.5 text-danger" title={`${Math.abs(netT).toLocaleString("en-GB")} net transfers out this GW — price-fall pressure`}>
+                      ▼
+                    </span>
+                  )}
+                </td>
                 <td className="px-2 py-2 text-right font-mono text-accent">
                   {(xp.get(e.id)?.total ?? 0).toFixed(1)}
                 </td>
@@ -160,7 +192,8 @@ export default function StatsTable({
                 <td className="px-2 py-2 text-right font-mono">{e.expected_goal_involvements}</td>
                 <td className="px-2 py-2 text-right font-mono">{e.selected_by_percent}</td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

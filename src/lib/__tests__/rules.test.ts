@@ -91,6 +91,14 @@ describe("purchasePriceFor", () => {
   it("falls back to season-start price for original squad", () => {
     expect(purchasePriceFor(el, [])).toBe(85);
   });
+  it("ignores transfers made in a Free Hit week (they revert)", () => {
+    const transfers = [
+      { element_in: 5, element_in_cost: 87, event: 3, time: "t1" },
+      { element_in: 5, element_in_cost: 95, event: 12, time: "t2" }, // FH week
+    ] as Transfer[];
+    const chipEvents = new Map([[12, "freehit"]]);
+    expect(purchasePriceFor(el, transfers, chipEvents)).toBe(87);
+  });
 });
 
 describe("transferCost", () => {
@@ -140,16 +148,28 @@ describe("computeFreeTransfers", () => {
 });
 
 describe("remainingChips", () => {
-  it("classic fallback: subtracts used chips", () => {
+  it("fallback mirrors 2025/26 structure: two of each chip, one per half", () => {
     const left = remainingChips([
       { name: "wildcard", event: 8 },
       { name: "bboost", event: 26 },
     ]);
-    const names = left.map((c) => c.name);
-    expect(names).toContain("freehit");
-    expect(names).toContain("3xc");
-    expect(names).not.toContain("wildcard");
-    expect(names).not.toContain("bboost");
+    const count = (n: string) => left.filter((c) => c.name === n).length;
+    expect(count("wildcard")).toBe(1); // first-half WC used, second-half remains
+    expect(count("bboost")).toBe(1);
+    expect(count("freehit")).toBe(2);
+    expect(count("3xc")).toBe(2);
+  });
+  it("fallback: first-half wildcard used, GW25 still has the second-half one", () => {
+    const left = remainingChips([{ name: "wildcard", event: 8 }], null, 25);
+    expect(left.filter((c) => c.name === "wildcard").length).toBe(1);
+  });
+  it("season mode counts future windows; now mode hides them", () => {
+    const chips = [
+      { name: "freehit", start_event: 2, stop_event: 19, number: 1 },
+      { name: "freehit", start_event: 20, stop_event: 38, number: 1 },
+    ];
+    expect(remainingChips([], chips, 10, "now").length).toBe(1);
+    expect(remainingChips([], chips, 10, "season").length).toBe(2);
   });
   it("bootstrap windows: second-half wildcard still available", () => {
     const chips = [

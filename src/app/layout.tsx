@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import UpdateToast from "@/components/UpdateToast";
 
@@ -6,6 +6,16 @@ export const metadata: Metadata = {
   title: "FPL Optimizer — your best team every gameweek",
   description:
     "Enter your FPL ID and get the optimal team, transfer suggestions, captain picks and chip advice — built on every official FPL rule.",
+  manifest: "/manifest.webmanifest",
+};
+
+export const viewport: Viewport = {
+  // Edge-to-edge on notched phones; sheets/toasts pad with safe-area insets.
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#0d1117" },
+    { media: "(prefers-color-scheme: light)", color: "#f2f2f7" },
+  ],
 };
 
 export default function RootLayout({

@@ -5,6 +5,7 @@ import { fmtPrice, POSITION_NAMES } from "@/lib/rules";
 import { teamFixtures } from "@/lib/xp";
 import { Badge } from "./ui";
 import { PlayerAvatar } from "./Pitch";
+import Sheet, { SheetClose } from "./Sheet";
 
 const FDR_BADGE: Record<number, string> = {
   1: "bg-emerald-600 text-white",
@@ -72,35 +73,45 @@ export default function PlayerModal({
     [];
   const total = liveEl?.stats.total_points ?? null;
 
+  // Set-piece duty (public API: penalties + corner/free-kick order)
+  const duties: string[] = [];
+  if (element.penalties_order === 1) duties.push("Penalties: 1st taker");
+  else if (element.penalties_order === 2) duties.push("Penalties: 2nd taker");
+  const spOrder = Math.min(
+    element.corners_and_indirect_freekicks_order ?? 99,
+    element.direct_freekicks_order ?? 99
+  );
+  if (spOrder === 1) duties.push("Set pieces: 1st taker");
+  else if (spOrder === 2) duties.push("Set pieces: 2nd taker");
+  // Price-change pressure from net event transfers relative to ownership.
+  const netTransfers = (element.transfers_in_event ?? 0) - (element.transfers_out_event ?? 0);
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-6"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-    >
-      <div
-        className="card w-full max-w-md rounded-b-none rounded-t-2xl p-5 sm:rounded-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Sheet onClose={onClose} labelledBy="player-modal-title" maxWidth="max-w-md">
+      <div>
         <div className="flex items-start gap-3">
           <PlayerAvatar el={element} teamShort={team?.short_name} />
           <div className="min-w-0 flex-1">
-            <div className="truncate text-lg font-bold">
+            <div id="player-modal-title" className="truncate text-lg font-bold">
               {element.first_name} {element.second_name}
             </div>
             <div className="text-sm text-muted">
               {team?.name} · {POSITION_NAMES[element.element_type]} · £{fmtPrice(element.now_cost)}m
             </div>
             {element.news && <div className="mt-1 text-xs text-warn">{element.news}</div>}
+            {(duties.length > 0 || netTransfers !== 0) && (
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {duties.map((d) => (
+                  <Badge key={d} tone="purple">
+                    {d}
+                  </Badge>
+                ))}
+                {netTransfers > 25000 && <Badge tone="green">▲ {Math.round(netTransfers / 1000)}k in this GW</Badge>}
+                {netTransfers < -25000 && <Badge tone="red">▼ {Math.round(-netTransfers / 1000)}k out this GW</Badge>}
+              </div>
+            )}
           </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-lg border border-border-c bg-panel-2 px-2.5 py-1 text-sm hover:border-accent"
-          >
-            ✕
-          </button>
+          <SheetClose onClose={onClose} />
         </div>
 
         {/* GW point breakdown */}
@@ -114,7 +125,7 @@ export default function PlayerModal({
                 </span>
               </div>
               <div className={`text-xl font-bold ${gwFinished ? "" : "text-accent"}`}>
-                {total} pts
+                {total} {total === 1 ? "pt" : "pts"}
               </div>
             </div>
             {rows.length > 0 ? (
@@ -184,6 +195,6 @@ export default function PlayerModal({
           </div>
         </div>
       </div>
-    </div>
+    </Sheet>
   );
 }

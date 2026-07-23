@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { api, FplApiError, loadTeamData, fmtRank, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
+import dynamic from "next/dynamic";
+import { api, FplApiError, loadTeamData, fmtNum, fmtRank, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
 import type { Element, EntryEventPicks, EventLive } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
@@ -12,11 +13,15 @@ import Pitch from "./Pitch";
 import OptimizePanel from "./OptimizePanel";
 import StatsTable from "./StatsTable";
 import FixtureTicker from "./FixtureTicker";
-import HistoryChart from "./HistoryChart";
 import LiveTab from "./LiveTab";
 import MiniLeague from "./MiniLeague";
 import ThemeToggle from "./ThemeToggle";
 import { ErrorBox, Skeleton, Stat, type StatDelta } from "./ui";
+
+// recharts is heavy — load the History tab's chart bundle only when needed.
+const HistoryChart = dynamic(() => import("./HistoryChart"), {
+  loading: () => <Skeleton className="h-96" />,
+});
 
 const TABS = [
   ["team", "My team", "Team"],
@@ -98,9 +103,18 @@ export default function Dashboard({
   const [hist, setHist] = useState<{ gw: number; picks: EntryEventPicks; live: EventLive } | null>(null);
   const [histError, setHistError] = useState<string | null>(null);
   const [histLoading, setHistLoading] = useState(false);
+  const [histRetry, setHistRetry] = useState(0);
   const [tab, setTab] = useState<TabKey>(
     TABS.some(([k]) => k === initialTab) ? (initialTab as TabKey) : "team"
   );
+  // Tabs stay mounted once visited: switching back keeps state (optimizer
+  // results, league standings, live data) instead of refetching everything.
+  const [visited, setVisited] = useState<Set<TabKey>>(() => new Set([tab]));
+  const selectTab = useCallback((k: TabKey) => {
+    setTab(k);
+    setVisited((v) => (v.has(k) ? v : new Set(v).add(k)));
+  }, []);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -116,7 +130,7 @@ export default function Dashboard({
     return () => {
       cancelled = true;
     };
-  }, [entryId]);
+  }, [entryId, reloadKey]);
 
   const teams = useMemo(
     () => (data ? new Map(data.bootstrap.teams.map((t) => [t.id, t])) : new Map()),
@@ -170,7 +184,7 @@ export default function Dashboard({
     return () => {
       cancelled = true;
     };
-  }, [viewGw, entryId, data]);
+  }, [viewGw, entryId, data, histRetry]);
 
   const livePointsOf = useMemo(() => {
     const m = new Map<number, number>();
@@ -214,7 +228,7 @@ export default function Dashboard({
   if (error) {
     return (
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-16">
-        <ErrorBox message={error} />
+        <ErrorBox message={error} onRetry={() => setReloadKey((k) => k + 1)} />
         <Link href="/" className="mt-4 inline-block text-accent hover:underline">
           ← Try another FPL ID
         </Link>
@@ -303,11 +317,22 @@ export default function Dashboard({
 
   const pointsTrend = rows.slice(-8).map((r) => r.points);
 
+  // "Chips left" shows everything still available this season; the subtitle
+  // notes how many are usable right now (windows can open later).
   const chipsLeft = squad
     ? remainingChips(
         history.chips.map((c) => ({ name: c.name, event: c.event })),
         data.bootstrap.chips ?? null,
-        squad.nextEvent
+        squad.nextEvent,
+        "season"
+      )
+    : [];
+  const chipsNow = squad
+    ? remainingChips(
+        history.chips.map((c) => ({ name: c.name, event: c.event })),
+        data.bootstrap.chips ?? null,
+        squad.nextEvent,
+        "now"
       )
     : [];
 
@@ -342,7 +367,7 @@ export default function Dashboard({
           >
             {!gwFinished && (
               <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-60" />
+                <span className="absolute inline-flex h-full w-full motion-safe:animate-ping rounded-full bg-accent opacity-60" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
               </span>
             )}
@@ -370,7 +395,7 @@ export default function Dashboard({
       <div className="mt-3 grid grid-cols-3 gap-2 sm:gap-3 lg:grid-cols-6">
         <Stat
           label="Total points"
-          value={String(entry.summary_overall_points)}
+          value={fmtNum(entry.summary_overall_points)}
           accent
           delta={pointsDelta}
           trend={pointsTrend.length > 1 ? pointsTrend : undefined}
@@ -412,20 +437,27 @@ export default function Dashboard({
         <Stat
           label="Chips left"
           value={String(chipsLeft.length)}
-          sub={chipsLeft.map((c) => c.label).join(", ") || "None"}
+          sub={
+            chipsLeft.length > 0
+              ? `${[...new Set(chipsLeft.map((c) => c.label))].join(", ")}${
+                  chipsNow.length !== chipsLeft.length ? ` (${chipsNow.length} usable now)` : ""
+                }`
+              : "None"
+          }
         />
       </div>
 
-      {/* Tabs */}
-      <div className="sticky top-0 z-20 mt-4 -mx-4 flex justify-between border-b border-border-c bg-background/85 px-2 backdrop-blur sm:justify-start sm:gap-1 sm:px-4">
+      {/* Tabs — full-width hit areas on mobile, ≥44px tall */}
+      <div className="sticky top-0 z-20 mt-4 -mx-4 flex border-b border-border-c bg-background/85 px-2 backdrop-blur sm:justify-start sm:gap-1 sm:px-4">
         {TABS.map(([key, label, short]) => (
           <button
             key={key}
-            onClick={() => setTab(key)}
-            className={`whitespace-nowrap px-1 py-2 text-xs font-medium sm:px-3 sm:text-sm ${
+            type="button"
+            onClick={() => selectTab(key)}
+            className={`flex-1 whitespace-nowrap border-b-2 px-1 py-3 text-xs font-medium sm:flex-none sm:px-3 sm:text-sm ${
               tab === key
-                ? "border-b-2 border-accent text-accent"
-                : "text-muted hover:text-foreground"
+                ? "border-accent text-accent"
+                : "border-transparent text-muted hover:text-foreground active:text-foreground"
             }`}
           >
             <span className="sm:hidden">{short}</span>
@@ -435,7 +467,8 @@ export default function Dashboard({
       </div>
 
       <div className="mt-4">
-        {tab === "team" &&
+        <div hidden={tab !== "team"}>
+        {visited.has("team") &&
           (squad ? (
             <div className="space-y-4">
               {/* Gameweek time machine */}
@@ -475,7 +508,7 @@ export default function Dashboard({
                 histLoading ? (
                   <Skeleton className="h-96" />
                 ) : histError ? (
-                  <ErrorBox message={histError} />
+                  <ErrorBox message={histError} onRetry={() => setHistRetry((k) => k + 1)} />
                 ) : hist ? (
                   (() => {
                     const elementById = new Map(data.bootstrap.elements.map((e) => [e.id, e]));
@@ -604,12 +637,37 @@ export default function Dashboard({
               No squad found — has this team played a gameweek this season yet?
             </div>
           ))}
-        {tab === "optimize" && <OptimizePanel data={data} onSelect={setSelected} />}
-        {tab === "stats" && <StatsTable data={data} onSelect={setSelected} />}
-        {tab === "fixtures" && <FixtureTicker data={data} onSelect={setSelected} />}
-        {tab === "live" && <LiveTab data={data} onSelect={setSelected} />}
-        {tab === "league" && <MiniLeague data={data} entryId={entryId} />}
-        {tab === "history" && <HistoryChart data={data} />}
+        </div>
+        {visited.has("optimize") && (
+          <div hidden={tab !== "optimize"}>
+            <OptimizePanel data={data} onSelect={setSelected} />
+          </div>
+        )}
+        {visited.has("stats") && (
+          <div hidden={tab !== "stats"}>
+            <StatsTable data={data} onSelect={setSelected} />
+          </div>
+        )}
+        {visited.has("fixtures") && (
+          <div hidden={tab !== "fixtures"}>
+            <FixtureTicker data={data} onSelect={setSelected} />
+          </div>
+        )}
+        {visited.has("live") && (
+          <div hidden={tab !== "live"}>
+            <LiveTab data={data} onSelect={setSelected} active={tab === "live"} />
+          </div>
+        )}
+        {visited.has("league") && (
+          <div hidden={tab !== "league"}>
+            <MiniLeague data={data} entryId={entryId} />
+          </div>
+        )}
+        {visited.has("history") && (
+          <div hidden={tab !== "history"}>
+            <HistoryChart data={data} />
+          </div>
+        )}
       </div>
 
       {kpiModal && (

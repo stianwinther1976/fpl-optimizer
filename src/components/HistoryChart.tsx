@@ -43,7 +43,7 @@ function PastSeasons({ data }: { data: TeamData }) {
             {[...past].reverse().map((p) => (
               <tr key={p.season_name} className={p.rank === bestRank ? "text-accent" : ""}>
                 <td className="px-2 py-1.5 font-medium">{p.season_name}</td>
-                <td className="px-2 py-1.5 text-right font-mono">{p.total_points}</td>
+                <td className="px-2 py-1.5 text-right font-mono">{p.total_points.toLocaleString("en-GB")}</td>
                 <td className="px-2 py-1.5 text-right font-mono">
                   {p.rank.toLocaleString("en-GB")}
                 </td>

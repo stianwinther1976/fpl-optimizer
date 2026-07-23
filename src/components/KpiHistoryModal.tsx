@@ -2,6 +2,7 @@
 
 import type { TeamData } from "@/lib/fpl";
 import { fmtPrice } from "@/lib/rules";
+import Sheet, { SheetClose } from "./Sheet";
 
 export type KpiMetric = "points" | "rank" | "gw" | "value";
 
@@ -30,25 +31,11 @@ export default function KpiHistoryModal({
   const signed = (n: number) => (n > 0 ? `+${num(n)}` : num(n));
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-6"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-    >
-      <div
-        className="card max-h-[80vh] w-full max-w-md overflow-y-auto rounded-b-none rounded-t-2xl p-5 sm:rounded-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Sheet onClose={onClose} labelledBy="kpi-modal-title" maxWidth="max-w-md">
+      <div>
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold">{TITLES[metric]}</h2>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-lg border border-border-c bg-panel-2 px-2.5 py-1 text-sm hover:border-accent"
-          >
-            ✕
-          </button>
+          <h2 id="kpi-modal-title" className="text-lg font-bold">{TITLES[metric]}</h2>
+          <SheetClose onClose={onClose} />
         </div>
 
         {rows.length === 0 ? (
@@ -198,6 +185,6 @@ export default function KpiHistoryModal({
           </table>
         )}
       </div>
-    </div>
+    </Sheet>
   );
 }

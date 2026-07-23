@@ -3,6 +3,7 @@
 import type { Element, EventLive, Fixture, Team } from "@/lib/types";
 import { matchMinute } from "@/lib/live";
 import { PlayerAvatar } from "./Pitch";
+import Sheet, { SheetClose } from "./Sheet";
 
 export default function MatchModal({
   fixture,
@@ -49,7 +50,8 @@ export default function MatchModal({
     return (
       <button
         onClick={() => onPlayerSelect(el)}
-        className="flex w-full items-center gap-2.5 px-1 py-2 text-left text-sm hover:bg-panel-2/60"
+        type="button"
+        className="flex w-full items-center gap-2.5 px-1 py-2 text-left text-sm hover:bg-panel-2/60 active:bg-panel-2"
       >
         <PlayerAvatar el={el} teamShort={teams.get(el.team)?.short_name} size="sm" center={false} />
         <span className="min-w-0 flex-1">
@@ -65,19 +67,11 @@ export default function MatchModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-6"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-    >
-      <div
-        className="card max-h-[80vh] w-full max-w-md overflow-y-auto rounded-b-none rounded-t-2xl p-5 sm:rounded-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Sheet onClose={onClose} labelledBy="match-modal-title" maxWidth="max-w-md">
+      <div>
         <div className="flex items-start justify-between gap-2">
           <div>
-            <div className="text-xl font-bold">
+            <div id="match-modal-title" className="text-xl font-bold">
               <span className={hClass}>{home?.short_name}</span>{" "}
               {fixture.started ? (
                 <>
@@ -104,13 +98,7 @@ export default function MatchModal({
               {home?.name} v {away?.name}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-lg border border-border-c bg-panel-2 px-2.5 py-1 text-sm hover:border-accent"
-          >
-            ✕
-          </button>
+          <SheetClose onClose={onClose} />
         </div>
 
         {mine.length > 0 && (
@@ -139,6 +127,6 @@ export default function MatchModal({
           <p className="mt-4 text-sm text-muted">No player data for this match yet.</p>
         )}
       </div>
-    </div>
+    </Sheet>
   );
 }

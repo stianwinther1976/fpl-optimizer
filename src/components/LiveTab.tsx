@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type TeamData } from "@/lib/fpl";
-import type { EventLive, Fixture } from "@/lib/types";
-import { matchMinute, provisionalBonus } from "@/lib/live";
+import type { EventLive, Fixture, Pick } from "@/lib/types";
+import { matchMinute, projectAutoSubs, provisionalBonus } from "@/lib/live";
 import { ErrorBox, Skeleton, Badge } from "./ui";
 import MatchModal from "./MatchModal";
 
@@ -12,9 +12,12 @@ const REFRESH_MS = 30_000;
 export default function LiveTab({
   data,
   onSelect,
+  active = true,
 }: {
   data: TeamData;
   onSelect?: (el: import("@/lib/types").Element) => void;
+  /** false while the tab is hidden — pauses polling. */
+  active?: boolean;
 }) {
   const [live, setLive] = useState<EventLive | null>(null);
   const [fixtures, setFixtures] = useState<Fixture[]>(data.fixtures);
@@ -23,19 +26,25 @@ export default function LiveTab({
   const [bandSafety, setBandSafety] = useState<number | null>(null);
   const bandTried = useRef(false);
   const [matchOpen, setMatchOpen] = useState<Fixture | null>(null);
+  // Latest-wins guard: an older in-flight response must never overwrite a
+  // newer one (visible as scores briefly going backwards).
+  const seq = useRef(0);
 
   const currentEventObj = data.bootstrap.events.find((e) => e.is_current) ?? null;
   const currentEvent = currentEventObj?.id ?? data.squad?.currentEvent ?? null;
 
   const refresh = useCallback(async () => {
     if (currentEvent == null) return;
+    const my = ++seq.current;
     try {
       const [l, fx] = await Promise.all([api.live(currentEvent), api.fixtures()]);
+      if (my !== seq.current) return; // stale response
       setLive(l);
       setFixtures(fx);
       setUpdatedAt(new Date());
       setError(null);
     } catch {
+      if (my !== seq.current) return;
       setError("Could not fetch live data.");
     }
   }, [currentEvent]);
@@ -44,6 +53,10 @@ export default function LiveTab({
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- refresh() only sets state after awaiting the network
     refresh();
+    return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- seq is a plain counter, not a DOM ref; bumping it is exactly the point
+      seq.current++; // invalidate in-flight responses on unmount/entry switch
+    };
   }, [refresh]);
 
   // Poll only while the gameweek can still change: not finished, and at least
@@ -55,10 +68,25 @@ export default function LiveTab({
       fixtures.filter((f) => f.event === currentEvent).every((f) => f.finished));
 
   useEffect(() => {
-    if (currentEvent == null || gwDone) return;
-    const t = setInterval(refresh, REFRESH_MS);
-    return () => clearInterval(t);
-  }, [refresh, currentEvent, gwDone]);
+    if (currentEvent == null || gwDone || !active) return;
+    // Skip ticks while the browser tab is hidden; catch up when it returns.
+    const t = setInterval(() => {
+      if (!document.hidden) refresh();
+    }, REFRESH_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [refresh, currentEvent, gwDone, active]);
+
+  const elementById = useMemo(
+    () => new Map(data.bootstrap.elements.map((e) => [e.id, e])),
+    [data.bootstrap]
+  );
 
   // Personalised safety score: sample ~20 managers at the user's overall-rank
   // band (the Overall league is paged in rank order) and take the median of
@@ -84,9 +112,14 @@ export default function LiveTab({
               try {
                 const p = await api.picks(r.entry, currentEvent);
                 const bb = p.active_chip === "bboost";
+                // Project auto-subs for rivals too, so the benchmark matches
+                // what their final score will actually be.
+                const subs = projectAutoSubs(p.picks, elementById, live, fixtures, currentEvent);
+                const effXi = new Set(subs.effectiveXi);
                 let pts = 0;
                 for (const pk of p.picks) {
-                  const mult = bb && pk.multiplier === 0 ? 1 : pk.multiplier;
+                  if (!bb && !effXi.has(pk.element)) continue;
+                  const mult = pk.multiplier > 1 ? pk.multiplier : 1;
                   pts += (pointsOf.get(pk.element) ?? 0) * mult;
                 }
                 return pts - p.entry_history.event_transfers_cost;
@@ -102,7 +135,7 @@ export default function LiveTab({
         }
       } catch {}
     })();
-  }, [live, currentEvent, data.entry]);
+  }, [live, currentEvent, data.entry, elementById, fixtures]);
 
   const teams = useMemo(
     () => new Map(data.bootstrap.teams.map((t) => [t.id, t])),
@@ -125,6 +158,20 @@ export default function LiveTab({
     [live, fixtures, data.bootstrap, currentEvent]
   );
 
+  // Projected auto-subs: once a starter's matches have finished with 0
+  // minutes, the bench steps in (like FPL will do when the GW is processed).
+  const autoSubs = useMemo(() => {
+    if (!live || !data.squad || currentEvent == null) return null;
+    const picks: Pick[] = data.squad.players.map((p) => ({
+      element: p.element.id,
+      position: p.pickPosition,
+      multiplier: 0,
+      is_captain: p.isCaptain,
+      is_vice_captain: p.isViceCaptain,
+    }));
+    return projectAutoSubs(picks, elementById, live, fixtures, currentEvent);
+  }, [live, data.squad, elementById, fixtures, currentEvent]);
+
   const nextEventObj = data.bootstrap.events.find((e) => e.is_next);
   const seasonOver = currentEvent != null && nextEventObj == null;
 
@@ -145,22 +192,34 @@ export default function LiveTab({
       </div>
     );
   }
-  if (error) return <ErrorBox message={error} />;
+  if (error)
+    return (
+      <ErrorBox
+        message={`${error}${gwDone ? "" : " Retrying automatically every 30s."}`}
+        onRetry={refresh}
+      />
+    );
   if (!live || !data.squad) return <Skeleton className="h-64" />;
 
   const anyLive = gwFixtures.some((f) => f.started && !f.finished);
   const statById = new Map(live.elements.map((e) => [e.id, e.stats]));
   const bboost = data.squad.activeChip === "bboost";
   const hits = data.picks?.entry_history.event_transfers_cost ?? 0;
+  const effXi = new Set(
+    autoSubs?.effectiveXi ??
+      data.squad.players.filter((p) => p.pickPosition <= 11).map((p) => p.element.id)
+  );
+  const subbedIn = new Set(autoSubs?.in ?? []);
+  const subbedOut = new Set(autoSubs?.out ?? []);
 
-  // Effective captain: vice takes over once the GW is final and the captain
-  // played 0 minutes (official rule). Triple Captain aware.
+  // Effective captain: vice takes over once the captain can no longer play
+  // (GW final, or all of the captain's matches finished on 0 minutes).
   const capMult = data.squad.activeChip === "3xc" ? 3 : 2;
   const cap = data.squad.players.find((p) => p.isCaptain);
   const vice = data.squad.players.find((p) => p.isViceCaptain);
+  const capGone = cap != null && (gwDone || subbedOut.has(cap.element.id));
   const effCapId =
-    gwDone &&
-    cap &&
+    capGone &&
     (statById.get(cap.element.id)?.minutes ?? 0) === 0 &&
     vice &&
     (statById.get(vice.element.id)?.minutes ?? 0) > 0
@@ -170,7 +229,7 @@ export default function LiveTab({
   const rows = data.squad.players
     .map((p) => {
       const s = statById.get(p.element.id);
-      const counts = p.pickPosition <= 11 || bboost;
+      const counts = bboost || effXi.has(p.element.id);
       const mult = p.element.id === effCapId ? capMult : 1;
       const raw = s?.total_points ?? 0;
       const proj = bonus?.byElement.get(p.element.id) ?? 0;
@@ -178,6 +237,7 @@ export default function LiveTab({
         p,
         stats: s,
         projBonus: proj,
+        counts,
         points: counts ? (raw + proj) * mult : 0,
         display: raw + proj,
       };
@@ -186,7 +246,7 @@ export default function LiveTab({
 
   const total = rows.reduce((sum, r) => sum + r.points, 0) - hits;
   const benchTotal = rows
-    .filter((r) => r.p.pickPosition > 11)
+    .filter((r) => r.p.pickPosition > 11 && !r.counts)
     .reduce((s, r) => s + r.display, 0);
   const gwAvg =
     data.bootstrap.events.find((e) => e.id === currentEvent)?.average_entry_score ?? null;
@@ -199,7 +259,7 @@ export default function LiveTab({
           <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted">
             {anyLive && (
               <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-60" />
+                <span className="absolute inline-flex h-full w-full motion-safe:animate-ping rounded-full bg-accent opacity-60" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
               </span>
             )}
@@ -212,10 +272,23 @@ export default function LiveTab({
               <span className="ml-2 text-sm font-semibold text-danger">(−{hits} hit)</span>
             )}
           </div>
+          {subbedIn.size > 0 && !gwDone && (
+            <div className="text-[11px] text-muted">incl. projected auto-subs</div>
+          )}
         </div>
         <div className="text-sm text-muted">
           <div>Bench: {benchTotal} pts{bboost ? " (Bench Boost active)" : ""}</div>
-          {gwAvg != null && <div>GW average: {gwAvg} pts</div>}
+          {gwAvg != null && (
+            <div>
+              GW average: {gwAvg} pts{" "}
+              {total - gwAvg !== 0 && (
+                <span className={total > gwAvg ? "text-accent" : "text-danger"}>
+                  ({total > gwAvg ? "+" : ""}
+                  {total - gwAvg})
+                </span>
+              )}
+            </div>
+          )}
           {data.picks?.entry_history.rank != null && (
             <div>GW rank: {data.picks.entry_history.rank.toLocaleString("en-GB")}</div>
           )}
@@ -223,7 +296,11 @@ export default function LiveTab({
         <div className="ml-auto text-right text-xs text-muted">
           {updatedAt && <div>Updated {updatedAt.toLocaleTimeString("en-GB")}</div>}
           <div>{gwDone ? "Gameweek complete — auto-refresh off" : "Auto-refresh every 30s"}</div>
-          <button onClick={refresh} className="mt-1 rounded-md border border-border-c bg-panel-2 px-3 py-1 hover:border-accent">
+          <button
+            type="button"
+            onClick={refresh}
+            className="mt-1 rounded-md border border-border-c bg-panel-2 px-3 py-1.5 hover:border-accent active:border-accent"
+          >
             Refresh now
           </button>
         </div>
@@ -283,8 +360,9 @@ export default function LiveTab({
             return (
               <button
                 key={f.id}
+                type="button"
                 onClick={() => setMatchOpen(f)}
-                className={`card flex min-w-28 cursor-pointer flex-col items-center px-2 py-1.5 text-xs hover:border-accent sm:min-w-32 sm:text-sm ${liveNow ? "border-accent/50" : ""}`}
+                className={`card flex min-w-28 cursor-pointer flex-col items-center px-2 py-1.5 text-xs hover:border-accent active:border-accent sm:min-w-32 sm:text-sm ${liveNow ? "border-accent/50" : ""}`}
               >
                 <div className="flex items-center gap-1.5 font-semibold sm:gap-2">
                   <span className={hClass}>{teams.get(f.team_h)?.short_name}</span>
@@ -333,40 +411,62 @@ export default function LiveTab({
 
       {/* Player rows */}
       <div className="card divide-y divide-border-c/60">
-        {rows.map(({ p, stats, points, display, projBonus }) => (
-          <div
-            key={p.element.id}
-            className={`flex items-center gap-3 px-4 py-2.5 text-sm ${onSelect ? "cursor-pointer hover:bg-panel-2/60" : ""}`}
-            onClick={onSelect ? () => onSelect(p.element) : undefined}
-            role={onSelect ? "button" : undefined}
-          >
-            <span className="w-6 text-xs text-muted">{p.pickPosition}</span>
-            <span className="flex-1 font-medium">
-              {p.element.web_name}
-              {p.isCaptain && <Badge tone="green"> C </Badge>}
-              {p.isViceCaptain && <Badge> V </Badge>}
-              {p.pickPosition > 11 && <span className="ml-1 text-xs text-muted">(bench)</span>}
-              {projBonus > 0 && (
-                <span className="ml-1.5 rounded bg-warn/15 px-1.5 py-0.5 text-[11px] font-semibold text-warn" title="Projected bonus from current BPS">
-                  ★+{projBonus}
-                </span>
-              )}
-            </span>
-            <span className="hidden text-xs text-muted sm:inline">
-              {stats
-                ? `${stats.minutes}' · ${stats.goals_scored}g ${stats.assists}a · bps ${stats.bps}`
-                : "–"}
-            </span>
-            <span className="w-10 text-right font-mono font-bold">
-              {p.pickPosition <= 11 || bboost ? points : display}
-            </span>
-          </div>
-        ))}
+        {rows.map(({ p, stats, points, display, projBonus, counts }) => {
+          const Row = onSelect ? "button" : "div";
+          return (
+            <Row
+              key={p.element.id}
+              type={onSelect ? "button" : undefined}
+              className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm ${onSelect ? "cursor-pointer hover:bg-panel-2/60 active:bg-panel-2" : ""}`}
+              onClick={onSelect ? () => onSelect(p.element) : undefined}
+            >
+              <span className="w-6 text-xs text-muted">{p.pickPosition}</span>
+              <span className="min-w-0 flex-1 font-medium">
+                {p.element.web_name}
+                {p.isCaptain && <Badge tone="green"> C </Badge>}
+                {p.isViceCaptain && <Badge> V </Badge>}
+                {p.pickPosition > 11 && !counts && (
+                  <span className="ml-1 text-xs text-muted">(bench)</span>
+                )}
+                {subbedIn.has(p.element.id) && (
+                  <span
+                    className="ml-1.5 rounded bg-accent/15 px-1.5 py-0.5 text-[11px] font-semibold text-accent"
+                    title="Projected auto-sub: comes on for a starter who didn't play"
+                  >
+                    ↑ auto-sub
+                  </span>
+                )}
+                {subbedOut.has(p.element.id) && (
+                  <span
+                    className="ml-1.5 rounded bg-danger/15 px-1.5 py-0.5 text-[11px] font-semibold text-danger"
+                    title="Projected auto-sub: didn't play — bench comes on"
+                  >
+                    ↓ 0 min
+                  </span>
+                )}
+                {projBonus > 0 && (
+                  <span className="ml-1.5 rounded bg-warn/15 px-1.5 py-0.5 text-[11px] font-semibold text-warn" title="Projected bonus from current BPS">
+                    ★+{projBonus}
+                  </span>
+                )}
+              </span>
+              <span className="hidden text-xs text-muted sm:inline">
+                {stats
+                  ? `${stats.minutes}' · ${stats.goals_scored}g ${stats.assists}a · bps ${stats.bps}`
+                  : "–"}
+              </span>
+              <span className="w-10 shrink-0 text-right font-mono font-bold">
+                {counts ? points : display}
+              </span>
+            </Row>
+          );
+        })}
       </div>
       <p className="text-xs text-muted">
-        ★ = projected bonus from live BPS (not confirmed until the match finishes). Captain
-        doubling{data.squad.activeChip === "3xc" ? " (3x — Triple Captain active)" : ""} included
-        in the total.
+        ★ = projected bonus from live BPS (not confirmed until the match finishes). Auto-subs are
+        projected once a starter&apos;s matches finish with 0 minutes. Captain doubling
+        {data.squad.activeChip === "3xc" ? " (3x — Triple Captain active)" : ""} included in the
+        total.
       </p>
     </div>
   );
