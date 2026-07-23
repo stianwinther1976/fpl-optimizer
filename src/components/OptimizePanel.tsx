@@ -18,6 +18,7 @@ export default function OptimizePanel({
   const [result, setResult] = useState<OptimizerResult | null>(null);
   const [running, setRunning] = useState(false);
   const [view, setView] = useState<"plans" | "xi" | "dream">("plans");
+  const [infoOpen, setInfoOpen] = useState<{ title: string; body: string[] } | null>(null);
 
   const squad = data.squad;
   const teams = useMemo(
@@ -63,6 +64,35 @@ export default function OptimizePanel({
 
   return (
     <div className="space-y-6">
+      {infoOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-6"
+          onClick={() => setInfoOpen(null)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="card w-full max-w-md rounded-b-none rounded-t-2xl p-5 sm:rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold">{infoOpen.title}</h2>
+              <button
+                onClick={() => setInfoOpen(null)}
+                aria-label="Close"
+                className="rounded-lg border border-border-c bg-panel-2 px-2.5 py-1 text-sm hover:border-accent"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="mt-3 space-y-2 text-sm text-muted">
+              {infoOpen.body.map((line, i) => (
+                <p key={i}>{line}</p>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       <div className="card flex flex-wrap items-center gap-4 p-4">
         <div className="flex items-center gap-2">
           <label className="text-sm text-muted">Horizon:</label>
@@ -78,14 +108,71 @@ export default function OptimizePanel({
             ))}
           </select>
         </div>
-        <div className="flex items-center gap-2 text-sm text-muted">
-          <Badge tone="green">{squad.freeTransfers} free transfers</Badge>
-          <Badge>Bank £{fmtPrice(squad.bank)}m</Badge>
-          {chipsLeft.map((c, i) => (
-            <Badge key={i} tone="purple">
-              {c.label}
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
+          <button
+            onClick={() =>
+              setInfoOpen({
+                title: `${squad.freeTransfers} free transfer${squad.freeTransfers === 1 ? "" : "s"}`,
+                body: [
+                  `You currently have ${squad.freeTransfers} free transfer${squad.freeTransfers === 1 ? "" : "s"} for GW${squad.nextEvent}.`,
+                  "You gain +1 free transfer every gameweek and can bank up to 5. Each transfer beyond your free ones costs −4 points.",
+                  "The optimizer already accounts for this: plans marked with a hit only appear when the projected gain outweighs the −4.",
+                ],
+              })
+            }
+          >
+            <Badge tone="green">
+              {squad.freeTransfers} free transfer{squad.freeTransfers === 1 ? "" : "s"}
             </Badge>
-          ))}
+          </button>
+          <button
+            onClick={() =>
+              setInfoOpen({
+                title: `Bank £${fmtPrice(squad.bank)}m`,
+                body: [
+                  `Money left over after your squad — available to spend on transfers in addition to what you raise from sales.`,
+                  "Selling prices follow the official rule: you keep your purchase price plus 50% of any price rise, rounded down to £0.1m. Price falls are absorbed in full.",
+                ],
+              })
+            }
+          >
+            <Badge>Bank £{fmtPrice(squad.bank)}m</Badge>
+          </button>
+          {chipsLeft.map((c, i) => {
+            const windows = (data.bootstrap.chips ?? []).filter((w) => w.name === c.name);
+            const win = windows.find(
+              (w) => squad.nextEvent! >= w.start_event && squad.nextEvent! <= w.stop_event
+            );
+            const desc: Record<string, string> = {
+              wildcard:
+                "Unlimited free transfers for one gameweek — rebuild the whole squad. Changes are permanent.",
+              freehit:
+                "Unlimited transfers for one gameweek only — your squad reverts afterwards. Great for blank/double gameweeks.",
+              bboost: "Your four bench players' points count this gameweek.",
+              "3xc": "Your captain scores triple instead of double this gameweek.",
+            };
+            const advice = result?.chipAdvice.find((a) => a.chip === c.name);
+            return (
+              <button
+                key={i}
+                onClick={() =>
+                  setInfoOpen({
+                    title: `${c.label} — available`,
+                    body: [
+                      desc[c.name] ?? "",
+                      win ? `Usable window: GW${win.start_event}–GW${win.stop_event}. Only one chip can be played per gameweek, and a played chip cannot be cancelled.` : "",
+                      advice
+                        ? `Projected gain if played now: +${advice.projectedGain.toFixed(1)} xp. ${advice.detail}`
+                        : "Run the optimizer to see the projected gain of playing it this gameweek.",
+                      "This list only shows chips you still have — used chips disappear from here (see the Chips left card up top).",
+                    ].filter(Boolean),
+                  })
+                }
+              >
+                <Badge tone="purple">{c.label}</Badge>
+              </button>
+            );
+          })}
         </div>
         <button
           onClick={run}
