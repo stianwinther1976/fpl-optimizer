@@ -473,9 +473,9 @@ export default function Dashboard({
             </div>
           ))}
         {tab === "optimize" && <OptimizePanel data={data} />}
-        {tab === "stats" && <StatsTable data={data} />}
+        {tab === "stats" && <StatsTable data={data} onSelect={setSelected} />}
         {tab === "fixtures" && <FixtureTicker data={data} />}
-        {tab === "live" && <LiveTab data={data} />}
+        {tab === "live" && <LiveTab data={data} onSelect={setSelected} />}
         {tab === "league" && <MiniLeague data={data} entryId={entryId} />}
         {tab === "history" && <HistoryChart data={data} />}
       </div>

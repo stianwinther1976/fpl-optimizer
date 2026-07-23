@@ -9,7 +9,13 @@ import { PlayerAvatar } from "./Pitch";
 
 type SortKey = "xp" | "total_points" | "form" | "now_cost" | "selected" | "xgi";
 
-export default function StatsTable({ data }: { data: TeamData }) {
+export default function StatsTable({
+  data,
+  onSelect,
+}: {
+  data: TeamData;
+  onSelect?: (el: import("@/lib/types").Element) => void;
+}) {
   const [posFilter, setPosFilter] = useState<0 | ElementType>(0);
   const [sortKey, setSortKey] = useState<SortKey>("xp");
   const [maxPrice, setMaxPrice] = useState(150);
@@ -120,7 +126,11 @@ export default function StatsTable({ data }: { data: TeamData }) {
           </thead>
           <tbody className="divide-y divide-border-c/60">
             {rows.map((e) => (
-              <tr key={e.id} className="hover:bg-panel-2/60">
+              <tr
+                key={e.id}
+                className={`hover:bg-panel-2/60 ${onSelect ? "cursor-pointer" : ""}`}
+                onClick={onSelect ? () => onSelect(e) : undefined}
+              >
                 <td className="sticky left-0 z-10 bg-[var(--panel)] px-3 py-2">
                   <span className="flex items-center gap-2">
                     <PlayerAvatar

@@ -152,23 +152,25 @@ export default function OptimizePanel({ data }: { data: TeamData }) {
                   </div>
                   <div className="mt-3 space-y-2">
                     {plan.transfers.map((m, i) => (
-                      <div
-                        key={i}
-                        className="flex flex-wrap items-center gap-2 rounded-lg bg-panel-2 px-3 py-2 text-sm"
-                      >
-                        <span className="text-danger">
-                          Out: {m.out.web_name} ({teams.get(m.out.team)?.short_name}) £
-                          {fmtPrice(m.outSell)}m
-                        </span>
-                        <span className="text-muted">→</span>
-                        <span className="text-accent">
-                          In: {m.in.web_name} ({teams.get(m.in.team)?.short_name}) £
-                          {fmtPrice(m.inCost)}m
-                        </span>
-                        <span className="ml-auto text-xs text-muted">
-                          {(result.xp.get(m.out.id)?.total ?? 0).toFixed(1)} →{" "}
-                          {(result.xp.get(m.in.id)?.total ?? 0).toFixed(1)} xp
-                        </span>
+                      <div key={i} className="space-y-1 rounded-lg bg-panel-2 px-3 py-2 text-sm">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="min-w-0 truncate text-danger">
+                            Out: {m.out.web_name} ({teams.get(m.out.team)?.short_name}) £
+                            {fmtPrice(m.outSell)}m
+                          </span>
+                          <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted">
+                            {(result.xp.get(m.out.id)?.total ?? 0).toFixed(1)} xp
+                          </span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="min-w-0 truncate text-accent">
+                            In: {m.in.web_name} ({teams.get(m.in.team)?.short_name}) £
+                            {fmtPrice(m.inCost)}m
+                          </span>
+                          <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted">
+                            {(result.xp.get(m.in.id)?.total ?? 0).toFixed(1)} xp
+                          </span>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -189,16 +191,16 @@ export default function OptimizePanel({ data }: { data: TeamData }) {
               {result.captainRanking.map((c, i) => (
                 <div key={c.element.id} className="flex items-center gap-3 px-4 py-3">
                   <span className="w-6 text-center font-bold text-muted">{i + 1}</span>
-                  <div className="flex-1">
-                    <div className="font-semibold">
-                      {c.element.web_name}{" "}
-                      <span className="text-xs text-muted">
-                        {teams.get(c.element.team)?.short_name} ·{" "}
-                        {c.element.selected_by_percent}% owned
-                      </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-semibold">{c.element.web_name}</div>
+                    <div className="text-xs text-muted">
+                      {teams.get(c.element.team)?.short_name} · {c.element.selected_by_percent}%
+                      owned
                     </div>
                   </div>
-                  <div className="font-mono text-accent">{c.xp.toFixed(1)} xp</div>
+                  <div className="whitespace-nowrap font-mono text-accent">
+                    {c.xp.toFixed(1)} xp
+                  </div>
                   {i === 0 && <Badge tone="green">Captain</Badge>}
                   {i === 1 && <Badge>Vice</Badge>}
                 </div>
@@ -238,25 +240,23 @@ export default function OptimizePanel({ data }: { data: TeamData }) {
 
           {/* XI views */}
           <div>
-            <div className="flex items-center gap-3">
-              <SectionTitle>📋 Line-up</SectionTitle>
-              <div className="flex gap-1 rounded-lg bg-panel-2 p-1 text-sm">
-                {(
-                  [
-                    ["plans", "After best plan"],
-                    ["xi", "No transfers"],
-                    ["dream", "Dream team (£100m)"],
-                  ] as const
-                ).map(([key, label]) => (
-                  <button
-                    key={key}
-                    onClick={() => setView(key)}
-                    className={`rounded-md px-3 py-1.5 ${view === key ? "btn-primary" : "text-muted"}`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+            <SectionTitle>📋 Line-up</SectionTitle>
+            <div className="mt-2 grid w-full grid-cols-3 gap-1 rounded-lg bg-panel-2 p-1 text-xs sm:flex sm:w-fit sm:text-sm">
+              {(
+                [
+                  ["plans", "Best plan"],
+                  ["xi", "No transfers"],
+                  ["dream", "Dream £100m"],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setView(key)}
+                  className={`whitespace-nowrap rounded-md px-2 py-1.5 sm:px-3 ${view === key ? "btn-primary" : "text-muted"}`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
             <div className="mt-3">
               {(() => {
@@ -313,7 +313,7 @@ function PlanRow({
         <div className="text-sm text-muted">{sub}</div>
       </div>
       <div className="text-right">
-        <div className="font-mono font-bold">{net.toFixed(1)} xp</div>
+        <div className="whitespace-nowrap font-mono font-bold">{net.toFixed(1)} xp</div>
         <div className="text-xs text-muted">{gain >= 0 ? "baseline" : ""}</div>
       </div>
     </div>

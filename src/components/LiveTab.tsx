@@ -8,7 +8,13 @@ import { ErrorBox, Skeleton, Badge } from "./ui";
 
 const REFRESH_MS = 30_000;
 
-export default function LiveTab({ data }: { data: TeamData }) {
+export default function LiveTab({
+  data,
+  onSelect,
+}: {
+  data: TeamData;
+  onSelect?: (el: import("@/lib/types").Element) => void;
+}) {
   const [live, setLive] = useState<EventLive | null>(null);
   const [fixtures, setFixtures] = useState<Fixture[]>(data.fixtures);
   const [error, setError] = useState<string | null>(null);
@@ -310,7 +316,12 @@ export default function LiveTab({ data }: { data: TeamData }) {
       {/* Player rows */}
       <div className="card divide-y divide-border-c/60">
         {rows.map(({ p, stats, points, display, projBonus }) => (
-          <div key={p.element.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+          <div
+            key={p.element.id}
+            className={`flex items-center gap-3 px-4 py-2.5 text-sm ${onSelect ? "cursor-pointer hover:bg-panel-2/60" : ""}`}
+            onClick={onSelect ? () => onSelect(p.element) : undefined}
+            role={onSelect ? "button" : undefined}
+          >
             <span className="w-6 text-xs text-muted">{p.pickPosition}</span>
             <span className="flex-1 font-medium">
               {p.element.web_name}

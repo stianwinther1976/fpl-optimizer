@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { api, type TeamData } from "@/lib/fpl";
+import { useRouter } from "next/navigation";
+import { api, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
 import type { EventLive, LeagueStandings } from "@/lib/types";
 import { CHIP_LABELS } from "@/lib/rules";
 import { ErrorBox, Skeleton } from "./ui";
@@ -17,6 +18,9 @@ interface RivalDetail {
 }
 
 export default function MiniLeague({ data, entryId }: { data: TeamData; entryId: number }) {
+  const router = useRouter();
+  // Rival dashboards only work with real FPL data, not the demo universe.
+  const canOpenRivals = entryId !== DEMO_ENTRY_ID;
   const [leagueId, setLeagueId] = useState("");
   const [standings, setStandings] = useState<LeagueStandings | null>(null);
   const [details, setDetails] = useState<Map<number, RivalDetail>>(new Map());
@@ -244,10 +248,13 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                   bboost: "BB",
                   "3xc": "TC",
                 };
+                const clickable = canOpenRivals && !mine;
                 return (
                   <tr
                     key={r.entry}
-                    className={mine ? "bg-accent/10" : "hover:bg-panel-2/60"}
+                    className={`${mine ? "bg-accent/10" : "hover:bg-panel-2/60"} ${clickable ? "cursor-pointer" : ""}`}
+                    onClick={clickable ? () => router.push(`/team/${r.entry}`) : undefined}
+                    title={clickable ? "Open this manager's dashboard" : undefined}
                   >
                     <td className="px-2 py-1.5 font-mono text-xs">
                       {r.rank}
@@ -272,6 +279,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                       <div className="truncate text-[11px] text-muted">
                         {r.player_name}
                         {d?.captain && <span> ({d.captain})</span>}
+                        {clickable && <span className="ml-1 opacity-60">›</span>}
                       </div>
                     </td>
                     <td className="px-1.5 py-1.5 text-right font-mono">
