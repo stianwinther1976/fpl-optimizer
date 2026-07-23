@@ -5,6 +5,7 @@ import Link from "next/link";
 import { api, FplApiError, loadTeamData, fmtRank, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
 import type { Element, EventLive } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
+import { projectAll } from "@/lib/xp";
 import PlayerModal from "./PlayerModal";
 import KpiHistoryModal, { type KpiMetric } from "./KpiHistoryModal";
 import Pitch from "./Pitch";
@@ -144,6 +145,13 @@ export default function Dashboard({
     for (const e of liveData?.elements ?? []) m.set(e.id, e.stats.total_points);
     return m;
   }, [liveData]);
+
+  // xP for the pitch view's "xP" mode (next gameweek).
+  const xpOf = useMemo(() => {
+    const nextEv = data?.bootstrap.events.find((e) => e.is_next)?.id ?? null;
+    if (!data || nextEv == null) return null;
+    return projectAll({ bootstrap: data.bootstrap, fixtures: data.fixtures, nextEvent: nextEv });
+  }, [data]);
 
   const liveMinutesOf = useMemo(() => {
     const m = new Map<number, number>();
@@ -405,6 +413,7 @@ export default function Dashboard({
                     element: p.element,
                     isCaptain: p.isCaptain,
                     isVice: p.isViceCaptain,
+                    xp: xpOf?.get(p.element.id)?.next,
                     live: liveData
                       ? {
                           points:
@@ -419,6 +428,7 @@ export default function Dashboard({
                   .sort((a, b) => a.pickPosition - b.pickPosition)
                   .map((p) => ({
                     element: p.element,
+                    xp: xpOf?.get(p.element.id)?.next,
                     live: liveData
                       ? { points: livePointsOf.get(p.element.id) ?? 0, final: gwFinished }
                       : undefined,

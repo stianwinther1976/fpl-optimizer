@@ -138,13 +138,15 @@ function PlayerCard({
             ) : (
               <>£{fmtPrice(el.now_cost)}</>
             )}
-            {p.xp != null && <span className="text-[#00ff87]"> · {p.xp.toFixed(1)}xp</span>}
+            {p.xp != null && !p.live && (
+              <span className="text-[#00ff87]"> · {p.xp.toFixed(1)}xp</span>
+            )}
           </>
         )}
         {info === "price" && <>£{fmtPrice(el.now_cost)}m</>}
         {info === "xp" && (
           <span className="text-[#00ff87]">
-            {p.xp != null ? `${p.xp.toFixed(1)} xp` : `£${fmtPrice(el.now_cost)}`}
+            {p.xp != null ? `${p.xp.toFixed(1)} xp` : "–"}
           </span>
         )}
         {info === "form" && <>Form {el.form}</>}
