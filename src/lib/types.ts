@@ -33,6 +33,8 @@ export interface Element {
   expected_assists: string;
   expected_goal_involvements: string;
   expected_goals_conceded: string;
+  /** Season points earned from defensive contributions (2025/26+ scoring) */
+  defensive_contribution?: number;
   ep_next: string | null;
   penalties_order?: number | null;
 }

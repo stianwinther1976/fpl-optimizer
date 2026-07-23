@@ -137,3 +137,45 @@ describe("optimize", () => {
     }
   });
 });
+
+describe("xp model — opponent strength & priors", () => {
+  it("continuous strength model: easier opponent yields higher xp", () => {
+    const b = makeMockBootstrap();
+    // Give teams a real strength spread so the continuous model activates.
+    b.teams.forEach((t, i) => {
+      t.strength_attack_home = 1000 + i * 15;
+      t.strength_attack_away = 980 + i * 15;
+      t.strength_defence_home = 1000 + i * 15;
+      t.strength_defence_away = 980 + i * 15;
+    });
+    const el = b.elements.find((e) => e.element_type === 3 && e.minutes > 1000)!;
+    const weakOpp = b.teams[19].id; // highest index = strongest per our loop? id 20 has +15*19
+    const strongOpp = b.teams[0].id;
+    const mkFx = (opp: number) => [{
+      id: 1, event: 11, team_h: el.team, team_a: opp,
+      team_h_difficulty: 3, team_a_difficulty: 3,
+      kickoff_time: null, finished: false, team_h_score: null, team_a_score: null,
+    }];
+    const vsWeak = projectAll({ bootstrap: b, fixtures: mkFx(strongOpp), nextEvent: 11, horizon: 1 }).get(el.id)!.next;
+    const vsStrong = projectAll({ bootstrap: b, fixtures: mkFx(weakOpp), nextEvent: 11, horizon: 1 }).get(el.id)!.next;
+    // team index 0 has LOWEST ratings (weakest), index 19 highest (strongest)
+    expect(vsWeak).toBeGreaterThan(vsStrong);
+  });
+
+  it("price prior kicks in for players with few minutes", () => {
+    const b = makeMockBootstrap();
+    const el = b.elements.find((e) => e.element_type === 3)!;
+    el.minutes = 90; // thin data
+    el.now_cost = 120; // premium price
+    const cheap = b.elements.find((e) => e.element_type === 3 && e.id !== el.id)!;
+    cheap.minutes = 90;
+    cheap.now_cost = 45;
+    // Force identical thin underlying data
+    cheap.form = el.form; cheap.points_per_game = el.points_per_game;
+    cheap.expected_goals = el.expected_goals; cheap.expected_assists = el.expected_assists;
+    cheap.ict_index = el.ict_index; cheap.ep_next = null; el.ep_next = null;
+    cheap.team = el.team;
+    const xp = projectAll({ bootstrap: b, fixtures: makeMockFixtures(), nextEvent: 11, horizon: 1 });
+    expect(xp.get(el.id)!.next).toBeGreaterThan(xp.get(cheap.id)!.next);
+  });
+});
