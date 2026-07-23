@@ -472,7 +472,12 @@ export default function Dashboard({
           delta={valueDelta}
           onClick={() => setKpiModal("value")}
         />
-        <Stat label="Free transfers" value={squad ? String(squad.freeTransfers) : "–"} />
+        <Stat
+          label="Free transfers"
+          value={squad ? String(squad.freeTransfers) : "–"}
+          sub={data.transfers.length > 0 ? `${data.transfers.length} made this season` : undefined}
+          onClick={() => setKpiModal("transfers")}
+        />
         <Stat
           label="Chips left"
           value={String(chipsLeft.length)}
@@ -483,6 +488,7 @@ export default function Dashboard({
                 }`
               : "None"
           }
+          onClick={() => setKpiModal("chips")}
         />
       </div>
 
