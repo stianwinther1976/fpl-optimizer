@@ -7,6 +7,11 @@ import { api, FplApiError, loadTeamData, fmtNum, fmtRank, DEMO_ENTRY_ID, type Te
 import type { Element, EntryEventPicks, EventLive } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
+import {
+  reconcileFinishedGws,
+  seedDemoCalibration,
+  snapshotPredictions,
+} from "@/lib/calibration";
 import PlayerModal from "./PlayerModal";
 import KpiHistoryModal, { type KpiMetric } from "./KpiHistoryModal";
 import Pitch from "./Pitch";
@@ -15,6 +20,7 @@ import StatsTable from "./StatsTable";
 import FixtureTicker from "./FixtureTicker";
 import LiveTab from "./LiveTab";
 import MiniLeague from "./MiniLeague";
+import ModelAccuracy from "./ModelAccuracy";
 import ThemeToggle from "./ThemeToggle";
 import { ErrorBox, Skeleton, Stat, type StatDelta } from "./ui";
 
@@ -137,6 +143,37 @@ export default function Dashboard({
     [data]
   );
 
+  // Self-learning loop: grade past predictions against actual points, fold
+  // the outcome into the calibration factors, then snapshot the (freshly
+  // calibrated) prediction for the upcoming GW so IT can be graded next.
+  const [calVersion, setCalVersion] = useState(0);
+  useEffect(() => {
+    if (!data) return;
+    let cancelled = false;
+    const demo = entryId === DEMO_ENTRY_ID;
+    (async () => {
+      if (demo) seedDemoCalibration();
+      const changed = await reconcileFinishedGws(demo, data.bootstrap, async (gw) => {
+        const live = await api.live(gw);
+        return new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
+      });
+      if (cancelled) return;
+      const nextEv = data.bootstrap.events.find((e) => e.is_next)?.id ?? null;
+      if (nextEv != null) {
+        const xp = projectAll({
+          bootstrap: data.bootstrap,
+          fixtures: data.fixtures,
+          nextEvent: nextEv,
+        });
+        snapshotPredictions(demo, nextEv, xp);
+      }
+      if (changed || demo) setCalVersion((v) => v + 1);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [data, entryId]);
+
   const currentEventObj = data?.bootstrap.events.find((e) => e.is_current) ?? null;
   const currentEvent = currentEventObj?.id ?? data?.squad?.currentEvent ?? null;
   const gwFinished =
@@ -192,12 +229,14 @@ export default function Dashboard({
     return m;
   }, [liveData]);
 
-  // xP for the pitch view's "xP" mode (next gameweek).
+  // xP for the pitch view's "xP" mode (next gameweek). calVersion re-projects
+  // after the calibration factors update.
   const xpOf = useMemo(() => {
     const nextEv = data?.bootstrap.events.find((e) => e.is_next)?.id ?? null;
     if (!data || nextEv == null) return null;
+    void calVersion;
     return projectAll({ bootstrap: data.bootstrap, fixtures: data.fixtures, nextEvent: nextEv });
-  }, [data]);
+  }, [data, calVersion]);
 
   const liveMinutesOf = useMemo(() => {
     const m = new Map<number, number>();
@@ -664,8 +703,10 @@ export default function Dashboard({
           </div>
         )}
         {visited.has("history") && (
-          <div hidden={tab !== "history"}>
+          <div hidden={tab !== "history"} className="space-y-4">
             <HistoryChart data={data} />
+            {/* key forces a re-read after the reconcile pass updates storage */}
+            <ModelAccuracy demo={entryId === DEMO_ENTRY_ID} key={calVersion} />
           </div>
         )}
       </div>

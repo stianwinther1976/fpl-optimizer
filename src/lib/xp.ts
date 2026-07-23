@@ -19,6 +19,7 @@
 //     a player's whole 5-GW horizon.
 
 import type { Bootstrap, Element, Fixture, Team } from "./types";
+import { activeCalibration, calibrationMultiplier } from "./calibration";
 
 export const XP_CONFIG = {
   horizon: 5, // number of future GWs to project
@@ -399,6 +400,7 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
   const lastEvent = events.length > 0 ? events[events.length - 1].id : 38;
   const st = buildStrengths(ctx.bootstrap, ctx.fixtures);
   const fxIndex = makeFixtureIndex(ctx.fixtures);
+  const cal = activeCalibration(); // self-learned correction from past GWs
   const result = new Map<number, PlayerXp>();
 
   for (const el of ctx.bootstrap.elements) {
@@ -425,6 +427,9 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
           gwXp = (1 - cfg.epNextWeight) * gwXp + cfg.epNextWeight * Math.max(0, ep) * fx.length;
         }
       }
+      // Calibration: multiply by the correction learned from grading our own
+      // past predictions against what actually happened.
+      gwXp *= calibrationMultiplier(cal, el.element_type);
       perGw.set(gw, gwXp);
     }
     let total = 0;
