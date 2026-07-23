@@ -26,12 +26,14 @@ export default function Error({
         >
           Try again
         </button>
-        <a
-          href="/"
-          className="rounded-lg border border-border-c bg-panel px-5 py-2.5 text-sm font-semibold hover:border-accent"
+        <button
+          type="button"
+          // Hard navigation on purpose: it fully resets whatever state broke.
+          onClick={() => window.location.assign("/")}
+          className="rounded-lg border border-border-c bg-panel px-5 py-2.5 text-sm font-semibold hover:border-accent active:border-accent"
         >
           Back to start
-        </a>
+        </button>
       </div>
       {error.digest && (
         <p className="mt-4 font-mono text-[11px] text-muted">ref: {error.digest}</p>
