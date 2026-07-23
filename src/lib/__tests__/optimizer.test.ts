@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { makeMockBootstrap, makeMockFixtures, makeMockOwned } from "./mockdata";
-import { optimize, pickBestXi, buildLaunchSquad } from "../optimizer";
-import { validateSquad } from "../rules";
+import { optimize, pickBestXi, buildLaunchSquad, planHorizon } from "../optimizer";
+import { MAX_FREE_TRANSFERS, validateSquad } from "../rules";
 import { projectAll } from "../xp";
 
 const bootstrap = makeMockBootstrap();
@@ -216,6 +216,85 @@ describe("xp model — DGW/blank GWs and discounting", () => {
     const p = [...xp.values()].find((v) => v.total > 5)!;
     expect(p.totalDiscounted).toBeLessThan(p.total);
     expect(p.totalDiscounted).toBeGreaterThan(p.total * 0.6);
+  });
+});
+
+describe("planHorizon (multi-GW sequenced planner)", () => {
+  const plan = planHorizon({
+    bootstrap,
+    fixtures,
+    owned,
+    bank: 20,
+    freeTransfers: 2,
+    nextEvent: 11,
+    horizon: 5,
+  });
+
+  it("produces one step per gameweek in the horizon", () => {
+    expect(plan.steps.map((s) => s.gw)).toEqual([11, 12, 13, 14, 15]);
+  });
+
+  it("every step's squad is legal and within budget", () => {
+    let bank = 20;
+    const ids = new Set(owned.map((o) => o.element.id));
+    const sellOf = new Map(owned.map((o) => [o.element.id, o.sellPrice]));
+    for (const st of plan.steps) {
+      for (const m of st.transfers) {
+        expect(ids.has(m.out.id)).toBe(true);
+        expect(ids.has(m.in.id)).toBe(false);
+        bank += (sellOf.get(m.out.id) ?? m.outSell) - m.in.now_cost;
+        ids.delete(m.out.id);
+        ids.add(m.in.id);
+        sellOf.set(m.in.id, m.in.now_cost);
+      }
+      expect(bank).toBeGreaterThanOrEqual(0);
+      expect(st.bankAfter).toBeGreaterThanOrEqual(0);
+      const els = bootstrap.elements.filter((e) => ids.has(e.id));
+      expect(
+        validateSquad(els.map((e) => ({ id: e.id, elementType: e.element_type, teamId: e.team })))
+      ).toEqual([]);
+      expect(st.transfers.length).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it("free transfers bank correctly (+1 per GW, capped, hits reset to 0)", () => {
+    let ft = 2;
+    for (const st of plan.steps) {
+      expect(st.ftBefore).toBe(ft);
+      const used = st.transfers.length;
+      const expectedHit = Math.max(0, used - ft) * 4;
+      expect(st.hit).toBe(expectedHit);
+      ft = Math.min(MAX_FREE_TRANSFERS, (expectedHit > 0 ? 0 : Math.max(0, ft - used)) + 1);
+    }
+  });
+
+  it("the plan never scores worse than doing nothing", () => {
+    expect(plan.totalXp).toBeGreaterThanOrEqual(plan.keepXp - 1e-9);
+    expect(plan.gainVsKeep).toBeGreaterThanOrEqual(-1e-9);
+  });
+});
+
+describe("xp model — recent starts", () => {
+  it("a player who lost his place projects lower; a new starter higher", () => {
+    const b = makeMockBootstrap();
+    const el = b.elements.find((e) => e.element_type === 3 && e.minutes > 1500)!;
+    const base = projectAll({ bootstrap: b, fixtures, nextEvent: 11, horizon: 3 });
+    const benched = projectAll({
+      bootstrap: b,
+      fixtures,
+      nextEvent: 11,
+      horizon: 3,
+      recentStarts: new Map([[el.id, 0]]), // started 0 of last 5
+    });
+    const nailed = projectAll({
+      bootstrap: b,
+      fixtures,
+      nextEvent: 11,
+      horizon: 3,
+      recentStarts: new Map([[el.id, 1]]), // started 5 of 5
+    });
+    expect(benched.get(el.id)!.total).toBeLessThan(base.get(el.id)!.total);
+    expect(nailed.get(el.id)!.total).toBeGreaterThanOrEqual(base.get(el.id)!.total);
   });
 });
 

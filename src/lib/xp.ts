@@ -80,6 +80,7 @@ export const XP_CONFIG = {
   typicalPriceM: { 1: 4.8, 2: 5.0, 3: 6.5, 4: 6.5 } as Record<number, number>,
   // Minutes model
   subProb: 0.15, // chance a non-starter comes off the bench
+  recentStartsWeight: 0.65, // last ~5 games vs season starts share
   // Availability recovery: how fast doubtful/injured players return to
   // fitness in later horizon GWs (geometric decay of the deficit)
   recoveryRate: 0.6,
@@ -106,6 +107,13 @@ export interface XpContext {
   fixtures: Fixture[];
   nextEvent: number;
   horizon?: number;
+  /**
+   * elementId -> share of the team's last ~5 games the player STARTED
+   * (from the element-summary endpoint). The best minutes predictor there is:
+   * a player who just became a nailed starter — or just lost his place —
+   * is priced correctly within a week instead of a month.
+   */
+  recentStarts?: Map<number, number>;
 }
 
 /** Fixtures for a team in a given event (0, 1 or 2 = DGW). */
@@ -163,6 +171,7 @@ interface StrengthTables {
   avgDefA: number;
   byTeam: Map<number, Team>;
   gamesByTeam: Map<number, number>; // finished fixtures per team
+  playedGws: number; // fallback when the fixtures list lacks finished games
 }
 
 function buildStrengths(bootstrap: Bootstrap, fixtures: Fixture[]): StrengthTables {
@@ -184,7 +193,8 @@ function buildStrengths(bootstrap: Bootstrap, fixtures: Fixture[]): StrengthTabl
     gamesByTeam.set(f.team_h, (gamesByTeam.get(f.team_h) ?? 0) + 1);
     gamesByTeam.set(f.team_a, (gamesByTeam.get(f.team_a) ?? 0) + 1);
   }
-  return { usable: spread > 40, avgAttH, avgAttA, avgDefH, avgDefA, byTeam, gamesByTeam };
+  const playedGws = bootstrap.events.filter((e) => e.finished).length;
+  return { usable: spread > 40, avgAttH, avgAttA, avgDefH, avgDefA, byTeam, gamesByTeam, playedGws };
 }
 
 /** Empirical-Bayes per-90 rate: season total shrunk toward a prior. */
@@ -253,20 +263,34 @@ interface MinutesModel {
 }
 
 /** Starts-based minutes model with a pre-season prior fallback. */
-function minutesModel(el: Element, teamGames: number): MinutesModel {
+function minutesModel(el: Element, teamGames: number, recentStartShare?: number): MinutesModel {
   const starts = el.starts ?? 0;
+  let mm: MinutesModel;
   if (teamGames > 0 && starts > 0) {
-    return {
+    mm = {
       pStart: clamp(starts / teamGames, 0, 1),
       minsPerStart: Math.min(90, el.minutes / starts),
       share: clamp(el.minutes / (teamGames * 90), 0, 1),
     };
-  }
-  if (teamGames > 0) {
+  } else if (teamGames > 0) {
     // Sub-only (or no data): low start odds, minutes share carries what we know.
-    return { pStart: 0, minsPerStart: 0, share: clamp(el.minutes / (teamGames * 90), 0, 1) };
+    mm = { pStart: 0, minsPerStart: 0, share: clamp(el.minutes / (teamGames * 90), 0, 1) };
+  } else {
+    return { pStart: 0.7, minsPerStart: 90, share: 0.7 }; // pre-season neutral prior
   }
-  return { pStart: 0.7, minsPerStart: 90, share: 0.7 }; // pre-season neutral prior
+  // Recency: what happened in the last ~5 team games outweighs the season
+  // average (a new nailed starter, a lost place, a returning injury).
+  if (recentStartShare != null) {
+    const w = XP_CONFIG.recentStartsWeight;
+    const pStart = clamp(w * recentStartShare + (1 - w) * mm.pStart, 0, 1);
+    const minsPerStart = mm.minsPerStart > 0 ? mm.minsPerStart : recentStartShare > 0 ? 75 : 0;
+    return {
+      pStart,
+      minsPerStart,
+      share: clamp((pStart * minsPerStart) / 90, 0, 1),
+    };
+  }
+  return mm;
 }
 
 /** xP for one player in one specific fixture. */
@@ -276,13 +300,12 @@ function fixtureXp(
   isHome: boolean,
   gwOffset: number,
   st: StrengthTables,
-  rates: Rates
+  rates: Rates,
+  mm: MinutesModel
 ): number {
   const cfg = XP_CONFIG;
   const avail = availabilityAt(el, gwOffset);
   if (avail === 0) return 0;
-  const teamGames = st.gamesByTeam.get(el.team) ?? 0;
-  const mm = minutesModel(el, teamGames);
   const p60 = avail * mm.pStart * (mm.minsPerStart >= 60 ? 1 : (mm.minsPerStart / 60) * 0.5);
   const pPlay = avail * Math.min(1, mm.pStart + cfg.subProb);
   const xMins = avail * Math.min(1, mm.share + 0.03); // attacking-minutes share
@@ -380,13 +403,18 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
 
   for (const el of ctx.bootstrap.elements) {
     const rates = playerRates(el);
+    const mm = minutesModel(
+      el,
+      st.gamesByTeam.get(el.team) ?? st.playedGws,
+      ctx.recentStarts?.get(el.id)
+    );
     const perGw = new Map<number, number>();
     for (let gw = ctx.nextEvent; gw < ctx.nextEvent + horizon && gw <= lastEvent; gw++) {
       const fx = fxIndex.get(gw)?.get(el.team) ?? [];
       let gwXp = 0;
       for (const f of fx) {
         const isHome = f.team_h === el.team;
-        gwXp += fixtureXp(el, f, isHome, gw - ctx.nextEvent, st, rates);
+        gwXp += fixtureXp(el, f, isHome, gw - ctx.nextEvent, st, rates, mm);
       }
       // Blend FPL's own projection for the immediate GW — fixture-count aware:
       // ep_next is close to a single-game estimate, so scale it for DGWs and

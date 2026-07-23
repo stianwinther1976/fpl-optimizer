@@ -1,8 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { TeamData } from "@/lib/fpl";
-import { optimize, buildLaunchSquad, type LaunchSquad, type OptimizerResult } from "@/lib/optimizer";
+import { fetchRecentStarts, type TeamData } from "@/lib/fpl";
+import {
+  optimize,
+  buildLaunchSquad,
+  planHorizon,
+  type LaunchSquad,
+  type OptimizerResult,
+  type SeasonPlan,
+} from "@/lib/optimizer";
+import { projectAll } from "@/lib/xp";
 import { fmtPrice, remainingChips, CHIP_LABELS } from "@/lib/rules";
 import { Badge, SectionTitle } from "./ui";
 import Pitch from "./Pitch";
@@ -49,6 +57,10 @@ export default function OptimizePanel({
   const [infoOpen, setInfoOpen] = useState<{ title: string; body: string[] } | null>(null);
   const [launch, setLaunch] = useState<LaunchSquad | null>(null);
   const [launchRunning, setLaunchRunning] = useState(false);
+  const [phase, setPhase] = useState<string | null>(null);
+  const [recentStarts, setRecentStarts] = useState<Map<number, number> | null>(null);
+  const [plan, setPlan] = useState<SeasonPlan | null>(null);
+  const [planning, setPlanning] = useState(false);
 
   const squad = data.squad;
   const teams = useMemo(
@@ -163,25 +175,81 @@ export default function OptimizePanel({
     squad.nextEvent
   );
 
-  function run() {
+  // Recent line-up data (element-summary) for owned players + the optimizer's
+  // realistic candidate pool. Fetched once and reused by both engines.
+  async function loadRecentStarts(): Promise<Map<number, number>> {
+    if (recentStarts) return recentStarts;
+    const prelim = projectAll({
+      bootstrap: data.bootstrap,
+      fixtures: data.fixtures,
+      nextEvent: squad!.nextEvent!,
+    });
+    const ids = new Set<number>(squad!.players.map((p) => p.element.id));
+    for (const t of [1, 2, 3, 4]) {
+      data.bootstrap.elements
+        .filter((e) => e.element_type === t && e.status !== "u")
+        .sort(
+          (a, b) =>
+            (prelim.get(b.id)?.totalDiscounted ?? 0) - (prelim.get(a.id)?.totalDiscounted ?? 0)
+        )
+        .slice(0, 15)
+        .forEach((e) => ids.add(e.id));
+    }
+    const map = await fetchRecentStarts([...ids], 5, 8, (done, total) =>
+      setPhase(`Checking recent line-ups… ${done}/${total}`)
+    );
+    setRecentStarts(map);
+    return map;
+  }
+
+  async function run() {
     setRunning(true);
-    // Let the spinner paint before the (CPU-bound) search starts.
-    setTimeout(() => {
-      try {
-        const res = optimize({
+    setPhase("Checking recent line-ups…");
+    try {
+      const recent = await loadRecentStarts();
+      setPhase("Simulating thousands of squad combinations…");
+      // Let the progress text paint before the (CPU-bound) search starts.
+      await new Promise((r) => setTimeout(r, 30));
+      const res = optimize({
+        bootstrap: data.bootstrap,
+        fixtures: data.fixtures,
+        owned: squad!.players,
+        bank: squad!.bank,
+        freeTransfers: squad!.freeTransfers,
+        nextEvent: squad!.nextEvent!,
+        horizon,
+        recentStarts: recent,
+      });
+      setResult(res);
+    } finally {
+      setRunning(false);
+      setPhase(null);
+    }
+  }
+
+  async function runPlan() {
+    setPlanning(true);
+    setPhase("Checking recent line-ups…");
+    try {
+      const recent = await loadRecentStarts();
+      setPhase("Planning six gameweeks ahead…");
+      await new Promise((r) => setTimeout(r, 30));
+      setPlan(
+        planHorizon({
           bootstrap: data.bootstrap,
           fixtures: data.fixtures,
           owned: squad!.players,
           bank: squad!.bank,
           freeTransfers: squad!.freeTransfers,
           nextEvent: squad!.nextEvent!,
-          horizon,
-        });
-        setResult(res);
-      } finally {
-        setRunning(false);
-      }
-    }, 30);
+          horizon: 6,
+          recentStarts: recent,
+        })
+      );
+    } finally {
+      setPlanning(false);
+      setPhase(null);
+    }
   }
 
   return (
@@ -309,15 +377,113 @@ export default function OptimizePanel({
         <div className="card p-6 text-sm text-muted">
           Hit “Optimize team” to compute the best XI, transfer plans, captaincy and chip
           advice for GW{squad.nextEvent}, based on your squad from GW{squad.currentEvent}.
+          Projections weigh who actually started your rivals&apos; last five matches, not just
+          season averages.
         </div>
       )}
 
-      {running && (
+      {(running || planning) && (
         <div className="card flex items-center gap-3 p-6 text-sm text-muted">
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-          Simulating thousands of squad combinations…
+          {phase ?? "Working…"}
         </div>
       )}
+
+      {/* Multi-GW planner: when to move, not just what to move */}
+      <div>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <SectionTitle>🗓️ Multi-GW plan</SectionTitle>
+          <button
+            type="button"
+            onClick={runPlan}
+            disabled={planning || running}
+            className="rounded-lg border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent hover:bg-accent/20 active:bg-accent/20 disabled:opacity-50"
+          >
+            {planning ? "Planning…" : plan ? "Re-plan 6 GWs" : "Plan next 6 GWs"}
+          </button>
+        </div>
+        {!plan && !planning && (
+          <p className="mt-2 text-sm text-muted">
+            Sequences your transfers across the next six deadlines — when to bank a free
+            transfer, when to double up, and when a −4 actually pays for itself.
+          </p>
+        )}
+        {plan && (
+          <div className="mt-3 space-y-3">
+            <div className="card flex flex-wrap items-center gap-x-6 gap-y-1 p-4 text-sm">
+              <div>
+                <span className="text-muted">Plan value:</span>{" "}
+                <b className="text-accent">
+                  {plan.gainVsKeep >= 0 ? "+" : ""}
+                  {plan.gainVsKeep.toFixed(1)} xp
+                </b>{" "}
+                <span className="text-muted">vs never transferring</span>
+              </div>
+              {plan.totalHits > 0 ? (
+                <div className="text-danger">−{plan.totalHits} pts in hits (already priced in)</div>
+              ) : (
+                <div className="text-muted">No hits needed</div>
+              )}
+            </div>
+            {plan.steps.map((st) => (
+              <div key={st.gw} className="card p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-semibold">
+                    GW{st.gw}
+                    {st.note && (
+                      <span className="ml-2 rounded bg-accent-2/15 px-1.5 py-0.5 text-[11px] font-semibold text-accent-2">
+                        {st.note}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted">
+                    {st.ftBefore} FT{st.ftBefore === 1 ? "" : "s"} available · bank £
+                    {fmtPrice(st.bankAfter)}m after
+                    {st.hit > 0 && <span className="text-danger"> · −{st.hit} hit</span>}
+                  </div>
+                </div>
+                {st.transfers.length === 0 ? (
+                  <div className="mt-2 text-sm text-muted">
+                    💤 No transfer — bank the free transfer
+                    {st.ftBefore < 5 ? ` (${Math.min(5, st.ftBefore + 1)} saved for later)` : " (already at the 5-FT cap)"}
+                    .
+                  </div>
+                ) : (
+                  <div className="mt-2 space-y-1.5">
+                    {st.transfers.map((m, i) => (
+                      <div key={i} className="flex flex-wrap items-center gap-x-2 rounded-lg bg-panel-2 px-3 py-1.5 text-sm">
+                        <button
+                          type="button"
+                          onClick={onSelect ? () => onSelect(m.out) : undefined}
+                          className="text-danger hover:underline"
+                        >
+                          {m.out.web_name} £{fmtPrice(m.outSell)}m
+                        </button>
+                        <span className="text-muted">→</span>
+                        <button
+                          type="button"
+                          onClick={onSelect ? () => onSelect(m.in) : undefined}
+                          className="text-accent hover:underline"
+                        >
+                          {m.in.web_name} ({teams.get(m.in.team)?.short_name}) £{fmtPrice(m.inCost)}m
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="mt-2 text-xs text-muted">
+                  XI projects <b className="text-foreground">{st.xi.totalXp.toFixed(1)} pts</b>
+                  {st.xi.captain && <> · captain {st.xi.captain.element.web_name}</>}
+                </div>
+              </div>
+            ))}
+            <p className="text-xs text-muted">
+              The plan re-optimizes every time prices, injuries or fixtures change — treat later
+              gameweeks as direction, not gospel, and re-plan each week.
+            </p>
+          </div>
+        )}
+      </div>
 
       {result && (
         <>

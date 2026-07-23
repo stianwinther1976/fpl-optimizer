@@ -3,7 +3,7 @@
 // transfer combinations (documented in README). Fast enough to run in the browser.
 
 import type { Bootstrap, Element, ElementType, Fixture, OwnedPlayer } from "./types";
-import { MAX_PER_CLUB, TRANSFER_HIT, VALID_FORMATIONS } from "./rules";
+import { MAX_FREE_TRANSFERS, MAX_PER_CLUB, TRANSFER_HIT, VALID_FORMATIONS } from "./rules";
 import { makeFixtureIndex, projectAll, XP_CONFIG, type PlayerXp, type XpContext } from "./xp";
 
 export interface XiSlot {
@@ -149,6 +149,8 @@ export interface OptimizerInput {
   beamWidth?: number; // default 8
   /** Reuse an already-computed projection (must match nextEvent/horizon). */
   precomputedXp?: Map<number, PlayerXp>;
+  /** Recent start share per element (see XpContext.recentStarts). */
+  recentStarts?: Map<number, number>;
 }
 
 export interface OptimizerResult {
@@ -176,7 +178,7 @@ export function optimize(input: OptimizerInput): OptimizerResult {
   const candN = input.candidatesPerPosition ?? 22;
   const beamWidth = input.beamWidth ?? 8;
 
-  const ctx: XpContext = { bootstrap, fixtures, nextEvent, horizon };
+  const ctx: XpContext = { bootstrap, fixtures, nextEvent, horizon, recentStarts: input.recentStarts };
   const xp = input.precomputedXp ?? projectAll(ctx);
   const lastEvent = bootstrap.events.length > 0 ? bootstrap.events[bootstrap.events.length - 1].id : 38;
   const gws: number[] = [];
@@ -474,4 +476,265 @@ function dreamSquadWithinValue(
   budget: number
 ): Element[] {
   return buildSquadWithinBudget(elements, xp, budget).squad;
+}
+
+// ---------------------------------------------------------------------------
+// Multi-gameweek sequenced planner
+// ---------------------------------------------------------------------------
+// Answers "WHEN should I make which transfer?", not just "what should I do
+// now": bank a free transfer this week, make the double move when the
+// fixtures swing, take a hit only when it pays. Beam search over per-GW
+// decisions (0..2 transfers per GW) with official FT banking (max 5) and
+// -4 hits, scored by discounted best-XI xP across the horizon.
+
+export interface GwPlanStep {
+  gw: number;
+  transfers: TransferMove[];
+  ftBefore: number; // free transfers available going into this GW
+  hit: number; // points paid this GW
+  bankAfter: number; // tenths
+  xi: BestXi; // best XI for this GW after the moves
+  note?: string; // e.g. "double gameweek"
+}
+
+export interface SeasonPlan {
+  steps: GwPlanStep[];
+  totalXp: number; // discounted XI xp over the horizon, hits subtracted
+  totalHits: number;
+  keepXp: number; // same score for doing nothing all horizon
+  gainVsKeep: number;
+}
+
+interface PlanState {
+  players: { element: Element; sell: number }[];
+  bank: number;
+  ft: number;
+  score: number; // accumulated discounted xp minus hits (played GWs so far)
+  steps: { gw: number; moves: TransferMove[]; ftBefore: number; hit: number; bankAfter: number }[];
+}
+
+export interface PlannerInput {
+  bootstrap: Bootstrap;
+  fixtures: Fixture[];
+  owned: OwnedPlayer[];
+  bank: number;
+  freeTransfers: number;
+  nextEvent: number;
+  horizon?: number; // default 6
+  candidatesPerPosition?: number; // default 10
+  beamWidth?: number; // default 6
+  singlesPerState?: number; // default 8
+  precomputedXp?: Map<number, PlayerXp>;
+  recentStarts?: Map<number, number>;
+}
+
+export function planHorizon(input: PlannerInput): SeasonPlan {
+  const { bootstrap, fixtures, owned, bank, freeTransfers, nextEvent } = input;
+  const horizon = input.horizon ?? 6;
+  const candN = input.candidatesPerPosition ?? 10;
+  const beamWidth = input.beamWidth ?? 6;
+  const singlesN = input.singlesPerState ?? 8;
+
+  const xp =
+    input.precomputedXp ??
+    projectAll({ bootstrap, fixtures, nextEvent, horizon, recentStarts: input.recentStarts });
+  const lastEvent =
+    bootstrap.events.length > 0 ? bootstrap.events[bootstrap.events.length - 1].id : 38;
+  const gws: number[] = [];
+  for (let g = nextEvent; g < nextEvent + horizon && g <= lastEvent; g++) gws.push(g);
+  const decayAt = (gw: number) => Math.pow(XP_CONFIG.gwDecay, gw - nextEvent);
+  const fxIndex = makeFixtureIndex(fixtures);
+
+  // Global candidate pool per position (best remaining-horizon players).
+  const candidates = new Map<ElementType, Element[]>();
+  for (const t of [1, 2, 3, 4] as ElementType[]) {
+    candidates.set(
+      t,
+      bootstrap.elements
+        .filter(
+          (e) => e.element_type === t && e.status !== "u" && (xp.get(e.id)?.total ?? 0) > 0
+        )
+        .sort(
+          (a, b) => (xp.get(b.id)?.totalDiscounted ?? 0) - (xp.get(a.id)?.totalDiscounted ?? 0)
+        )
+        .slice(0, candN)
+    );
+  }
+
+  // Remaining-horizon xp of a player from a given GW on (discounted).
+  const restXp = (id: number, fromGw: number): number => {
+    const p = xp.get(id);
+    if (!p) return 0;
+    let s = 0;
+    for (const [g, v] of p.perGw) if (g >= fromGw) s += v * decayAt(g);
+    return s;
+  };
+
+  const xiAt = (players: { element: Element }[], gw: number): BestXi =>
+    pickBestXi(players.map((p) => p.element), (id) => xp.get(id)?.perGw.get(gw) ?? 0);
+
+  // Future potential of a squad over remaining GWs (for beam ranking only).
+  const futureScore = (players: { element: Element }[], fromIdx: number): number => {
+    let s = 0;
+    for (let i = fromIdx; i < gws.length; i++) s += xiAt(players, gws[i]).totalXp * decayAt(gws[i]);
+    return s;
+  };
+
+  const applyMove = (
+    state: PlanState,
+    moves: TransferMove[]
+  ): { players: PlanState["players"]; bank: number } | null => {
+    let players = state.players;
+    let bk = state.bank;
+    for (const m of moves) {
+      const out = players.find((p) => p.element.id === m.out.id);
+      if (!out) return null;
+      if (players.some((p) => p.element.id === m.in.id)) return null;
+      bk = bk + out.sell - m.in.now_cost;
+      if (bk < 0) return null;
+      players = players
+        .filter((p) => p.element.id !== m.out.id)
+        .concat([{ element: m.in, sell: m.in.now_cost }]);
+    }
+    if (!clubCountOk(players.map((p) => p.element))) return null;
+    return { players, bank: bk };
+  };
+
+  let beam: PlanState[] = [
+    {
+      players: owned.map((o) => ({ element: o.element, sell: o.sellPrice })),
+      bank,
+      ft: freeTransfers,
+      score: 0,
+      steps: [],
+    },
+  ];
+  // Baseline: never transfer.
+  const keepXp = futureScore(beam[0].players, 0);
+
+  for (let gi = 0; gi < gws.length; gi++) {
+    const gw = gws[gi];
+    const next: { s: PlanState; rank: number }[] = [];
+    const seen = new Set<string>();
+
+    for (const state of beam) {
+      // Candidate single moves for THIS state, ranked by remaining-horizon gain.
+      const singles: TransferMove[] = [];
+      for (const outP of state.players) {
+        const pool = candidates.get(outP.element.element_type) ?? [];
+        for (const inEl of pool) {
+          if (inEl.id === outP.element.id) continue;
+          if (state.players.some((p) => p.element.id === inEl.id)) continue;
+          if (state.bank + outP.sell - inEl.now_cost < 0) continue;
+          singles.push({ out: outP.element, outSell: outP.sell, in: inEl, inCost: inEl.now_cost });
+        }
+      }
+      singles.sort(
+        (a, b) =>
+          restXp(b.in.id, gw) - restXp(b.out.id, gw) - (restXp(a.in.id, gw) - restXp(a.out.id, gw))
+      );
+      const topSingles = singles.slice(0, singlesN);
+
+      // Move sets to evaluate: none, top singles, pairs of the top few singles.
+      const moveSets: TransferMove[][] = [[]];
+      for (const s of topSingles) moveSets.push([s]);
+      const pairBase = topSingles.slice(0, 5);
+      for (let i = 0; i < pairBase.length; i++) {
+        for (let j = i + 1; j < pairBase.length; j++) {
+          const a = pairBase[i];
+          const b = pairBase[j];
+          if (a.out.id === b.out.id || a.in.id === b.in.id) continue;
+          if (a.in.id === b.out.id || b.in.id === a.out.id) continue;
+          moveSets.push([a, b]);
+        }
+      }
+
+      for (const moves of moveSets) {
+        const applied = applyMove(state, moves);
+        if (!applied) continue;
+        const used = moves.length;
+        const hit = Math.max(0, used - state.ft) * TRANSFER_HIT;
+        // FT rule: hits mean all FTs are gone; otherwise subtract, then +1 (cap 5).
+        const ftAfter = Math.min(
+          MAX_FREE_TRANSFERS,
+          (hit > 0 ? 0 : Math.max(0, state.ft - used)) + 1
+        );
+        const xi = xiAt(applied.players, gw);
+        const gwScore = xi.totalXp * decayAt(gw) - hit;
+        const key =
+          applied.players
+            .map((p) => p.element.id)
+            .sort((a, b) => a - b)
+            .join(",") + `|${state.ft}-${used}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const s: PlanState = {
+          players: applied.players,
+          bank: applied.bank,
+          ft: ftAfter,
+          score: state.score + gwScore,
+          steps: [
+            ...state.steps,
+            { gw, moves, ftBefore: state.ft, hit, bankAfter: applied.bank },
+          ],
+        };
+        next.push({ s, rank: s.score + futureScore(applied.players, gi + 1) });
+      }
+    }
+
+    next.sort((a, b) => b.rank - a.rank);
+    beam = next.slice(0, beamWidth).map((n) => n.s);
+    if (beam.length === 0) break;
+  }
+
+  const best = beam[0];
+  const steps: GwPlanStep[] = best.steps.map((st) => {
+    const squadAt = reconstructSquad(owned, best.steps, st.gw);
+    const byTeam = fxIndex.get(st.gw);
+    let note: string | undefined;
+    if (byTeam) {
+      let dbl = 0;
+      let blank = 0;
+      for (const p of squadAt) {
+        const n = byTeam.get(p.element.team)?.length ?? 0;
+        if (n >= 2) dbl++;
+        else if (n === 0) blank++;
+      }
+      if (dbl > 0) note = `double gameweek for ${dbl} of your players`;
+      else if (blank >= 3) note = `${blank} of your players blank`;
+    }
+    return {
+      gw: st.gw,
+      transfers: st.moves,
+      ftBefore: st.ftBefore,
+      hit: st.hit,
+      bankAfter: st.bankAfter,
+      xi: xiAt(squadAt, st.gw),
+      note,
+    };
+  });
+  const totalHits = steps.reduce((s, st) => s + st.hit, 0);
+  return {
+    steps,
+    totalXp: best.score,
+    totalHits,
+    keepXp,
+    gainVsKeep: best.score - keepXp,
+  };
+}
+
+/** Squad composition after all planned moves up to AND including `gw`. */
+function reconstructSquad(
+  owned: OwnedPlayer[],
+  steps: { gw: number; moves: TransferMove[] }[],
+  gw: number
+): { element: Element }[] {
+  let players: { element: Element }[] = owned.map((o) => ({ element: o.element }));
+  for (const st of steps) {
+    if (st.gw > gw) break;
+    for (const m of st.moves) {
+      players = players.filter((p) => p.element.id !== m.out.id).concat([{ element: m.in }]);
+    }
+  }
+  return players;
 }

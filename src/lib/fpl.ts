@@ -70,6 +70,18 @@ async function get<T>(path: string): Promise<T> {
   return promise as Promise<T>;
 }
 
+export interface ElementSummary {
+  history: {
+    element: number;
+    round: number;
+    minutes: number;
+    starts?: number;
+    total_points: number;
+    opponent_team: number;
+    was_home: boolean;
+  }[];
+}
+
 export const api = {
   bootstrap: () => get<Bootstrap>("bootstrap-static/"),
   fixtures: () => get<Fixture[]>("fixtures/"),
@@ -80,7 +92,44 @@ export const api = {
   live: (gw: number) => get<EventLive>(`event/${gw}/live/`),
   league: (id: number, page = 1) =>
     get<LeagueStandings>(`leagues-classic/${id}/standings/?page_standings=${page}`),
+  elementSummary: (id: number) => get<ElementSummary>(`element-summary/${id}/`),
 };
+
+/**
+ * Recent start share for a set of players: fraction of each player's last
+ * `lastN` recorded rounds they STARTED (element-summary endpoint). Fetched
+ * with limited concurrency; failures are simply left out of the map.
+ */
+export async function fetchRecentStarts(
+  ids: number[],
+  lastN = 5,
+  concurrency = 8,
+  onProgress?: (done: number, total: number) => void
+): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  const queue = [...new Set(ids)];
+  let done = 0;
+  const worker = async () => {
+    for (;;) {
+      const id = queue.shift();
+      if (id == null) return;
+      try {
+        const s = await api.elementSummary(id);
+        const rows = s.history.slice(-lastN);
+        if (rows.length > 0 && rows.some((r) => r.starts != null)) {
+          const started = rows.filter((r) => (r.starts ?? 0) > 0).length;
+          out.set(id, started / rows.length);
+        }
+      } catch {
+        // no data — season model carries on alone
+      }
+      done++;
+      onProgress?.(done, queue.length + done);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+  return out;
+}
 
 export interface TeamData {
   bootstrap: Bootstrap;

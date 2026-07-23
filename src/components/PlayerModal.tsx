@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { api, type ElementSummary } from "@/lib/fpl";
 import type { Element, EventLive, Fixture, Team } from "@/lib/types";
 import { fmtPrice, POSITION_NAMES } from "@/lib/rules";
 import { teamFixtures } from "@/lib/xp";
@@ -72,6 +74,25 @@ export default function PlayerModal({
     liveEl?.explain?.flatMap((fx) => fx.stats).filter((s) => s.points !== 0 || s.identifier === "minutes") ??
     [];
   const total = liveEl?.stats.total_points ?? null;
+
+  // Last five recorded gameweeks (lazy — one small request per opened player).
+  const [recent, setRecent] = useState<ElementSummary["history"] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset while the new player's data loads
+    setRecent(null);
+    api
+      .elementSummary(element.id)
+      .then((s) => {
+        if (!cancelled) setRecent([...s.history].slice(-5).reverse());
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [element.id]);
+  const startsKnown = recent?.some((r) => r.starts != null) ?? false;
+  const startedCount = recent?.filter((r) => (r.starts ?? 0) > 0).length ?? 0;
 
   // Set-piece duty (public API: penalties + corner/free-kick order)
   const duties: string[] = [];
@@ -149,6 +170,40 @@ export default function PlayerModal({
             ) : (
               <p className="mt-2 text-sm text-muted">No point-scoring actions yet.</p>
             )}
+          </div>
+        )}
+
+        {/* Recent gameweeks: the strongest minutes signal there is */}
+        {recent && recent.length > 0 && (
+          <div className="mt-4">
+            <div className="text-sm font-semibold">
+              Recent gameweeks
+              {startsKnown && (
+                <span className="ml-2 font-normal text-muted">
+                  started {startedCount} of last {recent.length}
+                </span>
+              )}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {recent.map((r) => (
+                <div
+                  key={r.round}
+                  className="flex items-center gap-1.5 rounded-lg bg-panel-2 px-2 py-1.5 text-xs"
+                >
+                  <span className="text-muted">GW{r.round}</span>
+                  <span className={r.minutes === 0 ? "text-danger" : "text-muted"}>
+                    {r.minutes}&apos;
+                  </span>
+                  <span
+                    className={`font-mono font-bold ${
+                      r.total_points >= 6 ? "text-accent" : r.total_points <= 1 ? "text-muted" : ""
+                    }`}
+                  >
+                    {r.total_points}p
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
