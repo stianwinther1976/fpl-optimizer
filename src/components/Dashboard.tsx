@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { api, FplApiError, loadTeamData, fmtRank, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
-import type { Element, EventLive } from "@/lib/types";
+import type { Element, EntryEventPicks, EventLive } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
 import PlayerModal from "./PlayerModal";
@@ -93,6 +93,11 @@ export default function Dashboard({
   const [liveData, setLiveData] = useState<EventLive | null>(null);
   const [selected, setSelected] = useState<Element | null>(null);
   const [kpiModal, setKpiModal] = useState<KpiMetric | null>(null);
+  // Time machine: view the squad exactly as it was in an earlier gameweek.
+  const [viewGw, setViewGw] = useState<number | null>(null);
+  const [hist, setHist] = useState<{ gw: number; picks: EntryEventPicks; live: EventLive } | null>(null);
+  const [histError, setHistError] = useState<string | null>(null);
+  const [histLoading, setHistLoading] = useState(false);
   const [tab, setTab] = useState<TabKey>(
     TABS.some(([k]) => k === initialTab) ? (initialTab as TabKey) : "team"
   );
@@ -139,6 +144,33 @@ export default function Dashboard({
       cancelled = true;
     };
   }, [currentEvent]);
+
+  // Load a past gameweek's picks + points when the time machine is used.
+  useEffect(() => {
+    if (viewGw == null || data == null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing the time machine when leaving it
+      setHist(null);
+      setHistError(null);
+      return;
+    }
+    let cancelled = false;
+    setHistLoading(true);
+    setHistError(null);
+    Promise.all([api.picks(entryId, viewGw), api.live(viewGw)])
+      .then(([picks, live]) => {
+        if (!cancelled) setHist({ gw: viewGw, picks, live });
+      })
+      .catch(() => {
+        if (!cancelled)
+          setHistError(
+            "Couldn't load that gameweek — FPL may have retired the data (last season's rounds disappear over the summer reset)."
+          );
+      })
+      .finally(() => !cancelled && setHistLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [viewGw, entryId, data]);
 
   const livePointsOf = useMemo(() => {
     const m = new Map<number, number>();
@@ -406,6 +438,104 @@ export default function Dashboard({
         {tab === "team" &&
           (squad ? (
             <div className="space-y-4">
+              {/* Gameweek time machine */}
+              {history.current.length > 1 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="text-sm text-muted">Gameweek:</label>
+                  <select
+                    value={viewGw ?? "latest"}
+                    onChange={(e) =>
+                      setViewGw(e.target.value === "latest" ? null : parseInt(e.target.value))
+                    }
+                    className="rounded-lg border border-border-c bg-panel-2 px-3 py-1.5 text-sm"
+                  >
+                    <option value="latest">Latest (GW{squad.currentEvent})</option>
+                    {[...history.current]
+                      .map((r) => r.event)
+                      .filter((ev) => ev !== squad.currentEvent)
+                      .sort((a, b) => b - a)
+                      .map((ev) => (
+                        <option key={ev} value={ev}>
+                          GW{ev}
+                        </option>
+                      ))}
+                  </select>
+                  {viewGw != null && (
+                    <button
+                      onClick={() => setViewGw(null)}
+                      className="rounded-lg border border-border-c bg-panel px-3 py-1.5 text-sm hover:border-accent"
+                    >
+                      ← Back to latest
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {viewGw != null ? (
+                histLoading ? (
+                  <Skeleton className="h-96" />
+                ) : histError ? (
+                  <ErrorBox message={histError} />
+                ) : hist ? (
+                  (() => {
+                    const elementById = new Map(data.bootstrap.elements.map((e) => [e.id, e]));
+                    const ptsOf = new Map(hist.live.elements.map((e) => [e.id, e.stats.total_points]));
+                    const toPlayer = (pk: (typeof hist.picks.picks)[number]) => {
+                      const el = elementById.get(pk.element);
+                      if (!el) return null;
+                      return {
+                        element: el,
+                        isCaptain: pk.is_captain,
+                        isVice: pk.is_vice_captain,
+                        live: {
+                          points:
+                            (ptsOf.get(pk.element) ?? 0) * (pk.multiplier > 1 ? pk.multiplier : 1),
+                          final: true,
+                        },
+                      };
+                    };
+                    const starters = hist.picks.picks
+                      .filter((p) => p.position <= 11)
+                      .map(toPlayer)
+                      .filter((x): x is NonNullable<typeof x> => x != null);
+                    const bench = hist.picks.picks
+                      .filter((p) => p.position > 11)
+                      .sort((a, b) => a.position - b.position)
+                      .map(toPlayer)
+                      .filter((x): x is NonNullable<typeof x> => x != null);
+                    const eh = hist.picks.entry_history;
+                    return (
+                      <>
+                        <Pitch
+                          starters={starters}
+                          bench={bench}
+                          teams={teams}
+                          fixtures={data.fixtures}
+                          nextEvent={null}
+                          onSelect={setSelected}
+                          cornerTotal={{
+                            title: `GW${hist.gw}`,
+                            points: eh.points - eh.event_transfers_cost,
+                            final: true,
+                          }}
+                        />
+                        <p className="text-xs text-muted">
+                          GW{hist.gw}: {eh.points - eh.event_transfers_cost} pts
+                          {eh.event_transfers_cost > 0 && ` (after −${eh.event_transfers_cost} hit)`}
+                          {" · "}bench {eh.points_on_bench} pts
+                          {eh.rank != null && ` · GW rank ${eh.rank.toLocaleString("en-GB")}`}
+                          {" · "}
+                          {eh.event_transfers} transfer{eh.event_transfers === 1 ? "" : "s"} made
+                          {hist.picks.active_chip &&
+                            ` · chip: ${hist.picks.active_chip}`}{" "}
+                          — tap a player for that week&apos;s breakdown.
+                        </p>
+                      </>
+                    );
+                  })()
+                ) : null
+              ) : (
+                <>
               <Pitch
                 starters={squad.players
                   .filter((p) => p.pickPosition <= 11)
@@ -466,6 +596,8 @@ export default function Dashboard({
                   : "Tap a player for details."}{" "}
                 Selling prices follow the official 50%-of-profit rule.
               </p>
+                </>
+              )}
             </div>
           ) : (
             <div className="card p-6 text-muted">
@@ -488,9 +620,9 @@ export default function Dashboard({
         <PlayerModal
           element={selected}
           team={teams.get(selected.team)}
-          live={liveData}
-          event={currentEvent}
-          gwFinished={gwFinished}
+          live={tab === "team" && hist ? hist.live : liveData}
+          event={tab === "team" && hist ? hist.gw : currentEvent}
+          gwFinished={tab === "team" && hist ? true : gwFinished}
           onClose={() => setSelected(null)}
           fixtures={data.fixtures}
           teams={teams}
