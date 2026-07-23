@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Element, Fixture, Team } from "@/lib/types";
 import { fmtPrice } from "@/lib/rules";
 import { teamFixtures } from "@/lib/xp";
@@ -21,6 +21,17 @@ const TYPE_COLORS: Record<number, string> = {
   2: "bg-sky-500",
   3: "bg-emerald-500",
   4: "bg-rose-500",
+};
+
+// What the line under each player shows (FPL-style squad view options).
+export type PitchInfoMode = "auto" | "price" | "xp" | "form" | "own" | "fdr";
+
+const FDR_BADGE: Record<number, string> = {
+  1: "bg-emerald-600 text-white",
+  2: "bg-emerald-500/90 text-black",
+  3: "bg-zinc-500 text-white",
+  4: "bg-rose-500/90 text-white",
+  5: "bg-rose-700 text-white",
 };
 
 function statusFlag(el: Element): string | null {
@@ -72,12 +83,14 @@ function PlayerCard({
   fixtures,
   nextEvent,
   onSelect,
+  info = "auto",
 }: {
   p: PitchPlayer;
   teams: Map<number, Team>;
   fixtures: Fixture[];
   nextEvent: number | null;
   onSelect?: (el: Element) => void;
+  info?: PitchInfoMode;
 }) {
   const el = p.element;
   const team = teams.get(el.team);
@@ -116,14 +129,49 @@ function PlayerCard({
         {el.web_name}
       </div>
       <div className="truncate rounded-b bg-black/50 px-1 py-0.5 text-[10px] text-zinc-300">
-        {p.live ? (
-          <span className={`font-bold ${p.live.final ? "text-zinc-100" : "text-[#00ff87]"}`}>
-            {p.live.points} pts
-          </span>
-        ) : (
-          <>£{fmtPrice(el.now_cost)}</>
+        {info === "auto" && (
+          <>
+            {p.live ? (
+              <span className={`font-bold ${p.live.final ? "text-zinc-100" : "text-[#00ff87]"}`}>
+                {p.live.points} pts
+              </span>
+            ) : (
+              <>£{fmtPrice(el.now_cost)}</>
+            )}
+            {p.xp != null && <span className="text-[#00ff87]"> · {p.xp.toFixed(1)}xp</span>}
+          </>
         )}
-        {p.xp != null && <span className="text-[#00ff87]"> · {p.xp.toFixed(1)}xp</span>}
+        {info === "price" && <>£{fmtPrice(el.now_cost)}m</>}
+        {info === "xp" && (
+          <span className="text-[#00ff87]">
+            {p.xp != null ? `${p.xp.toFixed(1)} xp` : `£${fmtPrice(el.now_cost)}`}
+          </span>
+        )}
+        {info === "form" && <>Form {el.form}</>}
+        {info === "own" && <>{el.selected_by_percent}%</>}
+        {info === "fdr" &&
+          (() => {
+            const fdrs =
+              nextEvent != null
+                ? teamFixtures(fixtures, el.team, nextEvent).map((f) =>
+                    f.team_h === el.team ? f.team_h_difficulty : f.team_a_difficulty
+                  )
+                : [];
+            return fdrs.length === 0 ? (
+              <>BLANK</>
+            ) : (
+              <span className="inline-flex gap-0.5">
+                {fdrs.map((d, i) => (
+                  <span
+                    key={i}
+                    className={`rounded px-1 font-bold ${FDR_BADGE[d] ?? FDR_BADGE[3]}`}
+                  >
+                    {d}
+                  </span>
+                ))}
+              </span>
+            );
+          })()}
       </div>
       {fx && (
         <div className="truncate text-[9px] text-zinc-400" title={fx}>
@@ -161,9 +209,38 @@ export default function Pitch({
   const fwd = starters.filter((p) => p.element.element_type === 4);
   rows.push(gk, def, mid, fwd);
 
+  // FPL-style "view as" selector for the info line under each player.
+  const [info, setInfo] = useState<PitchInfoMode>("auto");
+  useEffect(() => {
+    const saved = localStorage.getItem("pitch-info");
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring persisted preference on mount
+    if (saved) setInfo(saved as PitchInfoMode);
+  }, []);
+  function changeInfo(v: PitchInfoMode) {
+    setInfo(v);
+    try {
+      localStorage.setItem("pitch-info", v);
+    } catch {}
+  }
+
   return (
     <div>
       <div className="pitch-bg relative rounded-xl px-1 py-3 sm:p-6">
+        <div className="absolute right-2 top-2 z-10">
+          <select
+            value={info}
+            onChange={(e) => changeInfo(e.target.value as PitchInfoMode)}
+            aria-label="What to show under each player"
+            className="rounded-lg border-none bg-black/70 px-2 py-1.5 text-[11px] font-semibold text-white"
+          >
+            <option value="auto">Points</option>
+            <option value="price">Price</option>
+            <option value="xp">xP</option>
+            <option value="form">Form</option>
+            <option value="own">Ownership</option>
+            <option value="fdr">FDR</option>
+          </select>
+        </div>
         {cornerTotal && (
           <div className="absolute left-2 top-2 z-10 rounded-lg bg-black/70 px-2.5 py-1 text-center shadow">
             <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-300">
@@ -195,6 +272,7 @@ export default function Pitch({
                   fixtures={fixtures}
                   nextEvent={nextEvent}
                   onSelect={onSelect}
+                  info={info}
                 />
               ))}
             </div>
@@ -212,7 +290,7 @@ export default function Pitch({
                 <span className="absolute -top-1 left-0 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-[9px] font-bold text-white">
                   {i + 1}
                 </span>
-                <PlayerCard p={p} teams={teams} fixtures={fixtures} nextEvent={nextEvent} onSelect={onSelect} />
+                <PlayerCard p={p} teams={teams} fixtures={fixtures} nextEvent={nextEvent} onSelect={onSelect} info={info} />
               </div>
             ))}
           </div>
