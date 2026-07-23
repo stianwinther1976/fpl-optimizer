@@ -7,7 +7,13 @@ import { fmtPrice, remainingChips, CHIP_LABELS } from "@/lib/rules";
 import { Badge, SectionTitle } from "./ui";
 import Pitch from "./Pitch";
 
-export default function OptimizePanel({ data }: { data: TeamData }) {
+export default function OptimizePanel({
+  data,
+  onSelect,
+}: {
+  data: TeamData;
+  onSelect?: (el: import("@/lib/types").Element) => void;
+}) {
   const [horizon, setHorizon] = useState(5);
   const [result, setResult] = useState<OptimizerResult | null>(null);
   const [running, setRunning] = useState(false);
@@ -154,19 +160,25 @@ export default function OptimizePanel({ data }: { data: TeamData }) {
                     {plan.transfers.map((m, i) => (
                       <div key={i} className="space-y-1 rounded-lg bg-panel-2 px-3 py-2 text-sm">
                         <div className="flex items-baseline justify-between gap-2">
-                          <span className="min-w-0 truncate text-danger">
+                          <button
+                            onClick={onSelect ? () => onSelect(m.out) : undefined}
+                            className="min-w-0 truncate text-left text-danger hover:underline"
+                          >
                             Out: {m.out.web_name} ({teams.get(m.out.team)?.short_name}) £
                             {fmtPrice(m.outSell)}m
-                          </span>
+                          </button>
                           <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted">
                             {(result.xp.get(m.out.id)?.total ?? 0).toFixed(1)} xp
                           </span>
                         </div>
                         <div className="flex items-baseline justify-between gap-2">
-                          <span className="min-w-0 truncate text-accent">
+                          <button
+                            onClick={onSelect ? () => onSelect(m.in) : undefined}
+                            className="min-w-0 truncate text-left text-accent hover:underline"
+                          >
                             In: {m.in.web_name} ({teams.get(m.in.team)?.short_name}) £
                             {fmtPrice(m.inCost)}m
-                          </span>
+                          </button>
                           <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted">
                             {(result.xp.get(m.in.id)?.total ?? 0).toFixed(1)} xp
                           </span>
@@ -189,7 +201,12 @@ export default function OptimizePanel({ data }: { data: TeamData }) {
             <SectionTitle>©️ Captaincy (GW{squad.nextEvent})</SectionTitle>
             <div className="mt-3 card divide-y divide-border-c">
               {result.captainRanking.map((c, i) => (
-                <div key={c.element.id} className="flex items-center gap-3 px-4 py-3">
+                <div
+                  key={c.element.id}
+                  className={`flex items-center gap-3 px-4 py-3 ${onSelect ? "cursor-pointer hover:bg-panel-2/60" : ""}`}
+                  onClick={onSelect ? () => onSelect(c.element) : undefined}
+                  role={onSelect ? "button" : undefined}
+                >
                   <span className="w-6 text-center font-bold text-muted">{i + 1}</span>
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-semibold">{c.element.web_name}</div>
@@ -280,6 +297,7 @@ export default function OptimizePanel({ data }: { data: TeamData }) {
                     fixtures={data.fixtures}
                     nextEvent={squad.nextEvent}
                     formation={xi.formation}
+                    onSelect={onSelect}
                   />
                 );
               })()}

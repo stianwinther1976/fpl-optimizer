@@ -1,8 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { TeamData } from "@/lib/fpl";
+import type { Element, Team } from "@/lib/types";
 import { teamFixtures } from "@/lib/xp";
+import ClubModal from "./ClubModal";
 
 const FDR_COLORS: Record<number, string> = {
   1: "bg-emerald-600 text-white",
@@ -12,7 +14,18 @@ const FDR_COLORS: Record<number, string> = {
   5: "bg-rose-700 text-white",
 };
 
-export default function FixtureTicker({ data }: { data: TeamData }) {
+export default function FixtureTicker({
+  data,
+  onSelect,
+}: {
+  data: TeamData;
+  onSelect?: (el: Element) => void;
+}) {
+  const [clubOpen, setClubOpen] = useState<Team | null>(null);
+  const teamsMap = useMemo(
+    () => new Map(data.bootstrap.teams.map((t) => [t.id, t])),
+    [data.bootstrap]
+  );
   const nextEvent = data.bootstrap.events.find((e) => e.is_next)?.id ?? null;
 
   const gws = useMemo(() => {
@@ -68,7 +81,13 @@ export default function FixtureTicker({ data }: { data: TeamData }) {
           {rows.map(({ team, cells, avgFdr }) => (
             <tr key={team.id}>
               <td className="sticky left-0 z-10 bg-[var(--panel)] px-3 py-2 font-medium">
-                {team.name}
+                <button
+                  onClick={() => setClubOpen(team)}
+                  className="hover:text-accent"
+                  title="Club details and top FPL assets"
+                >
+                  {team.name} <span className="text-xs text-muted">›</span>
+                </button>
               </td>
               {cells.map((cell, i) => (
                 <td key={i} className="px-1 py-1.5 text-center">
@@ -95,6 +114,21 @@ export default function FixtureTicker({ data }: { data: TeamData }) {
           ))}
         </tbody>
       </table>
+
+      {clubOpen && (
+        <ClubModal
+          team={clubOpen}
+          elements={data.bootstrap.elements}
+          fixtures={data.fixtures}
+          teams={teamsMap}
+          nextEvent={nextEvent}
+          onPlayerSelect={(el) => {
+            setClubOpen(null);
+            onSelect?.(el);
+          }}
+          onClose={() => setClubOpen(null)}
+        />
+      )}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { api, type TeamData } from "@/lib/fpl";
 import type { EventLive, Fixture } from "@/lib/types";
 import { matchMinute, provisionalBonus } from "@/lib/live";
 import { ErrorBox, Skeleton, Badge } from "./ui";
+import MatchModal from "./MatchModal";
 
 const REFRESH_MS = 30_000;
 
@@ -21,6 +22,7 @@ export default function LiveTab({
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [bandSafety, setBandSafety] = useState<number | null>(null);
   const bandTried = useRef(false);
+  const [matchOpen, setMatchOpen] = useState<Fixture | null>(null);
 
   const currentEventObj = data.bootstrap.events.find((e) => e.is_current) ?? null;
   const currentEvent = currentEventObj?.id ?? data.squad?.currentEvent ?? null;
@@ -279,9 +281,10 @@ export default function LiveTab({
                   ? "text-danger"
                   : "text-warn";
             return (
-              <div
+              <button
                 key={f.id}
-                className={`card flex min-w-28 flex-col items-center px-2 py-1.5 text-xs sm:min-w-32 sm:text-sm ${liveNow ? "border-accent/50" : ""}`}
+                onClick={() => setMatchOpen(f)}
+                className={`card flex min-w-28 cursor-pointer flex-col items-center px-2 py-1.5 text-xs hover:border-accent sm:min-w-32 sm:text-sm ${liveNow ? "border-accent/50" : ""}`}
               >
                 <div className="flex items-center gap-1.5 font-semibold sm:gap-2">
                   <span className={hClass}>{teams.get(f.team_h)?.short_name}</span>
@@ -307,10 +310,25 @@ export default function LiveTab({
                         })
                       : "TBC"}
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
+      )}
+
+      {matchOpen && (
+        <MatchModal
+          fixture={fixtures.find((f) => f.id === matchOpen.id) ?? matchOpen}
+          teams={teams}
+          live={live}
+          squadIds={new Set(data.squad.players.map((p) => p.element.id))}
+          elements={data.bootstrap.elements}
+          onPlayerSelect={(el) => {
+            setMatchOpen(null);
+            onSelect?.(el);
+          }}
+          onClose={() => setMatchOpen(null)}
+        />
       )}
 
       {/* Player rows */}

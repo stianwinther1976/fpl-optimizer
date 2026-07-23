@@ -472,9 +472,9 @@ export default function Dashboard({
               No squad found — has this team played a gameweek this season yet?
             </div>
           ))}
-        {tab === "optimize" && <OptimizePanel data={data} />}
+        {tab === "optimize" && <OptimizePanel data={data} onSelect={setSelected} />}
         {tab === "stats" && <StatsTable data={data} onSelect={setSelected} />}
-        {tab === "fixtures" && <FixtureTicker data={data} />}
+        {tab === "fixtures" && <FixtureTicker data={data} onSelect={setSelected} />}
         {tab === "live" && <LiveTab data={data} onSelect={setSelected} />}
         {tab === "league" && <MiniLeague data={data} entryId={entryId} />}
         {tab === "history" && <HistoryChart data={data} />}
