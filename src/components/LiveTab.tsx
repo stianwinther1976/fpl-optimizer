@@ -117,18 +117,22 @@ export default function LiveTab({ data }: { data: TeamData }) {
     [live, fixtures, data.bootstrap, currentEvent]
   );
 
-  if (currentEvent == null) {
-    const next = data.bootstrap.events.find((e) => e.is_next);
+  const nextEventObj = data.bootstrap.events.find((e) => e.is_next);
+  const seasonOver = currentEvent != null && nextEventObj == null;
+
+  if (currentEvent == null || (error && seasonOver)) {
     return (
       <div className="card p-6 text-muted">
         <div className="text-2xl">🏖️</div>
         <div className="mt-2 font-semibold text-foreground">It&apos;s the off-season break.</div>
         <p className="mt-1 text-sm">
+          {seasonOver
+            ? `The season ended with GW${currentEvent}, and FPL has retired last season's live data while the new season is being set up. `
+            : ""}
           The live view wakes up automatically on matchday
-          {next?.deadline_time
-            ? ` — ${next.name} kicks things off after the deadline on ${new Date(next.deadline_time).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}.`
-            : "."}{" "}
-          No live data is fetched until then.
+          {nextEventObj?.deadline_time
+            ? ` — ${nextEventObj.name} kicks things off after the deadline on ${new Date(nextEventObj.deadline_time).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}.`
+            : "."}
         </p>
       </div>
     );
