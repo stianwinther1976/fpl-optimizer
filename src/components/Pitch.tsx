@@ -151,17 +151,20 @@ function PlayerCard({
         {info === "own" && <>{el.selected_by_percent}%</>}
         {info === "fdr" &&
           (() => {
-            const fdrs =
-              nextEvent != null
-                ? teamFixtures(fixtures, el.team, nextEvent).map((f) =>
-                    f.team_h === el.team ? f.team_h_difficulty : f.team_a_difficulty
-                  )
-                : [];
+            // Next three gameweeks, one badge per fixture (like FPL's view).
+            const fdrs: number[] = [];
+            if (nextEvent != null) {
+              for (let gw = nextEvent; gw < nextEvent + 3; gw++) {
+                for (const f of teamFixtures(fixtures, el.team, gw)) {
+                  fdrs.push(f.team_h === el.team ? f.team_h_difficulty : f.team_a_difficulty);
+                }
+              }
+            }
             return fdrs.length === 0 ? (
               <>BLANK</>
             ) : (
               <span className="inline-flex gap-0.5">
-                {fdrs.map((d, i) => (
+                {fdrs.slice(0, 4).map((d, i) => (
                   <span
                     key={i}
                     className={`rounded px-1 font-bold ${FDR_BADGE[d] ?? FDR_BADGE[3]}`}

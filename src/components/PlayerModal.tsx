@@ -1,9 +1,18 @@
 "use client";
 
-import type { Element, EventLive, Team } from "@/lib/types";
+import type { Element, EventLive, Fixture, Team } from "@/lib/types";
 import { fmtPrice, POSITION_NAMES } from "@/lib/rules";
+import { teamFixtures } from "@/lib/xp";
 import { Badge } from "./ui";
 import { PlayerAvatar } from "./Pitch";
+
+const FDR_BADGE: Record<number, string> = {
+  1: "bg-emerald-600 text-white",
+  2: "bg-emerald-500/90 text-black",
+  3: "bg-zinc-500 text-white",
+  4: "bg-rose-500/90 text-white",
+  5: "bg-rose-700 text-white",
+};
 
 const STAT_LABELS: Record<string, string> = {
   minutes: "Minutes played",
@@ -28,6 +37,9 @@ export default function PlayerModal({
   event,
   gwFinished,
   onClose,
+  fixtures = [],
+  teams,
+  nextEvent = null,
 }: {
   element: Element;
   team: Team | undefined;
@@ -35,7 +47,25 @@ export default function PlayerModal({
   event: number | null;
   gwFinished: boolean;
   onClose: () => void;
+  fixtures?: Fixture[];
+  teams?: Map<number, Team>;
+  nextEvent?: number | null;
 }) {
+  // Next three gameweeks of fixtures for this player's club.
+  const upcoming: { gw: number; opp: string; home: boolean; fdr: number }[] = [];
+  if (nextEvent != null && teams) {
+    for (let gw = nextEvent; gw < nextEvent + 3; gw++) {
+      for (const f of teamFixtures(fixtures, element.team, gw)) {
+        const home = f.team_h === element.team;
+        upcoming.push({
+          gw,
+          opp: teams.get(home ? f.team_a : f.team_h)?.short_name ?? "?",
+          home,
+          fdr: home ? f.team_h_difficulty : f.team_a_difficulty,
+        });
+      }
+    }
+  }
   const liveEl = live?.elements.find((e) => e.id === element.id) ?? null;
   const rows =
     liveEl?.explain?.flatMap((fx) => fx.stats).filter((s) => s.points !== 0 || s.identifier === "minutes") ??
@@ -108,6 +138,29 @@ export default function PlayerModal({
             ) : (
               <p className="mt-2 text-sm text-muted">No point-scoring actions yet.</p>
             )}
+          </div>
+        )}
+
+        {/* Upcoming fixtures (next 3 GWs, like the official FPL view) */}
+        {upcoming.length > 0 && (
+          <div className="mt-4">
+            <div className="text-sm font-semibold">Upcoming fixtures</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {upcoming.map((u, i) => (
+                <div
+                  key={i}
+                  className="flex items-center gap-1.5 rounded-lg bg-panel-2 px-2 py-1.5 text-xs"
+                >
+                  <span className="text-muted">GW{u.gw}</span>
+                  <span className="font-semibold">
+                    {u.opp} ({u.home ? "H" : "A"})
+                  </span>
+                  <span className={`rounded px-1 font-bold ${FDR_BADGE[u.fdr] ?? FDR_BADGE[3]}`}>
+                    {u.fdr}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

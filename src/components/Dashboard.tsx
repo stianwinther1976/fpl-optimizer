@@ -482,6 +482,9 @@ export default function Dashboard({
           event={currentEvent}
           gwFinished={gwFinished}
           onClose={() => setSelected(null)}
+          fixtures={data.fixtures}
+          teams={teams}
+          nextEvent={data.squad?.nextEvent ?? null}
         />
       )}
     </main>
