@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { api, FplApiError, loadTeamData, fmtNum, fmtRank, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
+import { api, entryNotFoundMessage, FplApiError, loadTeamData, fmtNum, fmtRank, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
 import type { Element, EntryEventPicks, EventLive } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
@@ -141,10 +141,14 @@ export default function Dashboard({
           });
         }
       })
-      .catch((e) =>
-        !cancelled &&
-        setError(e instanceof FplApiError ? e.message : "Could not load this team.")
-      );
+      .catch(async (e) => {
+        if (cancelled) return;
+        if (e instanceof FplApiError && e.status === 404) {
+          setError(await entryNotFoundMessage());
+        } else {
+          setError(e instanceof FplApiError ? e.message : "Could not load this team.");
+        }
+      });
     return () => {
       cancelled = true;
     };

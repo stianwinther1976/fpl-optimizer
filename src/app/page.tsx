@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, FplApiError, DEMO_ENTRY_ID, setDemoMode } from "@/lib/fpl";
+import { api, entryNotFoundMessage, FplApiError, DEMO_ENTRY_ID, setDemoMode } from "@/lib/fpl";
 import type { Entry } from "@/lib/types";
 import ThemeToggle from "@/components/ThemeToggle";
 import Lion from "@/components/Lion";
@@ -47,7 +47,13 @@ export default function Home() {
       setEntry(e);
       localStorage.setItem("fpl-id", String(num));
     } catch (err) {
-      setError(err instanceof FplApiError ? err.message : "Something went wrong. Please try again.");
+      if (err instanceof FplApiError && err.status === 404) {
+        setError(await entryNotFoundMessage());
+      } else {
+        setError(
+          err instanceof FplApiError ? err.message : "Something went wrong. Please try again."
+        );
+      }
     } finally {
       setChecking(false);
     }

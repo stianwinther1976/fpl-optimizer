@@ -264,6 +264,29 @@ export function buildSquadState(
   };
 }
 
+/**
+ * A 404 on an entry means different things in different months: during the
+ * summer reset every last-season team ID is retired, so "check the ID" is
+ * misleading. Look at the season state and explain what's actually going on.
+ */
+export async function entryNotFoundMessage(): Promise<string> {
+  try {
+    const b = await api.bootstrap();
+    const seasonStarted = b.events.some((e) => e.finished);
+    if (!seasonStarted) {
+      return (
+        "That ID isn't in FPL's system right now — and that's normal in pre-season: " +
+        "FPL retires ALL team IDs over the summer. Register your squad for the new season " +
+        "at fantasy.premierleague.com and you'll get a fresh ID (it appears in the URL once " +
+        "your team is created). Meanwhile, feel free to explore the demo."
+      );
+    }
+  } catch {
+    // bootstrap unavailable — fall through to the generic message
+  }
+  return "No data found — check that the FPL ID is correct.";
+}
+
 export function fmtRank(rank: number | null | undefined): string {
   if (rank == null) return "–";
   return rank.toLocaleString("en-GB");
