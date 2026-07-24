@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { api, entryNotFoundMessage, FplApiError, loadTeamData, fmtNum, fmtRank, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
+import { api, entryNotFoundMessage, FplApiError, loadTeamData, fmtNum, fmtRank, rankPercentile, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
 import type { Element, EntryEventPicks, EventLive } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
@@ -477,6 +477,9 @@ export default function Dashboard({
         <Stat
           label="Overall rank"
           value={fmtRank(entry.summary_overall_rank)}
+          sub={
+            rankPercentile(entry.summary_overall_rank, data.bootstrap.total_players) ?? undefined
+          }
           delta={rankDelta}
           onClick={() => setKpiModal("rank")}
         />

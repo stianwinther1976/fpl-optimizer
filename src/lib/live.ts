@@ -25,6 +25,19 @@ export function provisionalBonus(
   const teamOf = new Map(bootstrap.elements.map((e) => [e.id, e.team]));
   const statOf = new Map(live.elements.map((e) => [e.id, e.stats]));
 
+  // From 2026/27 FPL publishes projected bonus itself once a fixture passes 20
+  // minutes. Anything already itemised in `explain` is therefore inside
+  // total_points already, and adding our own projection on top would inflate
+  // the live score. `explain` is the authority: total_points is its sum.
+  const alreadyAwarded = new Map<number, number>();
+  for (const e of live.elements) {
+    let b = 0;
+    for (const ex of e.explain ?? []) {
+      for (const s of ex.stats) if (s.identifier === "bonus") b += s.points;
+    }
+    if (b > 0) alreadyAwarded.set(e.id, b);
+  }
+
   for (const f of fixtures) {
     if (f.event !== event) continue;
     if (!f.started || f.finished) continue; // only project while in play / awaiting confirmation
@@ -48,6 +61,15 @@ export function provisionalBonus(
       i += tied.length;
       bonus -= tied.length;
     }
+  }
+
+  // Keep only what FPL hasn't already counted, so the UI can add this on top of
+  // total_points in both worlds: before the 20-minute mark (nothing awarded yet)
+  // and after it (FPL's own projection already inside total_points).
+  for (const [id, projected] of byElement) {
+    const net = projected - (alreadyAwarded.get(id) ?? 0);
+    if (net > 0) byElement.set(id, net);
+    else byElement.delete(id);
   }
   return { byElement };
 }

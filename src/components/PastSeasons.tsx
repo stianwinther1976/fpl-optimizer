@@ -240,6 +240,17 @@ export default function PastSeasons({ data, entryId }: { data: TeamData; entryId
             </div>
           );
         })}
+        {/* Career averages, mirroring the summary FPL added for 2026/27. A
+            "top X%" finish can't be shown for past seasons: FPL doesn't publish
+            how many managers played in them. */}
+        <div className="grid grid-cols-[1fr_auto_auto_1.25rem] gap-3 px-1 py-2 text-sm text-muted">
+          <span className="font-medium">Career average</span>
+          <span className="text-right font-mono">{Math.round(avgPoints).toLocaleString("en-GB")}</span>
+          <span className="w-20 text-right font-mono">
+            {Math.round(past.reduce((s, p) => s + p.rank, 0) / past.length).toLocaleString("en-GB")}
+          </span>
+          <span />
+        </div>
       </div>
     </div>
   );

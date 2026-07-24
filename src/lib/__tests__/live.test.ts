@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { projectAutoSubs } from "../live";
+import { projectAutoSubs, provisionalBonus } from "../live";
 import { availabilityAt } from "../xp";
 import { makeElement } from "./mockdata";
-import type { Element, EventLive, Fixture, Pick } from "../types";
+import type { Bootstrap, Element, EventLive, Fixture, Pick } from "../types";
 
 // Squad: GK(1) + 4 DEF + 4 MID + 2 FWD starters, bench: GK, DEF, MID, FWD
 function makeSquad(): Map<number, Element> {
@@ -108,6 +108,101 @@ describe("projectAutoSubs", () => {
     // Element 6 is on team 1... element with team 5: id 15 bench. Use starter 4 (team 5).
     const res = projectAutoSubs(picks, elements, makeLive({ 4: 0 }), inPlay, 10);
     expect(res.out).toEqual([]);
+  });
+});
+
+describe("provisionalBonus", () => {
+  // Two clubs, one in-play fixture, four players with distinct BPS.
+  const bootstrap = {
+    elements: [
+      makeElement({ id: 1, team: 1 }),
+      makeElement({ id: 2, team: 1 }),
+      makeElement({ id: 3, team: 2 }),
+      makeElement({ id: 4, team: 2 }),
+    ],
+  } as Bootstrap;
+
+  const inPlay: Fixture[] = [
+    {
+      id: 1,
+      event: 10,
+      team_h: 1,
+      team_a: 2,
+      team_h_difficulty: 3,
+      team_a_difficulty: 3,
+      kickoff_time: "2026-01-01T15:00:00Z",
+      finished: false,
+      started: true,
+      team_h_score: 1,
+      team_a_score: 0,
+    },
+  ];
+
+  /** bpsById -> live feed; `awarded` puts FPL's own bonus into `explain`. */
+  const live = (bpsById: Record<number, number>, awarded: Record<number, number> = {}): EventLive => ({
+    elements: Object.entries(bpsById).map(([id, bps]) => {
+      const elId = Number(id);
+      const bonus = awarded[elId] ?? 0;
+      return {
+        id: elId,
+        stats: { minutes: 90, total_points: 2 + bonus, bonus, bps, goals_scored: 0, assists: 0 },
+        explain: [
+          {
+            fixture: 1,
+            stats: [
+              { identifier: "minutes", points: 2, value: 90 },
+              ...(bonus > 0 ? [{ identifier: "bonus", points: bonus, value: bps }] : []),
+            ],
+          },
+        ],
+      };
+    }),
+  });
+
+  it("projects 3/2/1 while FPL has awarded nothing yet", () => {
+    const res = provisionalBonus(bootstrap, inPlay, live({ 1: 30, 2: 25, 3: 20, 4: 5 }), 10);
+    expect(res.byElement.get(1)).toBe(3);
+    expect(res.byElement.get(2)).toBe(2);
+    expect(res.byElement.get(3)).toBe(1);
+    expect(res.byElement.has(4)).toBe(false);
+  });
+
+  it("adds nothing once FPL's own projected bonus is already in the feed", () => {
+    // From 2026/27 FPL publishes bonus past the 20-minute mark, and it is inside
+    // total_points. Adding our projection on top would double-count it.
+    const res = provisionalBonus(
+      bootstrap,
+      inPlay,
+      live({ 1: 30, 2: 25, 3: 20, 4: 5 }, { 1: 3, 2: 2, 3: 1 }),
+      10
+    );
+    expect(res.byElement.size).toBe(0);
+  });
+
+  it("tops up only the difference when BPS has moved past what FPL awarded", () => {
+    // FPL's snapshot had this player on 1 bonus; live BPS now has him top.
+    const res = provisionalBonus(
+      bootstrap,
+      inPlay,
+      live({ 1: 30, 2: 25, 3: 20, 4: 5 }, { 1: 1 }),
+      10
+    );
+    expect(res.byElement.get(1)).toBe(2);
+    expect(res.byElement.get(2)).toBe(2);
+  });
+
+  it("shares the higher bonus on a tie and skips the slot below", () => {
+    const res = provisionalBonus(bootstrap, inPlay, live({ 1: 30, 2: 30, 3: 20, 4: 5 }), 10);
+    expect(res.byElement.get(1)).toBe(3);
+    expect(res.byElement.get(2)).toBe(3);
+    expect(res.byElement.get(3)).toBe(1);
+  });
+
+  it("ignores fixtures that are finished or not yet started", () => {
+    const done = inPlay.map((f) => ({ ...f, finished: true }));
+    expect(provisionalBonus(bootstrap, done, live({ 1: 30, 2: 25 }), 10).byElement.size).toBe(0);
+    const notStarted = inPlay.map((f) => ({ ...f, started: false }));
+    expect(provisionalBonus(bootstrap, notStarted, live({ 1: 30 }), 10).byElement.size).toBe(0);
   });
 });
 

@@ -337,6 +337,21 @@ export function fmtRank(rank: number | null | undefined): string {
   return rank.toLocaleString("en-GB");
 }
 
+/**
+ * Rank as the "top X%" label FPL itself started showing in 2026/27.
+ * Precision follows the number: the top of the table needs decimals to say
+ * anything at all, the middle doesn't. Returns null when it can't be computed.
+ */
+export function rankPercentile(
+  rank: number | null | undefined,
+  totalPlayers: number | null | undefined
+): string | null {
+  if (rank == null || !totalPlayers || totalPlayers <= 0 || rank <= 0) return null;
+  const pct = Math.min(100, (rank / totalPlayers) * 100);
+  const digits = pct < 0.1 ? 3 : pct < 1 ? 2 : pct < 10 ? 1 : 0;
+  return `Top ${pct.toFixed(digits)}%`;
+}
+
 /** Locale-formatted integer (thousands separators). */
 export function fmtNum(n: number | null | undefined): string {
   if (n == null) return "–";
