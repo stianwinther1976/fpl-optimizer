@@ -128,21 +128,46 @@ export default function OptimizePanel({
         {launch && chosen && (
           <>
             {/* Strategy selector — several viable drafts, not one answer */}
-            <div className="grid gap-2 sm:grid-cols-3">
-              {launch.map((v, i) => (
-                <button
-                  key={v.key}
-                  type="button"
-                  onClick={() => setLaunchPick(i)}
-                  className={`card p-3 text-left ${i === launchPick ? "border-accent" : "hover:border-accent"}`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold">{v.label}</span>
-                    <span className="font-mono text-xs text-accent">{v.xi.totalXp.toFixed(1)} xp</span>
-                  </div>
-                  <div className="mt-1 text-[11px] leading-tight text-muted">{v.description}</div>
-                </button>
-              ))}
+            <div>
+              <p className="mb-2 text-xs font-medium text-muted">
+                Velg en tilnærming — trykk for å bytte lag:
+              </p>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {launch.map((v, i) => {
+                  const selected = i === launchPick;
+                  return (
+                    <button
+                      key={v.key}
+                      type="button"
+                      onClick={() => setLaunchPick(i)}
+                      aria-pressed={selected}
+                      className={`card p-3 text-left transition ${
+                        selected
+                          ? "border-accent bg-accent/10 ring-2 ring-accent"
+                          : "opacity-80 hover:border-accent hover:opacity-100"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-1.5 text-sm font-semibold">
+                          {selected && <span className="text-accent">✓</span>}
+                          {v.label}
+                        </span>
+                        <span className="font-mono text-xs text-accent">{v.xi.totalXp.toFixed(1)} xp</span>
+                      </div>
+                      <div className="mt-1 text-[11px] leading-tight text-muted">{v.description}</div>
+                      {selected ? (
+                        <div className="mt-2 inline-block rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-white">
+                          Valgt
+                        </div>
+                      ) : (
+                        <div className="mt-2 inline-block rounded-full border border-current px-2 py-0.5 text-[10px] font-medium text-muted">
+                          Trykk for å velge
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="card flex flex-wrap items-center gap-4 p-4 text-sm">
