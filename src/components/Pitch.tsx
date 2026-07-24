@@ -140,14 +140,19 @@ function PlayerCard({
               <>£{fmtPrice(el.now_cost)}</>
             )}
             {p.xp != null && !p.live && (
-              <span className="text-[#00ff87]"> · {p.xp.toFixed(1)}xp</span>
+              <span className="text-[#00ff87]">
+                {" "}
+                · {(p.xp * (p.isCaptain ? 2 : 1)).toFixed(1)}xp{p.isCaptain ? "×2" : ""}
+              </span>
             )}
           </>
         )}
         {info === "price" && <>£{fmtPrice(el.now_cost)}m</>}
         {info === "xp" && (
           <span className="text-[#00ff87]">
-            {p.xp != null ? `${p.xp.toFixed(1)} xp` : "–"}
+            {p.xp != null
+              ? `${(p.xp * (p.isCaptain ? 2 : 1)).toFixed(1)} xp${p.isCaptain ? " ×2" : ""}`
+              : "–"}
           </span>
         )}
         {info === "form" && <>Form {el.form}</>}
@@ -392,7 +397,13 @@ function ListView({
     const el = p.element;
     if (info === "price") return <>£{fmtPrice(el.now_cost)}m</>;
     if (info === "xp")
-      return <span className="text-accent">{p.xp != null ? `${p.xp.toFixed(1)} xp` : "–"}</span>;
+      return (
+        <span className="text-accent">
+          {p.xp != null
+            ? `${(p.xp * (p.isCaptain ? 2 : 1)).toFixed(1)} xp${p.isCaptain ? " ×2" : ""}`
+            : "–"}
+        </span>
+      );
     if (info === "form") return <>{el.form}</>;
     if (info === "own") return <>{el.selected_by_percent}%</>;
     if (info === "fdr") {
@@ -423,7 +434,11 @@ function ListView({
     return (
       <span>
         £{fmtPrice(el.now_cost)}m
-        {p.xp != null && <span className="ml-1 text-accent">· {p.xp.toFixed(1)}xp</span>}
+        {p.xp != null && (
+          <span className="ml-1 text-accent">
+            · {(p.xp * (p.isCaptain ? 2 : 1)).toFixed(1)}xp{p.isCaptain ? "×2" : ""}
+          </span>
+        )}
       </span>
     );
   };
