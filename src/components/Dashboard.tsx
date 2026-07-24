@@ -481,7 +481,7 @@ export default function Dashboard({
         />
         <Stat
           label="Latest GW"
-          value={`${entry.summary_event_points} pts`}
+          value={entry.summary_event_points != null ? `${entry.summary_event_points} pts` : "–"}
           delta={gwDelta}
           sub={
             entry.summary_event_rank != null
@@ -715,9 +715,39 @@ export default function Dashboard({
               )}
             </div>
           ) : (
-            <div className="card p-6 text-muted">
-              No squad found — has this team played a gameweek this season yet?
-            </div>
+            (() => {
+              const seasonStarted = data.bootstrap.events.some(
+                (e) => e.is_current || e.finished
+              );
+              return seasonStarted ? (
+                <div className="card p-6 text-muted">
+                  No squad found — has this team played a gameweek this season yet?
+                </div>
+              ) : (
+                <div className="card space-y-3 p-6">
+                  <p className="font-semibold text-fg">Your squad isn&apos;t visible yet — that&apos;s normal before Gameweek 1.</p>
+                  <p className="text-sm text-muted">
+                    Even if you&apos;ve already picked your team in the FPL app, FPL
+                    doesn&apos;t publish anyone&apos;s squad through its data feed until the
+                    first deadline passes and Gameweek 1 kicks off. Until then this
+                    tab, your points and rank all show a dash — nothing is wrong with
+                    your team or your ID.
+                  </p>
+                  <p className="text-sm text-muted">
+                    In the meantime, open{" "}
+                    <button
+                      type="button"
+                      onClick={() => selectTab("optimize")}
+                      className="font-semibold text-accent underline underline-offset-2"
+                    >
+                      Optimize
+                    </button>{" "}
+                    to plan and compare launch squads for Gameweek 1. Everything
+                    fills in automatically once the season starts.
+                  </p>
+                </div>
+              );
+            })()
           ))}
         </div>
         {visited.has("optimize") && (
