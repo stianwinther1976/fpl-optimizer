@@ -14,6 +14,7 @@ import {
 } from "@/lib/optimizer";
 import { projectAll } from "@/lib/xp";
 import { fmtPrice, remainingChips, CHIP_LABELS } from "@/lib/rules";
+import { priceTimingHint } from "@/lib/priceChange";
 import { Badge, SectionTitle } from "./ui";
 import Pitch from "./Pitch";
 import Sheet, { SheetClose } from "./Sheet";
@@ -661,6 +662,19 @@ export default function OptimizePanel({
                             {(result.xp.get(m.in.id)?.total ?? 0).toFixed(1)} xp
                           </span>
                         </div>
+                        {/* Timing, not selection: the move is already decided
+                            above — this only says whether tonight or tomorrow
+                            is the cheaper moment to make it. */}
+                        {[
+                          priceTimingHint(m.out, "out"),
+                          priceTimingHint(m.in, "in"),
+                        ].map((hint, h) =>
+                          hint ? (
+                            <div key={h} className="text-xs text-warn">
+                              💰 {h === 0 ? m.out.web_name : m.in.web_name}: {hint}
+                            </div>
+                          ) : null
+                        )}
                       </div>
                     ))}
                   </div>

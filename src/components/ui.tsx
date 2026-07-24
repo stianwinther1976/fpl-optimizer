@@ -107,6 +107,43 @@ export function Stat({
   );
 }
 
+/**
+ * Progress toward a price change, drawn from a centre line: right for a rise,
+ * left for a fall. The 100% mark is ticked because that — not the end of the
+ * bar — is where FPL actually moves the price.
+ */
+export function PriceTrendBar({ percent }: { percent: number }) {
+  const mag = Math.min(Math.abs(percent), 120);
+  const width = (mag / 120) * 50; // half the track is one full direction
+  const rising = percent >= 0;
+  return (
+    <div
+      className="relative mt-2 h-2 w-full overflow-hidden rounded-full bg-panel-2"
+      role="img"
+      aria-label={`${Math.round(percent)}% toward a price ${rising ? "rise" : "fall"}`}
+    >
+      <div
+        className={`absolute top-0 h-full ${rising ? "bg-accent" : "bg-danger"}`}
+        style={
+          rising
+            ? { left: "50%", width: `${width}%` }
+            : { right: "50%", width: `${width}%` }
+        }
+      />
+      {/* Threshold ticks at ±100% — where the price actually moves. */}
+      <div
+        className="absolute top-0 h-full w-0.5 bg-muted"
+        style={{ left: `${50 + (100 / 120) * 50}%` }}
+      />
+      <div
+        className="absolute top-0 h-full w-0.5 bg-muted"
+        style={{ left: `${50 - (100 / 120) * 50}%` }}
+      />
+      <div className="absolute top-0 h-full w-px bg-border-c" style={{ left: "50%" }} />
+    </div>
+  );
+}
+
 export function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="text-lg font-bold tracking-tight">{children}</h2>;
 }

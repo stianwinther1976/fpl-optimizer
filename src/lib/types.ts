@@ -45,6 +45,12 @@ export interface Element {
   bps?: number;
   transfers_in_event?: number;
   transfers_out_event?: number;
+  /** 2026/27 Price Change Predictor: progress toward the next price change as a
+   *  signed percentage string ("96" = 96% of the way to a rise, "-97" to a fall).
+   *  Past ±100 the change is expected at the next 00:00 UK update. */
+  price_change_percent?: string;
+  /** Price movement so far this gameweek, in tenths of £m. */
+  cost_change_event?: number;
 }
 
 export interface Team {

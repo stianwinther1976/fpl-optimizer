@@ -32,6 +32,13 @@ function makeElements() {
         element_type: t,
         now_cost: price + ((id * 3) % 7) - 3,
         cost_change_start: ((id * 3) % 7) - 3,
+        // Price Change Predictor: most players sit still, a handful of each
+        // direction are near or past the threshold so the UI has something real
+        // to draw. Deterministic, like the rest of the demo feed.
+        price_change_percent: String(
+          id % 23 === 0 ? 104 : id % 17 === 0 ? 91 : id % 19 === 0 ? -103 : id % 13 === 0 ? -88 : (id * 11) % 60
+        ),
+        cost_change_event: id % 23 === 0 ? 1 : id % 19 === 0 ? -1 : 0,
         form: ppg.toFixed(1),
         points_per_game: ppg.toFixed(1),
         total_points: Math.round(ppg * 19),

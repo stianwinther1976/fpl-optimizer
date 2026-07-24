@@ -5,7 +5,8 @@ import { api, type ElementSummary } from "@/lib/fpl";
 import type { Element, EventLive, Fixture, Team } from "@/lib/types";
 import { fmtPrice, POSITION_NAMES } from "@/lib/rules";
 import { teamFixtures } from "@/lib/xp";
-import { Badge } from "./ui";
+import { readPriceChange } from "@/lib/priceChange";
+import { Badge, PriceTrendBar } from "./ui";
 import { PlayerAvatar } from "./Pitch";
 import Sheet, { SheetClose } from "./Sheet";
 
@@ -106,6 +107,8 @@ export default function PlayerModal({
   else if (spOrder === 2) duties.push("Set pieces: 2nd taker");
   // Price-change pressure from net event transfers relative to ownership.
   const netTransfers = (element.transfers_in_event ?? 0) - (element.transfers_out_event ?? 0);
+  // FPL's own predictor, when it has published a figure for this player.
+  const price = readPriceChange(element);
 
   return (
     <Sheet onClose={onClose} labelledBy="player-modal-title" maxWidth="max-w-md">
@@ -215,6 +218,35 @@ export default function PlayerModal({
               <span className="ml-1 text-[11px]">(an independent estimate)</span>
             </span>
             <span className="font-mono font-semibold">{parseFloat(element.ep_next).toFixed(1)} pts</span>
+          </div>
+        )}
+
+        {/* FPL's Price Change Predictor. Only rendered when the feed carries a
+            figure — silence is honest, "unlikely to change" on missing data isn't. */}
+        {price && (
+          <div className="mt-4">
+            <div className="flex items-baseline justify-between gap-2">
+              <div className="text-sm font-semibold">Price change</div>
+              <div
+                className={`text-sm font-semibold ${
+                  price.direction === 1
+                    ? "text-accent"
+                    : price.direction === -1
+                      ? "text-danger"
+                      : "text-muted"
+                }`}
+              >
+                {price.label}
+              </div>
+            </div>
+            <PriceTrendBar percent={price.percent} />
+            <p className="mt-1.5 text-xs text-muted">
+              {Math.abs(price.percent).toFixed(0)}% of the way to a{" "}
+              {price.percent >= 0 ? "rise" : "fall"}
+              {price.imminent
+                ? " — past the threshold, so FPL expects the move at the next 00:00 UK update."
+                : ". Prices move at 00:00 UK, at most 0.1 a day."}
+            </p>
           </div>
         )}
 
