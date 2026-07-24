@@ -23,6 +23,7 @@ import FixtureTicker from "./FixtureTicker";
 import LiveTab from "./LiveTab";
 import MiniLeague from "./MiniLeague";
 import ModelAccuracy from "./ModelAccuracy";
+import PointsBreakdown from "./PointsBreakdown";
 import ThemeToggle from "./ThemeToggle";
 import { ErrorBox, Skeleton, Stat, type StatDelta } from "./ui";
 
@@ -779,8 +780,9 @@ export default function Dashboard({
           </div>
         )}
         {visited.has("history") && (
-          <div hidden={tab !== "history"}>
+          <div hidden={tab !== "history"} className="space-y-6">
             <HistoryChart data={data} />
+            <PointsBreakdown data={data} entryId={entryId} onSelect={setSelected} />
           </div>
         )}
       </div>
