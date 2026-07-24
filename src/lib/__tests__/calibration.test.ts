@@ -26,14 +26,16 @@ function makeEntries(perPos: number, predOf: (pos: number) => number, actualOf: 
 }
 
 describe("applyGwOutcome", () => {
-  it("over-prediction shrinks the factors, under-prediction grows them", () => {
+  it("over-prediction shrinks the applied multiplier, under-prediction grows it", () => {
+    // byPos is relative to global, so a uniform miss lives in `global` and the
+    // combined multiplier is what carries the correction.
     const over = applyGwOutcome(fresh(), 10, makeEntries(20, () => 5, () => 4), 0);
     expect(over.factors.global).toBeLessThan(1);
-    expect(over.factors.byPos[3]).toBeLessThan(1);
+    expect(calibrationMultiplier(over.factors, 3)).toBeLessThan(1);
 
     const under = applyGwOutcome(fresh(), 10, makeEntries(20, () => 4, () => 5), 0);
     expect(under.factors.global).toBeGreaterThan(1);
-    expect(under.factors.byPos[3]).toBeGreaterThan(1);
+    expect(calibrationMultiplier(under.factors, 3)).toBeGreaterThan(1);
   });
 
   it("moves by the EMA rate, not all the way", () => {
@@ -61,8 +63,10 @@ describe("applyGwOutcome", () => {
       (pos) => (pos === 4 ? 3 : 5) // forwards over-predicted, rest spot-on
     );
     const s = applyGwOutcome(fresh(), 10, entries, 0);
-    expect(s.factors.byPos[4]).toBeLessThan(0.95);
-    expect(s.factors.byPos[2]).toBeCloseTo(1, 5);
+    // The applied multiplier scales forwards down while leaving the accurate
+    // positions essentially unchanged (global × relative-byPos ≈ 1).
+    expect(calibrationMultiplier(s.factors, 4)).toBeLessThan(0.95);
+    expect(calibrationMultiplier(s.factors, 2)).toBeCloseTo(1, 2);
   });
 
   it("records MAE and bias in the log and marks the GW reconciled", () => {

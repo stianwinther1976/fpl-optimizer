@@ -7,6 +7,7 @@ import { api, entryNotFoundMessage, FplApiError, loadTeamData, fmtNum, fmtRank, 
 import type { Element, EntryEventPicks, EventLive } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
+import { projectAutoSubs } from "@/lib/live";
 import { saveRecentTeam } from "@/lib/recent";
 import {
   reconcileFinishedGws,
@@ -279,6 +280,22 @@ export default function Dashboard({
     }
     return cap?.element.id ?? null;
   }, [data, gwFinished, liveMinutesOf]);
+
+  // Effective XI after projected auto-subs. FPL swaps in bench players once a
+  // starter's fixtures finish with 0 minutes, so the "final" team total must
+  // count those subs (matches the official score before FPL processes it).
+  const effectiveXiIds = useMemo(() => {
+    if (!liveData || !data?.picks || currentEvent == null) return null;
+    const elementById = new Map(data.bootstrap.elements.map((e) => [e.id, e]));
+    const { effectiveXi } = projectAutoSubs(
+      data.picks.picks,
+      elementById,
+      liveData,
+      data.fixtures,
+      currentEvent
+    );
+    return new Set(effectiveXi);
+  }, [liveData, data, currentEvent]);
 
   if (error) {
     return (
@@ -667,8 +684,12 @@ export default function Dashboard({
                         title: `GW${currentEvent}`,
                         points:
                           squad.players
-                            .filter(
-                              (p) => p.pickPosition <= 11 || squad.activeChip === "bboost"
+                            .filter((p) =>
+                              squad.activeChip === "bboost"
+                                ? true
+                                : effectiveXiIds
+                                  ? effectiveXiIds.has(p.element.id)
+                                  : p.pickPosition <= 11
                             )
                             .reduce(
                               (s, p) =>

@@ -88,6 +88,10 @@ export function applyGwOutcome(
   const sumAct = graded.reduce((s, e) => s + e.actual, 0);
   const bias = sumAct > 0 ? sumPred / sumAct - 1 : 0;
 
+  // `global` carries the aggregate correction; `byPos` must be RELATIVE to it,
+  // otherwise multiplier = global * byPos double-counts the overall bias and the
+  // model converges to a residual bias instead of an unbiased fit.
+  const globalRatio = sumPred > 0 ? sumAct / sumPred : 1;
   const byPos = { ...state.factors.byPos };
   for (const pos of [1, 2, 3, 4]) {
     const posEntries = graded.filter((e) => e.pos === pos);
@@ -95,14 +99,15 @@ export function applyGwOutcome(
     const p = posEntries.reduce((s, e) => s + e.pred, 0);
     const a = posEntries.reduce((s, e) => s + e.actual, 0);
     if (p <= 0 || a <= 0) continue;
-    const ratio = a / p; // >1 means we under-predicted -> scale up
+    // How much this position deviates *beyond* the global correction. 1.0 means
+    // the position tracks the overall bias exactly (no position-specific tweak).
+    const ratio = globalRatio > 0 ? a / p / globalRatio : 1;
     byPos[pos] = clamp(
       (1 - cfg.alpha) * (byPos[pos] ?? 1) + cfg.alpha * ratio,
       cfg.factorMin,
       cfg.factorMax
     );
   }
-  const globalRatio = sumPred > 0 ? sumAct / sumPred : 1;
   const global = clamp(
     (1 - cfg.alpha) * state.factors.global + cfg.alpha * globalRatio,
     cfg.factorMin,

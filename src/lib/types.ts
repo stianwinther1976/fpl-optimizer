@@ -33,7 +33,9 @@ export interface Element {
   expected_assists: string;
   expected_goal_involvements: string;
   expected_goals_conceded: string;
-  /** Season points earned from defensive contributions (2025/26+ scoring) */
+  /** Season COUNT of defensive actions (tackles + CBI + recoveries), 2025/26+.
+   *  NOT points — a nailed DM racks up 300–500 over a season. The +2 DC points
+   *  are modelled in xp.ts via a Poisson tail against the 10/12 threshold. */
   defensive_contribution?: number;
   ep_next: string | null;
   penalties_order?: number | null;

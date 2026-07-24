@@ -130,7 +130,7 @@ export default function OptimizePanel({
             {/* Strategy selector — several viable drafts, not one answer */}
             <div>
               <p className="mb-2 text-xs font-medium text-muted">
-                Velg en tilnærming — trykk for å bytte lag:
+                Choose an approach — tap to switch squad:
               </p>
               <div className="grid gap-2 sm:grid-cols-3">
                 {launch.map((v, i) => {
@@ -157,11 +157,11 @@ export default function OptimizePanel({
                       <div className="mt-1 text-[11px] leading-tight text-muted">{v.description}</div>
                       {selected ? (
                         <div className="mt-2 inline-block rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-white">
-                          Valgt
+                          Selected
                         </div>
                       ) : (
                         <div className="mt-2 inline-block rounded-full border border-current px-2 py-0.5 text-[10px] font-medium text-muted">
-                          Trykk for å velge
+                          Tap to select
                         </div>
                       )}
                     </button>

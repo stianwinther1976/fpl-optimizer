@@ -321,7 +321,7 @@ export function optimize(input: OptimizerInput): OptimizerResult {
   // Triple Captain: GW + player with the highest single-GW xP (the chip adds 1x).
   let tcBest = { gw: nextEvent, gain: 0, name: keepXi.captain?.element.web_name ?? "Your captain" };
   // Free Hit: GW where a one-week optimal squad beats your own XI the most.
-  const fhSquad = dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank));
+  const fhBudget = totalValue(owned, bank);
   let fhBest = { gw: nextEvent, gain: 0 };
   for (const gw of gws) {
     const ownXi = xiAt(squadEls, gw);
@@ -331,6 +331,14 @@ export function optimize(input: OptimizerInput): OptimizerResult {
       const v = xp.get(e.id)?.perGw.get(gw) ?? 0;
       if (v > tcBest.gain) tcBest = { gw, gain: v, name: e.web_name };
     }
+    // Free Hit is a one-week chip — build the squad optimal for THIS gw (so a
+    // double gameweek picks the players with two fixtures), not a horizon squad.
+    const fhSquad = buildSquadWithinBudget(
+      bootstrap.elements,
+      xp,
+      fhBudget,
+      (id) => xp.get(id)?.perGw.get(gw) ?? 0
+    ).squad;
     const fhGwGain = xiAt(fhSquad, gw).totalXp - ownXi.totalXp;
     if (fhGwGain > fhBest.gain) fhBest = { gw, gain: fhGwGain };
   }
