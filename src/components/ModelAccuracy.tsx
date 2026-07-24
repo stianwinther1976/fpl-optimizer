@@ -36,9 +36,9 @@ export default function ModelAccuracy({ demo }: { demo: boolean }) {
         )}
       </div>
       <p className="mt-1 text-sm text-muted">
-        Before every deadline the app saves what it predicted; when the gameweek finishes it
-        compares against the real points and adjusts its own weights. Systematic misses shrink
-        automatically over time.
+        How much to trust the projections above: before every deadline the app saves what it
+        predicted, then compares against the real points once the gameweek finishes and adjusts
+        its own weights. Systematic misses shrink automatically over time.
       </p>
 
       {log.length === 0 ? (

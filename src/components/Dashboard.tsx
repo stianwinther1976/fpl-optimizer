@@ -700,8 +700,11 @@ export default function Dashboard({
           ))}
         </div>
         {visited.has("optimize") && (
-          <div hidden={tab !== "optimize"}>
+          <div hidden={tab !== "optimize"} className="space-y-6">
             <OptimizePanel data={data} onSelect={setSelected} />
+            {/* How trustworthy are the projections above? key re-reads after
+                the reconcile pass updates storage. */}
+            <ModelAccuracy demo={entryId === DEMO_ENTRY_ID} key={calVersion} />
           </div>
         )}
         {visited.has("stats") && (
@@ -725,10 +728,8 @@ export default function Dashboard({
           </div>
         )}
         {visited.has("history") && (
-          <div hidden={tab !== "history"} className="space-y-4">
+          <div hidden={tab !== "history"}>
             <HistoryChart data={data} />
-            {/* key forces a re-read after the reconcile pass updates storage */}
-            <ModelAccuracy demo={entryId === DEMO_ENTRY_ID} key={calVersion} />
           </div>
         )}
       </div>
