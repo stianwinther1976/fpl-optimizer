@@ -421,6 +421,19 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
   const result = new Map<number, PlayerXp>();
 
   for (const el of ctx.bootstrap.elements) {
+    // Only the four outfield/keeper positions score in the normal way. FPL's
+    // "manager" elements (element_type 5, the Assistant Manager chip) don't
+    // fit the model and aren't squad players — project them as zero.
+    if (el.element_type < 1 || el.element_type > 4) {
+      result.set(el.id, {
+        elementId: el.id,
+        perGw: new Map(),
+        total: 0,
+        totalDiscounted: 0,
+        next: 0,
+      });
+      continue;
+    }
     const rates = playerRates(el);
     const mm = minutesModel(
       el,
@@ -447,7 +460,7 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
       // Calibration: multiply by the correction learned from grading our own
       // past predictions against what actually happened.
       gwXp *= calibrationMultiplier(cal, el.element_type);
-      perGw.set(gw, gwXp);
+      perGw.set(gw, Number.isFinite(gwXp) ? gwXp : 0);
     }
     let total = 0;
     let totalDiscounted = 0;

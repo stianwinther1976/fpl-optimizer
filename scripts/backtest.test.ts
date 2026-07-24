@@ -19,7 +19,9 @@ import {
 } from "../src/lib/calibration";
 import type { Bootstrap, Element, ElementType, Fixture, Team } from "../src/lib/types";
 
-const DATA = path.resolve(__dirname, "../../fpl-data/data/2025-26");
+// Season under test — override with SEASON=2024-25 to backtest a different year.
+const SEASON = process.env.SEASON ?? "2025-26";
+const DATA = path.resolve(__dirname, `../../fpl-data/data/${SEASON}`);
 
 // ---------- tiny CSV parser (handles quoted fields with commas/JSON) --------
 function parseCsv(text: string): Record<string, string>[] {
@@ -323,7 +325,7 @@ interface GwEval {
   fitBias: number;
 }
 
-describe("2025/26 season backtest", () => {
+describe(`${SEASON} season backtest`, () => {
   it("replays the season blind and grades the model", { timeout: 600_000 }, () => {
     const season = loadSeason();
     const START = 2;
@@ -347,7 +349,8 @@ describe("2025/26 season backtest", () => {
         // Grade the same set the live app grades: predictions >= 1.0 pts.
         const graded: { id: number; pred: number; act: number; pos: number }[] = [];
         for (const [id, p] of xp) {
-          if (p.next < 1.0) continue;
+          if (!Number.isFinite(p.next) || p.next < 1.0) continue;
+          if (season.meta.get(id)!.element_type > 4) continue; // skip managers
           if (!st.actual.has(id)) continue; // no fixture rows that GW
           graded.push({
             id,
@@ -467,7 +470,7 @@ describe("2025/26 season backtest", () => {
       })),
     };
     fs.writeFileSync(
-      path.resolve(__dirname, "../backtest-report.json"),
+      path.resolve(__dirname, `../backtest-report-${SEASON}.json`),
       JSON.stringify(report, null, 2)
     );
     console.log(JSON.stringify({ full: report.full, noCal: report.noCal, noRecent: report.noRecent, finalFactors: report.finalFactors }, null, 2));
