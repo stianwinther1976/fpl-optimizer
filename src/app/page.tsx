@@ -6,6 +6,7 @@ import { api, FplApiError, DEMO_ENTRY_ID, setDemoMode } from "@/lib/fpl";
 import type { Entry } from "@/lib/types";
 import ThemeToggle from "@/components/ThemeToggle";
 import Lion from "@/components/Lion";
+import { getRecentTeams, type RecentTeam } from "@/lib/recent";
 
 const FEATURES: [string, string, string, string][] = [
   ["🧠", "Optimal team", "Best XI, formation and bench order from expected points.", "optimize"],
@@ -21,10 +22,14 @@ export default function Home() {
   const [entry, setEntry] = useState<Entry | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [recent, setRecent] = useState<RecentTeam[]>([]);
+
   useEffect(() => {
     const saved = localStorage.getItem("fpl-id");
     // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring persisted input on mount
     if (saved) setId(saved);
+     
+    setRecent(getRecentTeams());
   }, []);
 
   async function check() {
@@ -74,8 +79,27 @@ export default function Home() {
         </p>
 
         <div className="card mt-4 p-4 text-left sm:mt-8 sm:p-6">
+          {/* One-tap re-entry: no need to remember your ID after the first visit */}
+          {recent.length > 0 && (
+            <div className="mb-4">
+              <div className="text-sm font-medium text-muted">Your teams</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {recent.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => router.push(`/team/${t.id}`)}
+                    className="flex items-center gap-2 rounded-full border border-accent/40 bg-accent/10 px-3 py-2 text-sm font-semibold text-accent hover:bg-accent/20 active:bg-accent/20"
+                    title={`${t.manager} · ID ${t.id}`}
+                  >
+                    ⚡ {t.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <label htmlFor="fpl-id" className="block text-sm font-medium text-muted">
-            Your FPL ID
+            {recent.length > 0 ? "Or another FPL ID" : "Your FPL ID"}
           </label>
           <div className="mt-2 flex gap-2">
             <input

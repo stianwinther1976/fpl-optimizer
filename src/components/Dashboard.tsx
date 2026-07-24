@@ -7,6 +7,7 @@ import { api, FplApiError, loadTeamData, fmtNum, fmtRank, DEMO_ENTRY_ID, type Te
 import type { Element, EntryEventPicks, EventLive } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
+import { saveRecentTeam } from "@/lib/recent";
 import {
   reconcileFinishedGws,
   seedDemoCalibration,
@@ -128,7 +129,18 @@ export default function Dashboard({
     setData(null);
     setError(null);
     loadTeamData(entryId)
-      .then((d) => !cancelled && setData(d))
+      .then((d) => {
+        if (cancelled) return;
+        setData(d);
+        // Remember the team so the landing page can offer one-tap re-entry.
+        if (entryId !== DEMO_ENTRY_ID) {
+          saveRecentTeam({
+            id: entryId,
+            name: d.entry.name,
+            manager: `${d.entry.player_first_name} ${d.entry.player_last_name}`.trim(),
+          });
+        }
+      })
       .catch((e) =>
         !cancelled &&
         setError(e instanceof FplApiError ? e.message : "Could not load this team.")
