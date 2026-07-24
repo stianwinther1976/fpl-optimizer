@@ -6,11 +6,11 @@ import { SITE_URL } from "@/lib/site";
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: "FPL Optimizer — best FPL team, transfers & captain picks every gameweek",
+    default: "FPL Optimizer — smarter FPL transfers, captain picks & chip timing",
     template: "%s · FPL Optimizer",
   },
   description:
-    "Free Fantasy Premier League optimizer: enter your FPL ID and get the best transfers, captain picks, chip advice, live points with auto-subs and a 6-gameweek transfer planner — built on every official FPL rule, with a self-learning prediction model.",
+    "Free Fantasy Premier League optimizer: enter your FPL ID and get data-driven transfer suggestions, captain picks, chip timing, live points with auto-subs and a 6-gameweek transfer planner — built on every official FPL rule, with a prediction model that grades itself against real results.",
   keywords: [
     "FPL",
     "Fantasy Premier League",
@@ -28,16 +28,16 @@ export const metadata: Metadata = {
     type: "website",
     url: SITE_URL,
     siteName: "FPL Optimizer",
-    title: "FPL Optimizer — best FPL team, transfers & captain picks every gameweek",
+    title: "FPL Optimizer — smarter FPL transfers, captain picks & chip timing",
     description:
-      "Enter your FPL ID and get the optimal team, transfer plans, captaincy and chip advice — every official FPL rule built in, predictions that grade themselves.",
+      "Enter your FPL ID and get data-driven transfer plans, captaincy and chip advice — every official FPL rule built in, predictions that grade themselves.",
     images: [{ url: "/icon-512.png", width: 512, height: 512, alt: "FPL Optimizer lion logo" }],
   },
   twitter: {
     card: "summary",
-    title: "FPL Optimizer — your best FPL team every gameweek",
+    title: "FPL Optimizer — smarter FPL decisions every gameweek",
     description:
-      "Free FPL tool: optimal transfers, captain picks, chip timing, live points with auto-subs and a 6-GW planner.",
+      "Free FPL tool: data-driven transfers, captain picks, chip timing, live points with auto-subs and a 6-GW planner.",
     images: ["/icon-512.png"],
   },
 };
@@ -81,7 +81,7 @@ export default function RootLayout({
               operatingSystem: "Any",
               offers: { "@type": "Offer", price: "0", priceCurrency: "GBP" },
               description:
-                "Free Fantasy Premier League optimizer: optimal transfers, captain picks, chip advice, live points with auto-subs and a multi-gameweek transfer planner.",
+                "Free Fantasy Premier League optimizer: data-driven transfers, captain picks, chip advice, live points with auto-subs and a multi-gameweek transfer planner.",
             }),
           }}
         />

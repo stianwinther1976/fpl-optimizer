@@ -89,8 +89,8 @@ export default function OptimizePanel({
           <p className="mt-1 text-sm text-muted">
             No squad registered yet — perfect timing. Based on the new season&apos;s prices,
             FPL&apos;s own projections, team strengths and the opening fixtures (GW
-            {upcomingEvent}–{upcomingEvent + 4}), the optimizer can draft the strongest legal
-            15-man squad within the £100.0m budget: 2 GK, 5 DEF, 5 MID, 3 FWD, max 3 per club.
+            {upcomingEvent}–{upcomingEvent + 4}), the optimizer drafts the highest-projected
+            legal 15-man squad within the £100.0m budget: 2 GK, 5 DEF, 5 MID, 3 FWD, max 3 per club.
           </p>
           <button onClick={runLaunch} disabled={launchRunning} className="btn-primary mt-3 rounded-lg px-5 py-2.5">
             {launchRunning ? "Drafting…" : launch ? "Re-draft" : "Build my launch squad"}
@@ -375,7 +375,7 @@ export default function OptimizePanel({
 
       {!result && !running && (
         <div className="card p-6 text-sm text-muted">
-          Hit “Optimize team” to compute the best XI, transfer plans, captaincy and chip
+          Hit “Optimize team” to compute the highest-projected XI, transfer plans, captaincy and chip
           advice for GW{squad.nextEvent}, based on your squad from GW{squad.currentEvent}.
           Projections weigh who actually started your rivals&apos; last five matches, not just
           season averages.

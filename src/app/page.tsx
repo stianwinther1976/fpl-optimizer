@@ -9,9 +9,9 @@ import Lion from "@/components/Lion";
 import { getRecentTeams, type RecentTeam } from "@/lib/recent";
 
 const FEATURES: [string, string, string, string][] = [
-  ["🧠", "Optimal team", "Best XI, formation and bench order from expected points.", "optimize"],
-  ["🔄", "Transfer plans", "0–3 moves weighed against -4 hits — only moves that pay off.", "optimize"],
-  ["🃏", "Chip advisor", "When Wildcard, Free Hit, Bench Boost and Triple Captain gain the most.", "optimize"],
+  ["🧠", "Team picker", "XI, formation and bench order that maximize expected points.", "optimize"],
+  ["🔄", "Transfer plans", "0–3 moves weighed against -4 hits — only moves projected to pay off.", "optimize"],
+  ["🃏", "Chip advisor", "When Wildcard, Free Hit, Bench Boost and Triple Captain project the biggest gains.", "optimize"],
 ];
 
 export default function Home() {
@@ -80,8 +80,9 @@ export default function Home() {
           FPL <span className="text-accent">Optimizer</span>
         </h1>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted sm:mt-4 sm:text-lg">
-          Your FPL ID in — the mathematically best team out. Transfers, captaincy and
-          chips, with every official rule built in.
+          Your FPL ID in — data-driven transfers, captaincy and chip timing out.
+          Every official rule built in, and predictions that grade themselves
+          against real results.
         </p>
 
         <div className="card mt-4 p-4 text-left sm:mt-8 sm:p-6">
