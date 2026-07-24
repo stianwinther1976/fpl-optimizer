@@ -381,11 +381,14 @@ function totalValue(owned: OwnedPlayer[], bank: number): number {
   return owned.reduce((s, o) => s + o.sellPrice, 0) + bank;
 }
 
-/** Greedy + repair: best 15-man squad within a budget. */
+/** Greedy + repair: best 15-man squad within a budget.
+ * `scoreOf` ranks players — defaults to discounted horizon xP (permanent moves
+ * like Wildcard); pass a single-GW scorer for Free Hit. */
 function buildSquadWithinBudget(
   elements: Element[],
   xp: Map<number, PlayerXp>,
-  budget: number
+  budget: number,
+  scoreOf: (id: number) => number = (id) => xp.get(id)?.totalDiscounted ?? 0
 ): { squad: Element[]; cost: number } {
   const need: Record<ElementType, number> = { 1: 2, 2: 5, 3: 5, 4: 3 };
   const pools = new Map<ElementType, Element[]>();
@@ -394,9 +397,7 @@ function buildSquadWithinBudget(
       t,
       elements
         .filter((e) => e.element_type === t && e.status !== "u" && (xp.get(e.id)?.total ?? 0) > 0)
-        .sort(
-          (a, b) => (xp.get(b.id)?.totalDiscounted ?? 0) - (xp.get(a.id)?.totalDiscounted ?? 0)
-        )
+        .sort((a, b) => scoreOf(b.id) - scoreOf(a.id))
         .slice(0, 40)
     );
   }
@@ -425,8 +426,7 @@ function buildSquadWithinBudget(
         const clubOk =
           (clubCount.get(inEl.team) ?? 0) + (inEl.team === out.team ? -1 : 0) < MAX_PER_CLUB;
         if (!clubOk) continue;
-        const xpLoss =
-          (xp.get(out.id)?.totalDiscounted ?? 0) - (xp.get(inEl.id)?.totalDiscounted ?? 0);
+        const xpLoss = scoreOf(out.id) - scoreOf(inEl.id);
         const saved = out.now_cost - inEl.now_cost;
         const delta = xpLoss / Math.max(1, saved); // xp lost per tenth saved
         if (!bestSwap || delta < bestSwap.delta) bestSwap = { outIdx: i, inEl, delta };
@@ -737,4 +737,150 @@ function reconstructSquad(
     }
   }
   return players;
+}
+
+// ---------------------------------------------------------------------------
+// Chip "what-if" scenarios
+// ---------------------------------------------------------------------------
+// Turn a chip badge into an actual decision aid: what would this chip do if I
+// played it? Computed on demand when the user taps a chip.
+
+export interface ChipScenario {
+  chip: string;
+  label: string;
+  bestGw: number; // GW where the chip pays most
+  gain: number; // projected extra points from playing it
+  note?: string; // e.g. "double gameweek for 3 of your players"
+  squad?: Element[]; // Wildcard / Free Hit: the squad to field
+  cost?: number; // squad cost (tenths)
+  bank?: number; // left in the bank (tenths)
+  xi?: BestXi; // resulting best XI
+  benchSlots?: XiSlot[]; // Bench Boost: the bench that would score
+  captainName?: string; // Triple Captain: who to triple
+  horizon: number;
+}
+
+export function chipScenario(input: OptimizerInput, chip: string): ChipScenario {
+  const { bootstrap, fixtures, owned, bank, nextEvent } = input;
+  const horizon = input.horizon ?? 5;
+  const xp =
+    input.precomputedXp ??
+    projectAll({ bootstrap, fixtures, nextEvent, horizon, recentStarts: input.recentStarts });
+  const lastEvent =
+    bootstrap.events.length > 0 ? bootstrap.events[bootstrap.events.length - 1].id : 38;
+  const gws: number[] = [];
+  for (let g = nextEvent; g < nextEvent + horizon && g <= lastEvent; g++) gws.push(g);
+  const squadEls = owned.map((o) => o.element);
+  const teamValue = owned.reduce((s, o) => s + o.sellPrice, 0) + bank;
+  const label =
+    chip === "wildcard"
+      ? "Wildcard"
+      : chip === "freehit"
+        ? "Free Hit"
+        : chip === "bboost"
+          ? "Bench Boost"
+          : "Triple Captain";
+
+  const fxIndex = makeFixtureIndex(fixtures);
+  const squadTeams = new Set(squadEls.map((e) => e.team));
+  const gwNote = (gw: number): string | undefined => {
+    const byTeam = fxIndex.get(gw);
+    if (!byTeam) return undefined;
+    let dbl = 0;
+    let blank = 0;
+    for (const t of squadTeams) {
+      const n = byTeam.get(t)?.length ?? 0;
+      if (n >= 2) dbl++;
+      else if (n === 0) blank++;
+    }
+    if (dbl > 0) return `double gameweek for ${dbl} of your clubs`;
+    if (blank >= 3) return `${blank} of your clubs blank`;
+    return undefined;
+  };
+  const xiAt = (els: Element[], gw: number) =>
+    pickBestXi(els, (id) => xp.get(id)?.perGw.get(gw) ?? 0);
+
+  if (chip === "wildcard") {
+    // Permanent rebuild within team value, judged over the whole horizon.
+    const { squad, cost } = buildSquadWithinBudget(bootstrap.elements, xp, teamValue);
+    const gain = Math.max(
+      0,
+      horizonScore(squad, xp, gws) - horizonScore(squadEls, xp, gws)
+    );
+    return {
+      chip,
+      label,
+      bestGw: nextEvent,
+      gain,
+      squad,
+      cost,
+      bank: teamValue - cost,
+      xi: xiAt(squad, nextEvent),
+      horizon,
+    };
+  }
+
+  if (chip === "freehit") {
+    // One-week squad tailored to the single best gameweek in the horizon.
+    let best = { gw: nextEvent, gain: -Infinity, squad: [] as Element[], cost: 0 };
+    for (const gw of gws) {
+      const { squad, cost } = buildSquadWithinBudget(
+        bootstrap.elements,
+        xp,
+        teamValue,
+        (id) => xp.get(id)?.perGw.get(gw) ?? 0
+      );
+      const gain = xiAt(squad, gw).totalXp - xiAt(squadEls, gw).totalXp;
+      if (gain > best.gain) best = { gw, gain, squad, cost };
+    }
+    return {
+      chip,
+      label,
+      bestGw: best.gw,
+      gain: Math.max(0, best.gain),
+      note: gwNote(best.gw),
+      squad: best.squad,
+      cost: best.cost,
+      bank: teamValue - best.cost,
+      xi: xiAt(best.squad, best.gw),
+      horizon,
+    };
+  }
+
+  if (chip === "bboost") {
+    let best = { gw: nextEvent, gain: 0, xi: xiAt(squadEls, nextEvent) };
+    for (const gw of gws) {
+      const xi = xiAt(squadEls, gw);
+      const benchXp = xi.bench.reduce((s, p) => s + p.xp, 0);
+      if (benchXp > best.gain) best = { gw, gain: benchXp, xi };
+    }
+    return {
+      chip,
+      label,
+      bestGw: best.gw,
+      gain: best.gain,
+      note: gwNote(best.gw),
+      benchSlots: best.xi.bench,
+      xi: best.xi,
+      horizon,
+    };
+  }
+
+  // Triple Captain
+  let best = { gw: nextEvent, gain: 0, name: squadEls[0]?.web_name ?? "your captain" };
+  for (const gw of gws) {
+    for (const e of squadEls) {
+      const v = xp.get(e.id)?.perGw.get(gw) ?? 0;
+      if (v > best.gain) best = { gw, gain: v, name: e.web_name };
+    }
+  }
+  return {
+    chip,
+    label,
+    bestGw: best.gw,
+    gain: best.gain, // the extra 1x on top of the normal captain double
+    note: gwNote(best.gw),
+    captainName: best.name,
+    horizon,
+  };
 }

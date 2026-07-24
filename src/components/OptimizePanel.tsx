@@ -6,9 +6,11 @@ import {
   optimize,
   buildLaunchSquad,
   planHorizon,
+  chipScenario,
   type LaunchSquad,
   type OptimizerResult,
   type SeasonPlan,
+  type ChipScenario,
 } from "@/lib/optimizer";
 import { projectAll } from "@/lib/xp";
 import { fmtPrice, remainingChips, CHIP_LABELS } from "@/lib/rules";
@@ -61,6 +63,8 @@ export default function OptimizePanel({
   const [recentStarts, setRecentStarts] = useState<Map<number, number> | null>(null);
   const [plan, setPlan] = useState<SeasonPlan | null>(null);
   const [planning, setPlanning] = useState(false);
+  const [chipView, setChipView] = useState<ChipScenario | null>(null);
+  const [chipLoading, setChipLoading] = useState<string | null>(null);
 
   const squad = data.squad;
   const teams = useMemo(
@@ -252,8 +256,44 @@ export default function OptimizePanel({
     }
   }
 
+  // "What if I play this chip?" — computed on demand when a chip badge is tapped.
+  async function showChip(chip: string) {
+    setChipLoading(chip);
+    try {
+      await new Promise((r) => setTimeout(r, 20));
+      const scen = chipScenario(
+        {
+          bootstrap: data.bootstrap,
+          fixtures: data.fixtures,
+          owned: squad!.players,
+          bank: squad!.bank,
+          freeTransfers: squad!.freeTransfers,
+          nextEvent: squad!.nextEvent!,
+          horizon,
+          precomputedXp: result?.xp,
+          recentStarts: recentStarts ?? undefined,
+        },
+        chip
+      );
+      setChipView(scen);
+    } finally {
+      setChipLoading(null);
+    }
+  }
+
   return (
     <div className="space-y-6">
+      {chipView && (
+        <Sheet onClose={() => setChipView(null)} labelledBy="chip-title" maxWidth="max-w-md">
+          <ChipSheet
+            scenario={chipView}
+            teams={teams}
+            fixtures={data.fixtures}
+            onSelect={onSelect}
+            onClose={() => setChipView(null)}
+          />
+        </Sheet>
+      )}
       {infoOpen && (
         <Sheet onClose={() => setInfoOpen(null)} labelledBy="opt-info-title" maxWidth="max-w-md">
           <div>
@@ -326,43 +366,20 @@ export default function OptimizePanel({
           >
             <Badge>Bank £{fmtPrice(squad.bank)}m</Badge>
           </button>
-          {chipsLeft.map((c, i) => {
-            const windows = (data.bootstrap.chips ?? []).filter((w) => w.name === c.name);
-            const win = windows.find(
-              (w) => squad.nextEvent! >= w.start_event && squad.nextEvent! <= w.stop_event
-            );
-            const desc: Record<string, string> = {
-              wildcard:
-                "Unlimited free transfers for one gameweek — rebuild the whole squad. Changes are permanent.",
-              freehit:
-                "Unlimited transfers for one gameweek only — your squad reverts afterwards. Great for blank/double gameweeks.",
-              bboost: "Your four bench players' points count this gameweek.",
-              "3xc": "Your captain scores triple instead of double this gameweek.",
-            };
-            const advice = result?.chipAdvice.find((a) => a.chip === c.name);
-            return (
-              <button
-                key={i}
-                type="button"
-                className="-m-1.5 p-1.5"
-                onClick={() =>
-                  setInfoOpen({
-                    title: `${c.label} — available`,
-                    body: [
-                      desc[c.name] ?? "",
-                      win ? `Usable window: GW${win.start_event}–GW${win.stop_event}. Only one chip can be played per gameweek, and a played chip cannot be cancelled.` : "",
-                      advice
-                        ? `Projected gain if played now: +${advice.projectedGain.toFixed(1)} xp. ${advice.detail}`
-                        : "Run the optimizer to see the projected gain of playing it this gameweek.",
-                      "This list only shows chips you still have — used chips disappear from here (see the Chips left card up top).",
-                    ].filter(Boolean),
-                  })
-                }
-              >
-                <Badge tone="purple">{c.label}</Badge>
-              </button>
-            );
-          })}
+          {chipsLeft.map((c, i) => (
+            <button
+              key={i}
+              type="button"
+              className="-m-1.5 p-1.5"
+              disabled={chipLoading != null}
+              onClick={() => showChip(c.name)}
+            >
+              <Badge tone="purple">
+                {chipLoading === c.name ? "…" : c.label} {chipLoading === c.name ? "" : "▸"}
+              </Badge>
+            </button>
+          ))}
+          <span className="text-xs text-muted">← tap a chip to preview it</span>
         </div>
         <button
           onClick={run}
@@ -709,6 +726,147 @@ function PlanRow({
         <div className="whitespace-nowrap font-mono font-bold">{net.toFixed(1)} xp</div>
         <div className="text-xs text-muted">{gain >= 0 ? "baseline" : ""}</div>
       </div>
+    </div>
+  );
+}
+
+function ChipSheet({
+  scenario,
+  teams,
+  fixtures,
+  onSelect,
+  onClose,
+}: {
+  scenario: ChipScenario;
+  teams: Map<number, import("@/lib/types").Team>;
+  fixtures: import("@/lib/types").Fixture[];
+  onSelect?: (el: import("@/lib/types").Element) => void;
+  onClose: () => void;
+}) {
+  const s = scenario;
+  const isSquadChip = s.chip === "wildcard" || s.chip === "freehit";
+  const blurb: Record<string, string> = {
+    wildcard:
+      "Unlimited free transfers — a permanent rebuild. Here's the best squad within your current team value, judged over the whole horizon.",
+    freehit:
+      "Unlimited transfers for one gameweek only; your squad reverts afterwards. Shown for the single gameweek where it gains the most.",
+    bboost: "All 15 players score this gameweek. Shown for the gameweek where your bench projects highest.",
+    "3xc": "Your captain scores 3× instead of 2×. Shown for the gameweek and player where the extra multiple is worth most.",
+  };
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <h2 id="chip-title" className="text-lg font-bold">
+          🃏 {s.label}
+        </h2>
+        <SheetClose onClose={onClose} />
+      </div>
+      <p className="mt-1 text-sm text-muted">{blurb[s.chip]}</p>
+
+      <div className="mt-3 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2.5 text-sm">
+        <div className="font-semibold text-accent">
+          Best in GW{s.bestGw}
+          {s.note && <span className="font-normal"> — {s.note}</span>}
+        </div>
+        <div className="mt-0.5 text-muted">
+          {s.chip === "wildcard" && (
+            <>Projected to gain <b className="text-foreground">+{s.gain.toFixed(1)} pts</b> over {s.horizon} gameweeks vs keeping your team.</>
+          )}
+          {s.chip === "freehit" && (
+            <>A one-week squad projects <b className="text-foreground">+{s.gain.toFixed(1)} pts</b> more than your team that gameweek.</>
+          )}
+          {s.chip === "bboost" && (
+            <>Your bench projects <b className="text-foreground">{s.gain.toFixed(1)} pts</b> that gameweek.</>
+          )}
+          {s.chip === "3xc" && (
+            <>{s.captainName} would add <b className="text-foreground">~{s.gain.toFixed(1)} extra pts</b> (the 3rd multiple).</>
+          )}
+        </div>
+      </div>
+
+      {isSquadChip && s.xi && s.squad && (
+        <>
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+            <span>
+              <span className="text-muted">Cost:</span> <b>£{fmtPrice(s.cost ?? 0)}m</b>
+            </span>
+            <span>
+              <span className="text-muted">Bank:</span> <b>£{fmtPrice(s.bank ?? 0)}m</b>
+            </span>
+          </div>
+          <div className="mt-3">
+            <Pitch
+              starters={s.xi.starters.map((x) => ({
+                element: x.element,
+                xp: x.xp,
+                isCaptain: x.isCaptain,
+                isVice: x.isVice,
+              }))}
+              bench={s.xi.bench.map((x) => ({ element: x.element, xp: x.xp }))}
+              teams={teams}
+              fixtures={fixtures}
+              nextEvent={s.bestGw}
+              formation={s.xi.formation}
+              onSelect={onSelect}
+            />
+          </div>
+        </>
+      )}
+
+      {s.chip === "bboost" && s.benchSlots && (
+        <div className="mt-3">
+          <div className="text-sm font-semibold">Bench that would score</div>
+          <div className="mt-1.5 divide-y divide-border-c/60">
+            {s.benchSlots.map((b) => (
+              <button
+                key={b.element.id}
+                type="button"
+                onClick={onSelect ? () => onSelect(b.element) : undefined}
+                className="flex w-full items-center justify-between px-1 py-2 text-left text-sm hover:bg-panel-2/60 active:bg-panel-2"
+              >
+                <span>
+                  {b.element.web_name}{" "}
+                  <span className="text-xs text-muted">{teams.get(b.element.team)?.short_name}</span>
+                </span>
+                <span className="font-mono text-accent">{b.xp.toFixed(1)} xp</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {isSquadChip && s.squad && (
+        <div className="mt-4">
+          <div className="text-sm font-semibold">Type this into fantasy.premierleague.com:</div>
+          <div className="mt-2 grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
+            {s.squad
+              .slice()
+              .sort((a, b) => a.element_type - b.element_type || b.now_cost - a.now_cost)
+              .map((e) => (
+                <button
+                  key={e.id}
+                  type="button"
+                  onClick={onSelect ? () => onSelect(e) : undefined}
+                  className="flex items-center justify-between rounded-lg border border-transparent bg-panel-2 px-3 py-2 text-left hover:border-accent active:border-accent"
+                >
+                  <span className="truncate">
+                    <span className="mr-1.5 text-xs text-muted">
+                      {["GK", "DEF", "MID", "FWD"][e.element_type - 1]}
+                    </span>
+                    {e.web_name}{" "}
+                    <span className="text-xs text-muted">{teams.get(e.team)?.short_name}</span>
+                  </span>
+                  <span className="ml-2 shrink-0 font-mono">£{fmtPrice(e.now_cost)}m</span>
+                </button>
+              ))}
+          </div>
+        </div>
+      )}
+
+      <p className="mt-3 text-xs text-muted">
+        A projection, not a recommendation to burn the chip — compare the gain against saving it
+        for a bigger double or blank gameweek later.
+      </p>
     </div>
   );
 }
