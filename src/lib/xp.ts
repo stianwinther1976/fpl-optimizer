@@ -62,8 +62,13 @@ export const XP_CONFIG = {
   formWeight: 0.2,
   // Within "form": recent 30-day form vs season points-per-game
   recentFormShare: 0.5,
-  // For the very next GW, blend in FPL's own ep_next (lightly)
+  // For the very next GW, blend in FPL's own ep_next (lightly) once we have
+  // our own data. When data is thin (pre-season / first weeks), lean on it
+  // HARD — it's FPL's own model, an independent second opinion that's already
+  // scaled to real points and values premiums correctly.
   epNextWeight: 0.15,
+  epThinGames: 3, // fewer games than this = "thin data"
+  epThinMaxWeight: 0.7, // max weight on FPL's ep_next when we have zero data
   // --- Own xG assessment (don't take API xG at face value) ---
   // Empirical-Bayes shrinkage: rates from small samples are pulled toward a
   // price/position prior worth `shrinkMins` minutes of evidence.
@@ -440,6 +445,13 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
       st.gamesByTeam.get(el.team) ?? st.playedGws,
       ctx.recentStarts?.get(el.id)
     );
+    // FPL's own expected points (ep_next) — an independent projection. Weight
+    // it by how little of our OWN data we have: dominant pre-season, minor once
+    // real games accrue.
+    const ep = el.ep_next != null ? parseFloat(el.ep_next) : NaN;
+    const epUsable = Number.isFinite(ep) && ep >= 0;
+    const playedGames = (el.minutes ?? 0) / 90;
+    const thin = clamp((cfg.epThinGames - playedGames) / cfg.epThinGames, 0, 1);
     const perGw = new Map<number, number>();
     for (let gw = ctx.nextEvent; gw < ctx.nextEvent + horizon && gw <= lastEvent; gw++) {
       const fx = fxIndex.get(gw)?.get(el.team) ?? [];
@@ -448,14 +460,16 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
         const isHome = f.team_h === el.team;
         gwXp += fixtureXp(el, f, isHome, gw - ctx.nextEvent, st, rates, mm);
       }
-      // Blend FPL's own projection for the immediate GW — fixture-count aware:
-      // ep_next is close to a single-game estimate, so scale it for DGWs and
-      // skip it entirely on blank GWs (no phantom points).
-      if (gw === ctx.nextEvent && el.ep_next != null && fx.length > 0) {
-        const ep = parseFloat(el.ep_next);
-        if (!Number.isNaN(ep)) {
-          gwXp = (1 - cfg.epNextWeight) * gwXp + cfg.epNextWeight * Math.max(0, ep) * fx.length;
-        }
+      // Blend FPL's own projection — fixture-count aware (scale for DGWs, skip
+      // on blanks). The immediate GW always gets at least the light base
+      // weight; every horizon GW leans on ep_next while our data is thin, so
+      // pre-season the anchor is FPL's own realistic, premium-aware estimate.
+      if (epUsable && fx.length > 0) {
+        const isNext = gw === ctx.nextEvent;
+        const w = isNext
+          ? Math.max(cfg.epNextWeight, thin * cfg.epThinMaxWeight)
+          : thin * cfg.epThinMaxWeight;
+        if (w > 0) gwXp = (1 - w) * gwXp + w * ep * fx.length;
       }
       // Calibration: multiply by the correction learned from grading our own
       // past predictions against what actually happened.

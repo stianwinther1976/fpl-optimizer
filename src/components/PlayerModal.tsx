@@ -207,6 +207,17 @@ export default function PlayerModal({
           </div>
         )}
 
+        {/* Second opinion: FPL's own expected-points projection for the next GW */}
+        {element.ep_next != null && parseFloat(element.ep_next) >= 0 && (
+          <div className="mt-4 flex items-center justify-between rounded-lg border border-border-c bg-panel-2 px-3 py-2.5 text-sm">
+            <span className="text-muted">
+              FPL&apos;s own next-GW projection
+              <span className="ml-1 text-[11px]">(an independent estimate)</span>
+            </span>
+            <span className="font-mono font-semibold">{parseFloat(element.ep_next).toFixed(1)} pts</span>
+          </div>
+        )}
+
         {/* Upcoming fixtures (next 3 GWs, like the official FPL view) */}
         {upcoming.length > 0 && (
           <div className="mt-4">

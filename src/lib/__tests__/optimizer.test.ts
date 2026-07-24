@@ -298,6 +298,30 @@ describe("xp model — recent starts", () => {
   });
 });
 
+describe("pre-season: leans on FPL's ep_next (premium-aware)", () => {
+  it("a zero-minute premium with a high ep_next projects near that estimate", () => {
+    const b = makeMockBootstrap();
+    // Everyone pre-season: no minutes, no data.
+    b.elements.forEach((e) => {
+      e.minutes = 0;
+      e.starts = 0;
+      e.total_points = 0;
+      e.form = "0.0";
+      e.points_per_game = "0.0";
+      e.expected_goals = "0.0";
+      e.expected_assists = "0.0";
+      e.ep_next = "2.0";
+    });
+    const premium = b.elements.find((e) => e.element_type === 4)!;
+    premium.now_cost = 145;
+    premium.ep_next = "7.5"; // FPL rates this player highly
+    const xp = projectAll({ bootstrap: b, fixtures: makeMockFixtures(), nextEvent: 11, horizon: 1 });
+    // With no data of our own, the projection should track FPL's estimate,
+    // clearly above the field's 2.0.
+    expect(xp.get(premium.id)!.next).toBeGreaterThan(5);
+  });
+});
+
 describe("buildLaunchSquad (pre-season)", () => {
   it("drafts a legal 15-man squad within £100m even with zero minutes played", () => {
     const b = makeMockBootstrap();
