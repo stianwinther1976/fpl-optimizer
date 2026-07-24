@@ -156,7 +156,22 @@ export default function OptimizePanel({
               </div>
               <div>
                 <span className="text-muted">Projected (GW{upcomingEvent}, incl. captain):</span>{" "}
-                <b className="text-accent">{chosen.xi.totalXp.toFixed(1)} xp</b>
+                <button
+                  type="button"
+                  className="font-mono font-bold text-accent underline decoration-dotted underline-offset-2"
+                  onClick={() =>
+                    setInfoOpen({
+                      title: `${chosen.xi.totalXp.toFixed(1)} expected points`,
+                      body: [
+                        "xP = expected points: the average return this team is likely to score, weighing each player's chance of playing, fixtures, form and underlying numbers — with the captain doubled.",
+                        "It's an average, not a target. Real gameweeks swing well above it (a captain haul, clean sheets) and below it (blanks). Over many weeks the total tracks xP.",
+                        "It's on a real-points scale: across four backtested seasons the teams the model picked actually scored within a few points of their projection each week — so treat this as roughly what a normal week returns, not a ceiling.",
+                      ],
+                    })
+                  }
+                >
+                  {chosen.xi.totalXp.toFixed(1)} pts
+                </button>
               </div>
             </div>
             <Pitch

@@ -4,5 +4,7 @@
   "modelManagerPoints": 2187,
   "setAndForgetPoints": 1450,
   "transfersMade": 36,
-  "perGwModel": "57.6"
+  "perGwModel": "57.6",
+  "projectedXiTotal": 2319,
+  "realizedVsProjected": "0.943"
 }

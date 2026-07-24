@@ -313,6 +313,9 @@ describe(`${SEASON} full-season simulation`, () => {
     const setForgetSquad = [...squad];
     let setForgetTotal = 0;
     let transfersMade = 0;
+    // Projected XI xP (incl. captain) vs realized — to calibrate the
+    // "realistic team score" display factor.
+    let projectedXiTotal = 0;
 
     for (let gw = 1; gw <= LAST; gw++) {
       const st = buildStateAt(gw, season);
@@ -369,6 +372,10 @@ describe(`${SEASON} full-season simulation`, () => {
       }
 
       // --- Score the gameweek (both managers) ---
+      projectedXiTotal += pickBestXi(
+        squad.map((id) => elById.get(id)!).filter(Boolean),
+        xpNext
+      ).totalXp;
       modelTotal += actualGwPoints(squad, elById, xpNext, st.actual, st.minutes ?? st.minutesAt);
       // Set & forget: captain by best season PPG, else same engine.
       const ppgNext = (id: number) => parseFloat(elById.get(id)?.points_per_game ?? "0") || 0;
@@ -388,6 +395,9 @@ describe(`${SEASON} full-season simulation`, () => {
       setAndForgetPoints: Math.round(setForgetTotal),
       transfersMade,
       perGwModel: (modelTotal / LAST).toFixed(1),
+      projectedXiTotal: Math.round(projectedXiTotal),
+      // How much higher realized XI points ran vs projected xP.
+      realizedVsProjected: (modelTotal / projectedXiTotal).toFixed(3),
     };
     fs.writeFileSync(
       path.resolve(__dirname, `../sim-report-${SEASON}.json`),
