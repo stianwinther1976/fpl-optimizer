@@ -13,50 +13,9 @@ import {
 import type { TeamData } from "@/lib/fpl";
 import { CHIP_LABELS } from "@/lib/rules";
 import { SectionTitle } from "./ui";
+import PastSeasons from "./PastSeasons";
 
-function PastSeasons({ data }: { data: TeamData }) {
-  const past = data.history.past;
-  if (past.length === 0) return null;
-  const last3 = past.slice(-3);
-  const avgRank = Math.round(last3.reduce((s, p) => s + p.rank, 0) / last3.length);
-  const bestRank = Math.min(...past.map((p) => p.rank));
-  return (
-    <div className="card p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <SectionTitle>Past seasons</SectionTitle>
-        <div className="text-sm text-muted">
-          {past.length} season{past.length > 1 ? "s" : ""} · last {last3.length} avg rank{" "}
-          <span className="font-semibold text-foreground">{avgRank.toLocaleString("en-GB")}</span>{" "}
-          · best <span className="font-semibold text-accent">{bestRank.toLocaleString("en-GB")}</span>
-        </div>
-      </div>
-      <div className="mt-3">
-        <table className="w-full text-sm">
-          <thead className="border-b border-border-c text-xs uppercase text-muted">
-            <tr>
-              <th className="px-2 py-1.5 text-left">Season</th>
-              <th className="px-2 py-1.5 text-right">Points</th>
-              <th className="px-2 py-1.5 text-right">Rank</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border-c/60">
-            {[...past].reverse().map((p) => (
-              <tr key={p.season_name} className={p.rank === bestRank ? "text-accent" : ""}>
-                <td className="px-2 py-1.5 font-medium">{p.season_name}</td>
-                <td className="px-2 py-1.5 text-right font-mono">{p.total_points.toLocaleString("en-GB")}</td>
-                <td className="px-2 py-1.5 text-right font-mono">
-                  {p.rank.toLocaleString("en-GB")}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-export default function HistoryChart({ data }: { data: TeamData }) {
+export default function HistoryChart({ data, entryId }: { data: TeamData; entryId: number }) {
   const rows = data.history.current.map((r) => ({
     gw: r.event,
     points: r.points,
@@ -71,14 +30,14 @@ export default function HistoryChart({ data }: { data: TeamData }) {
     return (
       <div className="space-y-6">
         <div className="card p-6 text-muted">No history yet this season.</div>
-        <PastSeasons data={data} />
+        <PastSeasons data={data} entryId={entryId} />
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <PastSeasons data={data} />
+      <PastSeasons data={data} entryId={entryId} />
       <div className="card p-4">
         <SectionTitle>Points per gameweek</SectionTitle>
         <div className="mt-4 h-64">

@@ -10,6 +10,7 @@ import {
   type SeasonBreakdown,
   type BreakdownCat,
 } from "@/lib/breakdown";
+import { currentSeasonName, saveSeasonArchive, toArchive } from "@/lib/seasonArchive";
 import { POSITION_NAMES } from "@/lib/rules";
 import type { Element, ElementType } from "@/lib/types";
 import { PlayerAvatar } from "./Pitch";
@@ -70,7 +71,17 @@ export default function PointsBreakdown({
       if (!cancelled) setProgress({ done, total });
     })
       .then((res) => {
-        if (!cancelled) setBd(res);
+        if (cancelled) return;
+        setBd(res);
+        // Archive it: FPL deletes picks and live scoring when the season rolls
+        // over, so this snapshot is the only way the breakdown survives into
+        // next season's "Past seasons" view.
+        const season = currentSeasonName(data.bootstrap.events);
+        if (season && res.gws.length > 0) {
+          saveSeasonArchive(
+            toArchive(entryId, season, res, elementById, data.bootstrap.teams, Date.now())
+          );
+        }
       })
       .catch(() => {
         if (!cancelled) setErr(true);
@@ -78,7 +89,7 @@ export default function PointsBreakdown({
     return () => {
       cancelled = true;
     };
-  }, [entryId, finishedGws, elementById, data.fixtures]);
+  }, [entryId, finishedGws, elementById, data.fixtures, data.bootstrap]);
 
   if (finishedGws.length === 0) {
     return (

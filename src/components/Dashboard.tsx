@@ -781,7 +781,7 @@ export default function Dashboard({
         )}
         {visited.has("history") && (
           <div hidden={tab !== "history"} className="space-y-6">
-            <HistoryChart data={data} />
+            <HistoryChart data={data} entryId={entryId} />
             <PointsBreakdown data={data} entryId={entryId} onSelect={setSelected} />
           </div>
         )}
