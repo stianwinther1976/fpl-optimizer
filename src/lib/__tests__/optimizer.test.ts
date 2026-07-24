@@ -326,6 +326,34 @@ describe("pre-season: leans on FPL's ep_next (premium-aware)", () => {
     // clearly above the field's 2.0.
     expect(xp.get(premium.id)!.next).toBeGreaterThan(5);
   });
+
+  it("a proven last-season performer outprojects an unknown at the same price", () => {
+    const b = makeMockBootstrap();
+    b.elements.forEach((e) => {
+      e.minutes = 0;
+      e.starts = 0;
+      e.total_points = 0;
+      e.form = "0.0";
+      e.points_per_game = "0.0";
+      e.ep_next = null; // isolate the last-season signal
+    });
+    const mids = b.elements.filter((e) => e.element_type === 3);
+    const proven = mids[0];
+    const unknown = mids[1];
+    proven.now_cost = unknown.now_cost = 80; // same price
+    const pastSeason = new Map([
+      [proven.id, { points: 220, minutes: 3200 }], // nailed, high-scoring
+      [unknown.id, { points: 30, minutes: 500 }], // fringe
+    ]);
+    const xp = projectAll({
+      bootstrap: b,
+      fixtures: makeMockFixtures(),
+      nextEvent: 11,
+      horizon: 1,
+      pastSeason,
+    });
+    expect(xp.get(proven.id)!.next).toBeGreaterThan(xp.get(unknown.id)!.next);
+  });
 });
 
 describe("buildLaunchVariants (multiple GW1 drafts)", () => {

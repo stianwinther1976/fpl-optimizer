@@ -68,7 +68,12 @@ export const XP_CONFIG = {
   // scaled to real points and values premiums correctly.
   epNextWeight: 0.15,
   epThinGames: 3, // fewer games than this = "thin data"
-  epThinMaxWeight: 0.7, // max weight on FPL's ep_next when we have zero data
+  epThinMaxWeight: 0.7, // max blend weight on real-world signals when data is thin
+  // How the thin-data anchor splits between FPL's ep_next and last season's
+  // per-game output (both grounded in reality; both used when available).
+  epShare: 0.55,
+  pastSeasonShare: 0.45,
+  pastNailedGames: 32, // last-season games that count as "fully nailed"
   // --- Own xG assessment (don't take API xG at face value) ---
   // Empirical-Bayes shrinkage: rates from small samples are pulled toward a
   // price/position prior worth `shrinkMins` minutes of evidence.
@@ -124,6 +129,11 @@ export interface XpContext {
    * is priced correctly within a week instead of a month.
    */
   recentStarts?: Map<number, number>;
+  /**
+   * elementId -> last season's total points & minutes (element-summary
+   * history_past). A grounded pre-season signal for who played and delivered.
+   */
+  pastSeason?: Map<number, { points: number; minutes: number }>;
 }
 
 /** Fixtures for a team in a given event (0, 1 or 2 = DGW). */
@@ -445,13 +455,24 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
       st.gamesByTeam.get(el.team) ?? st.playedGws,
       ctx.recentStarts?.get(el.id)
     );
-    // FPL's own expected points (ep_next) — an independent projection. Weight
-    // it by how little of our OWN data we have: dominant pre-season, minor once
-    // real games accrue.
+    // Real-world anchors used while our own current-season data is thin:
+    //  (a) FPL's own expected points (ep_next) — an independent projection.
+    //  (b) Last season's per-game output — who actually played and delivered.
+    // Both fade out as real games accrue this season.
     const ep = el.ep_next != null ? parseFloat(el.ep_next) : NaN;
     const epUsable = Number.isFinite(ep) && ep >= 0;
     const playedGames = (el.minutes ?? 0) / 90;
     const thin = clamp((cfg.epThinGames - playedGames) / cfg.epThinGames, 0, 1);
+    // Last-season per-game estimate, scaled by how nailed they were.
+    const past = ctx.pastSeason?.get(el.id);
+    let pastPerGame = NaN;
+    if (past && past.minutes > 0) {
+      const apps = past.minutes / 90;
+      const perApp = past.points / apps;
+      const nailed = clamp(apps / cfg.pastNailedGames, 0.3, 1);
+      pastPerGame = perApp * nailed;
+    }
+    const pastUsable = Number.isFinite(pastPerGame) && pastPerGame >= 0;
     const perGw = new Map<number, number>();
     for (let gw = ctx.nextEvent; gw < ctx.nextEvent + horizon && gw <= lastEvent; gw++) {
       const fx = fxIndex.get(gw)?.get(el.team) ?? [];
@@ -460,16 +481,26 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
         const isHome = f.team_h === el.team;
         gwXp += fixtureXp(el, f, isHome, gw - ctx.nextEvent, st, rates, mm);
       }
-      // Blend FPL's own projection — fixture-count aware (scale for DGWs, skip
-      // on blanks). The immediate GW always gets at least the light base
-      // weight; every horizon GW leans on ep_next while our data is thin, so
-      // pre-season the anchor is FPL's own realistic, premium-aware estimate.
-      if (epUsable && fx.length > 0) {
+      // Blend the real-world anchors — fixture-count aware (scale for DGWs,
+      // skip on blanks). Build a combined target from ep_next and last season,
+      // then pull the model toward it in proportion to how thin our data is.
+      if ((epUsable || pastUsable) && fx.length > 0) {
+        let tSum = 0;
+        let tW = 0;
+        if (epUsable) {
+          tSum += cfg.epShare * ep * fx.length;
+          tW += cfg.epShare;
+        }
+        if (pastUsable) {
+          tSum += cfg.pastSeasonShare * pastPerGame * fx.length;
+          tW += cfg.pastSeasonShare;
+        }
+        const target = tW > 0 ? tSum / tW : gwXp;
         const isNext = gw === ctx.nextEvent;
         const w = isNext
           ? Math.max(cfg.epNextWeight, thin * cfg.epThinMaxWeight)
           : thin * cfg.epThinMaxWeight;
-        if (w > 0) gwXp = (1 - w) * gwXp + w * ep * fx.length;
+        if (w > 0) gwXp = (1 - w) * gwXp + w * target;
       }
       // Calibration: multiply by the correction learned from grading our own
       // past predictions against what actually happened.

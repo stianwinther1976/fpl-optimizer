@@ -517,9 +517,10 @@ export function buildLaunchVariants(
   bootstrap: Bootstrap,
   fixtures: Fixture[],
   nextEvent: number,
-  horizon = 5
+  horizon = 5,
+  pastSeason?: Map<number, { points: number; minutes: number }>
 ): { xp: Map<number, PlayerXp>; variants: LaunchVariant[] } {
-  const xp = projectAll({ bootstrap, fixtures, nextEvent, horizon });
+  const xp = projectAll({ bootstrap, fixtures, nextEvent, horizon, pastSeason });
   const score = (id: number) => xp.get(id)?.totalDiscounted ?? 0;
   const finalize = (
     key: string,

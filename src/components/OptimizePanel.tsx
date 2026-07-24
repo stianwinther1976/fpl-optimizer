@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { fetchRecentStarts, type TeamData } from "@/lib/fpl";
+import { fetchRecentStarts, fetchPastSeason, type TeamData } from "@/lib/fpl";
 import {
   optimize,
   buildLaunchVariants,
@@ -77,17 +77,35 @@ export default function OptimizePanel({
 
   // Season-launch mode: no squad yet (pre-GW1) but the new season's data is live.
   if ((!squad || squad.nextEvent == null) && upcomingEvent != null) {
-    const runLaunch = () => {
+    const runLaunch = async () => {
       setLaunchRunning(true);
-      setTimeout(() => {
-        try {
-          const { variants } = buildLaunchVariants(data.bootstrap, data.fixtures, upcomingEvent, 5);
-          setLaunch(variants);
-          setLaunchPick(0);
-        } finally {
-          setLaunchRunning(false);
-        }
-      }, 30);
+      setPhase("Checking last season's minutes & returns…");
+      try {
+        // Fetch last-season totals for the realistic pool (priciest players
+        // across positions — cheap unknowns aren't draft-worthy anyway).
+        const pool = [...data.bootstrap.elements]
+          .filter((e) => e.element_type >= 1 && e.element_type <= 4 && e.status !== "u")
+          .sort((a, b) => b.now_cost - a.now_cost)
+          .slice(0, 140)
+          .map((e) => e.id);
+        const pastSeason = await fetchPastSeason(pool, 8, (done, total) =>
+          setPhase(`Checking last season… ${done}/${total}`)
+        );
+        setPhase("Drafting your options…");
+        await new Promise((r) => setTimeout(r, 20));
+        const { variants } = buildLaunchVariants(
+          data.bootstrap,
+          data.fixtures,
+          upcomingEvent,
+          5,
+          pastSeason.size > 0 ? pastSeason : undefined
+        );
+        setLaunch(variants);
+        setLaunchPick(0);
+      } finally {
+        setLaunchRunning(false);
+        setPhase(null);
+      }
     };
     const chosen = launch?.[launchPick] ?? null;
     return (
@@ -104,6 +122,7 @@ export default function OptimizePanel({
           <button onClick={runLaunch} disabled={launchRunning} className="btn-primary mt-3 rounded-lg px-5 py-2.5">
             {launchRunning ? "Drafting…" : launch ? "Re-draft" : "Build my launch squads"}
           </button>
+          {launchRunning && phase && <div className="mt-2 text-xs text-muted">{phase}</div>}
         </div>
 
         {launch && chosen && (

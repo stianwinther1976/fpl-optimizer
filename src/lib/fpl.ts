@@ -80,6 +80,16 @@ export interface ElementSummary {
     opponent_team: number;
     was_home: boolean;
   }[];
+  history_past?: {
+    season_name: string;
+    total_points: number;
+    minutes: number;
+  }[];
+}
+
+export interface PastSeason {
+  points: number;
+  minutes: number;
 }
 
 export const api = {
@@ -122,6 +132,41 @@ export async function fetchRecentStarts(
         }
       } catch {
         // no data — season model carries on alone
+      }
+      done++;
+      onProgress?.(done, queue.length + done);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+  return out;
+}
+
+/**
+ * Last season's totals (points + minutes) per player, from element-summary's
+ * history_past. The strongest pre-season signal there is: who actually played
+ * and delivered last year. Bounded concurrency; failures left out.
+ */
+export async function fetchPastSeason(
+  ids: number[],
+  concurrency = 8,
+  onProgress?: (done: number, total: number) => void
+): Promise<Map<number, PastSeason>> {
+  const out = new Map<number, PastSeason>();
+  const queue = [...new Set(ids)];
+  let done = 0;
+  const worker = async () => {
+    for (;;) {
+      const id = queue.shift();
+      if (id == null) return;
+      try {
+        const s = await api.elementSummary(id);
+        const past = s.history_past;
+        if (past && past.length > 0) {
+          const last = past[past.length - 1]; // most recent completed season
+          if (last.minutes > 0) out.set(id, { points: last.total_points, minutes: last.minutes });
+        }
+      } catch {
+        // no data — model carries on with prices + ep_next
       }
       done++;
       onProgress?.(done, queue.length + done);
