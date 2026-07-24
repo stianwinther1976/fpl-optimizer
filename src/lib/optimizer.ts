@@ -388,37 +388,64 @@ function buildSquadWithinBudget(
   elements: Element[],
   xp: Map<number, PlayerXp>,
   budget: number,
-  scoreOf: (id: number) => number = (id) => xp.get(id)?.totalDiscounted ?? 0
+  scoreOf: (id: number) => number = (id) => xp.get(id)?.totalDiscounted ?? 0,
+  opts?: {
+    /** Exclude any single player above this price (tenths) — "value" builds. */
+    maxPlayerCost?: number;
+    /** Force these players in first — "stars & scrubs" builds. */
+    mustInclude?: number[];
+  }
 ): { squad: Element[]; cost: number } {
   const need: Record<ElementType, number> = { 1: 2, 2: 5, 3: 5, 4: 3 };
+  const cap = opts?.maxPlayerCost ?? Infinity;
+  const locked = new Set(opts?.mustInclude ?? []);
+  const byId = new Map(elements.map((e) => [e.id, e]));
   const pools = new Map<ElementType, Element[]>();
   for (const t of [1, 2, 3, 4] as ElementType[]) {
     pools.set(
       t,
       elements
-        .filter((e) => e.element_type === t && e.status !== "u" && (xp.get(e.id)?.total ?? 0) > 0)
+        .filter(
+          (e) =>
+            e.element_type === t &&
+            e.status !== "u" &&
+            (xp.get(e.id)?.total ?? 0) > 0 &&
+            (e.now_cost <= cap || locked.has(e.id))
+        )
         .sort((a, b) => scoreOf(b.id) - scoreOf(a.id))
         .slice(0, 40)
     );
   }
-  // Start with the greedy-best squad, then downgrade lowest value-per-price until affordable.
   const squad: Element[] = [];
   const clubCount = new Map<number, number>();
+  const add = (e: Element) => {
+    squad.push(e);
+    clubCount.set(e.team, (clubCount.get(e.team) ?? 0) + 1);
+  };
+  // Forced premium picks first (respecting position/club limits).
+  for (const id of locked) {
+    const e = byId.get(id);
+    if (!e) continue;
+    if (squad.filter((s) => s.element_type === e.element_type).length >= need[e.element_type]) continue;
+    if ((clubCount.get(e.team) ?? 0) >= MAX_PER_CLUB) continue;
+    add(e);
+  }
+  // Greedy-best fill, then downgrade lowest value-per-price until affordable.
   for (const t of [1, 2, 3, 4] as ElementType[]) {
     for (const e of pools.get(t)!) {
+      if (squad.some((s) => s.id === e.id)) continue;
       if (squad.filter((s) => s.element_type === t).length >= need[t]) break;
       if ((clubCount.get(e.team) ?? 0) >= MAX_PER_CLUB) continue;
-      squad.push(e);
-      clubCount.set(e.team, (clubCount.get(e.team) ?? 0) + 1);
+      add(e);
     }
   }
   let cost = squad.reduce((s, e) => s + e.now_cost, 0);
   let guard = 200;
   while (cost > budget && guard-- > 0) {
-    // Replace the worst xp-per-cost player with the cheapest viable alternative.
     let bestSwap: { outIdx: number; inEl: Element; delta: number } | null = null;
     for (let i = 0; i < squad.length; i++) {
       const out = squad[i];
+      if (locked.has(out.id)) continue; // never downgrade a forced pick
       const pool = pools.get(out.element_type)!;
       for (const inEl of pool) {
         if (inEl.now_cost >= out.now_cost) continue;
@@ -468,6 +495,89 @@ export function buildLaunchSquad(
   const { squad, cost } = buildSquadWithinBudget(bootstrap.elements, xp, 1000);
   const xi = pickBestXi(squad, (id) => xp.get(id)?.next ?? 0);
   return { squad, cost, xi, xp };
+}
+
+export interface LaunchVariant {
+  key: string;
+  label: string;
+  description: string;
+  squad: Element[];
+  cost: number;
+  xi: BestXi;
+}
+
+/**
+ * Several viable GW1 drafts, not one "answer" — pre-season uncertainty is real,
+ * so we offer distinct legal £100m structures the manager can choose between:
+ *  - Balanced: highest projected points overall.
+ *  - Stars & scrubs: two forced premium picks, cheap enablers around them.
+ *  - Value: no player above £8.5m — spreads money and risk.
+ */
+export function buildLaunchVariants(
+  bootstrap: Bootstrap,
+  fixtures: Fixture[],
+  nextEvent: number,
+  horizon = 5
+): { xp: Map<number, PlayerXp>; variants: LaunchVariant[] } {
+  const xp = projectAll({ bootstrap, fixtures, nextEvent, horizon });
+  const score = (id: number) => xp.get(id)?.totalDiscounted ?? 0;
+  const finalize = (
+    key: string,
+    label: string,
+    description: string,
+    built: { squad: Element[]; cost: number }
+  ): LaunchVariant => ({
+    key,
+    label,
+    description,
+    squad: built.squad,
+    cost: built.cost,
+    xi: pickBestXi(built.squad, (id) => xp.get(id)?.next ?? 0),
+  });
+
+  // Two premium picks to force in "stars & scrubs": the highest-projected
+  // players priced £9.0m+ (prefer distinct positions for a stronger spine).
+  const premiums = bootstrap.elements
+    .filter((e) => e.now_cost >= 90 && e.status !== "u" && (xp.get(e.id)?.total ?? 0) > 0)
+    .sort((a, b) => score(b.id) - score(a.id));
+  const stars: number[] = [];
+  for (const e of premiums) {
+    if (stars.length >= 2) break;
+    if (stars.length === 1 && e.element_type === bootstrap.elements.find((x) => x.id === stars[0])!.element_type)
+      continue; // encourage two different positions
+    stars.push(e.id);
+  }
+  if (stars.length < 2 && premiums[1]) stars.push(premiums[1].id);
+
+  const variants: LaunchVariant[] = [
+    finalize(
+      "balanced",
+      "Balanced",
+      "Highest projected points across the squad — the model's single best draft.",
+      buildSquadWithinBudget(bootstrap.elements, xp, 1000)
+    ),
+    finalize(
+      "stars",
+      "Stars & scrubs",
+      "Two premium picks locked in, budget enablers around them.",
+      buildSquadWithinBudget(bootstrap.elements, xp, 1000, score, { mustInclude: stars })
+    ),
+    finalize(
+      "value",
+      "Value / balanced budget",
+      "No player above £8.5m — spreads money and risk across more mid-price picks.",
+      buildSquadWithinBudget(bootstrap.elements, xp, 1000, score, { maxPlayerCost: 85 })
+    ),
+  ];
+  // Drop a variant if it came out identical to another (dedupe by squad ids).
+  const seen = new Set<string>();
+  const unique = variants.filter((v) => {
+    const k = v.squad.map((e) => e.id).sort((a, b) => a - b).join(",");
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return { xp, variants: unique };
 }
 
 function dreamSquadWithinValue(

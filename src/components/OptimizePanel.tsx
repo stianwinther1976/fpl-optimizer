@@ -4,10 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchRecentStarts, type TeamData } from "@/lib/fpl";
 import {
   optimize,
-  buildLaunchSquad,
+  buildLaunchVariants,
   planHorizon,
   chipScenario,
-  type LaunchSquad,
+  type LaunchVariant,
   type OptimizerResult,
   type SeasonPlan,
   type ChipScenario,
@@ -57,7 +57,8 @@ export default function OptimizePanel({
   const [running, setRunning] = useState(false);
   const [view, setView] = useState<"plans" | "xi" | "dream">("plans");
   const [infoOpen, setInfoOpen] = useState<{ title: string; body: string[] } | null>(null);
-  const [launch, setLaunch] = useState<LaunchSquad | null>(null);
+  const [launch, setLaunch] = useState<LaunchVariant[] | null>(null);
+  const [launchPick, setLaunchPick] = useState(0);
   const [launchRunning, setLaunchRunning] = useState(false);
   const [phase, setPhase] = useState<string | null>(null);
   const [recentStarts, setRecentStarts] = useState<Map<number, number> | null>(null);
@@ -80,61 +81,83 @@ export default function OptimizePanel({
       setLaunchRunning(true);
       setTimeout(() => {
         try {
-          setLaunch(buildLaunchSquad(data.bootstrap, data.fixtures, upcomingEvent, 5));
+          const { variants } = buildLaunchVariants(data.bootstrap, data.fixtures, upcomingEvent, 5);
+          setLaunch(variants);
+          setLaunchPick(0);
         } finally {
           setLaunchRunning(false);
         }
       }, 30);
     };
+    const chosen = launch?.[launchPick] ?? null;
     return (
       <div className="space-y-4">
         <div className="card p-5">
           <div className="text-lg font-bold">🚀 Season launch: build your £100m squad</div>
           <p className="mt-1 text-sm text-muted">
-            No squad registered yet — perfect timing. Based on the new season&apos;s prices,
-            FPL&apos;s own projections, team strengths and the opening fixtures (GW
-            {upcomingEvent}–{upcomingEvent + 4}), the optimizer drafts the highest-projected
-            legal 15-man squad within the £100.0m budget: 2 GK, 5 DEF, 5 MID, 3 FWD, max 3 per club.
+            No squad registered yet — perfect timing. Pre-season there isn&apos;t one single
+            &quot;best&quot; team (nobody&apos;s kicked a ball yet), so the drafter gives you a
+            few viable structures within the £100.0m budget — built from prices, FPL&apos;s own
+            projections, team strength and the GW{upcomingEvent}–{upcomingEvent + 4} fixtures.
+            Pick the approach you like.
           </p>
           <button onClick={runLaunch} disabled={launchRunning} className="btn-primary mt-3 rounded-lg px-5 py-2.5">
-            {launchRunning ? "Drafting…" : launch ? "Re-draft" : "Build my launch squad"}
+            {launchRunning ? "Drafting…" : launch ? "Re-draft" : "Build my launch squads"}
           </button>
         </div>
 
-        {launch && (
+        {launch && chosen && (
           <>
+            {/* Strategy selector — several viable drafts, not one answer */}
+            <div className="grid gap-2 sm:grid-cols-3">
+              {launch.map((v, i) => (
+                <button
+                  key={v.key}
+                  type="button"
+                  onClick={() => setLaunchPick(i)}
+                  className={`card p-3 text-left ${i === launchPick ? "border-accent" : "hover:border-accent"}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold">{v.label}</span>
+                    <span className="font-mono text-xs text-accent">{v.xi.totalXp.toFixed(1)} xp</span>
+                  </div>
+                  <div className="mt-1 text-[11px] leading-tight text-muted">{v.description}</div>
+                </button>
+              ))}
+            </div>
+
             <div className="card flex flex-wrap items-center gap-4 p-4 text-sm">
               <div>
                 <span className="text-muted">Squad cost:</span>{" "}
-                <b>£{fmtPrice(launch.cost)}m</b>
+                <b>£{fmtPrice(chosen.cost)}m</b>
               </div>
               <div>
                 <span className="text-muted">In the bank:</span>{" "}
-                <b>£{fmtPrice(1000 - launch.cost)}m</b>
+                <b>£{fmtPrice(1000 - chosen.cost)}m</b>
               </div>
               <div>
                 <span className="text-muted">Projected (GW{upcomingEvent}, incl. captain):</span>{" "}
-                <b className="text-accent">{launch.xi.totalXp.toFixed(1)} xp</b>
+                <b className="text-accent">{chosen.xi.totalXp.toFixed(1)} xp</b>
               </div>
             </div>
             <Pitch
-              starters={launch.xi.starters.map((s) => ({
+              starters={chosen.xi.starters.map((s) => ({
                 element: s.element,
                 xp: s.xp,
                 isCaptain: s.isCaptain,
                 isVice: s.isVice,
               }))}
-              bench={launch.xi.bench.map((s) => ({ element: s.element, xp: s.xp }))}
+              bench={chosen.xi.bench.map((s) => ({ element: s.element, xp: s.xp }))}
               teams={teams}
               fixtures={data.fixtures}
               nextEvent={upcomingEvent}
-              formation={launch.xi.formation}
+              formation={chosen.xi.formation}
               onSelect={onSelect}
             />
             <div className="card p-4">
               <div className="text-sm font-semibold">Type this into fantasy.premierleague.com:</div>
               <div className="mt-2 grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
-                {launch.squad
+                {chosen.squad
                   .slice()
                   .sort((a, b) => a.element_type - b.element_type || b.now_cost - a.now_cost)
                   .map((e) => (
@@ -158,6 +181,10 @@ export default function OptimizePanel({
                   ))}
               </div>
             </div>
+            <p className="text-xs text-muted">
+              These are starting points, not a verdict — pre-season is the model&apos;s most
+              uncertain moment. Trust your own read on captaincy and a premium or two.
+            </p>
           </>
         )}
       </div>

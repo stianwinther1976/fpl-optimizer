@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { makeMockBootstrap, makeMockFixtures, makeMockOwned } from "./mockdata";
-import { optimize, pickBestXi, buildLaunchSquad, planHorizon } from "../optimizer";
+import {
+  optimize,
+  pickBestXi,
+  buildLaunchSquad,
+  buildLaunchVariants,
+  planHorizon,
+} from "../optimizer";
 import { MAX_FREE_TRANSFERS, validateSquad } from "../rules";
 import { projectAll } from "../xp";
 
@@ -319,6 +325,42 @@ describe("pre-season: leans on FPL's ep_next (premium-aware)", () => {
     // With no data of our own, the projection should track FPL's estimate,
     // clearly above the field's 2.0.
     expect(xp.get(premium.id)!.next).toBeGreaterThan(5);
+  });
+});
+
+describe("buildLaunchVariants (multiple GW1 drafts)", () => {
+  it("returns distinct, legal £100m squads with different structures", () => {
+    const b = makeMockBootstrap();
+    b.events.forEach((e) => {
+      e.finished = false;
+      e.is_current = false;
+      e.is_next = e.id === 1;
+    });
+    b.elements.forEach((e) => {
+      e.minutes = 0;
+      e.starts = 0;
+      e.total_points = 0;
+      e.form = "0.0";
+      e.points_per_game = "0.0";
+    });
+    const fx = makeMockFixtures().map((f) => ({ ...f, event: (f.event ?? 11) - 10, finished: false }));
+    const { variants } = buildLaunchVariants(b, fx, 1, 5);
+    expect(variants.length).toBeGreaterThanOrEqual(2);
+    for (const v of variants) {
+      expect(
+        validateSquad(v.squad.map((e) => ({ id: e.id, elementType: e.element_type, teamId: e.team })))
+      ).toEqual([]);
+      expect(v.cost).toBeLessThanOrEqual(1000);
+      expect(v.xi.starters.length).toBe(11);
+    }
+    // The "value" variant caps player price; it must differ from balanced.
+    const value = variants.find((v) => v.key === "value");
+    if (value) expect(Math.max(...value.squad.map((e) => e.now_cost))).toBeLessThanOrEqual(85);
+    // Variants aren't all identical.
+    const sigs = new Set(
+      variants.map((v) => v.squad.map((e) => e.id).sort((a, b) => a - b).join(","))
+    );
+    expect(sigs.size).toBe(variants.length);
   });
 });
 
