@@ -217,10 +217,15 @@ export default function Pitch({
 
   // FPL-style "view as" selector for the info line under each player.
   const [info, setInfo] = useState<PitchInfoMode>("auto");
+  // Pitch (default) vs list/table layout — persisted like the info mode.
+  const [layout, setLayout] = useState<"pitch" | "list">("pitch");
   useEffect(() => {
     const saved = localStorage.getItem("pitch-info");
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring persisted preference on mount
+    const savedLayout = localStorage.getItem("pitch-layout");
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring persisted prefs on mount
     if (saved) setInfo(saved as PitchInfoMode);
+     
+    if (savedLayout === "list" || savedLayout === "pitch") setLayout(savedLayout);
   }, []);
   function changeInfo(v: PitchInfoMode) {
     setInfo(v);
@@ -228,76 +233,277 @@ export default function Pitch({
       localStorage.setItem("pitch-info", v);
     } catch {}
   }
+  function changeLayout(v: "pitch" | "list") {
+    setLayout(v);
+    try {
+      localStorage.setItem("pitch-layout", v);
+    } catch {}
+  }
+
+  const infoSelect = (
+    <select
+      value={info}
+      onChange={(e) => changeInfo(e.target.value as PitchInfoMode)}
+      aria-label="What to show for each player"
+      className="rounded-lg border border-border-c bg-panel-2 px-2 py-1.5 text-[11px] font-semibold"
+    >
+      <option value="auto">Points</option>
+      <option value="price">Price</option>
+      <option value="xp">xP</option>
+      <option value="form">Form</option>
+      <option value="own">Ownership</option>
+      <option value="fdr">FDR</option>
+    </select>
+  );
 
   return (
     <div>
-      <div className="pitch-bg relative rounded-xl px-1 py-3 sm:p-6">
-        <div className="absolute right-2 top-2 z-10">
-          <select
-            value={info}
-            onChange={(e) => changeInfo(e.target.value as PitchInfoMode)}
-            aria-label="What to show under each player"
-            className="rounded-lg border-none bg-black/70 px-2 py-1.5 text-[11px] font-semibold text-white"
-          >
-            <option value="auto">Points</option>
-            <option value="price">Price</option>
-            <option value="xp">xP</option>
-            <option value="form">Form</option>
-            <option value="own">Ownership</option>
-            <option value="fdr">FDR</option>
-          </select>
-        </div>
-        {cornerTotal && (
-          <div className="absolute left-2 top-2 z-10 rounded-lg bg-black/70 px-2.5 py-1 text-center shadow">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-300">
-              {cornerTotal.title}
-            </div>
-            <div
-              className={`text-lg font-bold leading-tight ${
-                cornerTotal.final ? "text-white" : "text-[#00ff87]"
-              }`}
+      {/* Layout toggle (pitch / list) + metric selector */}
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex rounded-lg bg-panel-2 p-0.5 text-xs font-semibold">
+          {(["pitch", "list"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => changeLayout(v)}
+              className={`rounded-md px-3 py-1.5 ${layout === v ? "btn-primary" : "text-muted"}`}
             >
-              {cornerTotal.points}
-              <span className="ml-0.5 text-[10px] font-medium text-zinc-300">pts</span>
-            </div>
-          </div>
-        )}
-        {formation && (
-          <div className="mb-2 text-center text-xs font-semibold text-emerald-200/80">
-            Formation {formation.join("-")}
-          </div>
-        )}
-        <div className="flex flex-col gap-2.5 sm:gap-6">
-          {rows.map((row, i) => (
-            <div key={i} className="flex justify-center gap-1 sm:gap-6">
-              {row.map((p) => (
-                <PlayerCard
-                  key={p.element.id}
-                  p={p}
-                  teams={teams}
-                  fixtures={fixtures}
-                  nextEvent={nextEvent}
-                  onSelect={onSelect}
-                  info={info}
-                />
-              ))}
-            </div>
+              {v === "pitch" ? "⚽ Pitch" : "☰ List"}
+            </button>
           ))}
         </div>
+        {infoSelect}
       </div>
-      {bench.length > 0 && (
-        <div className="mt-2 rounded-xl border border-border-c bg-panel-2 p-3">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-            Bench (in order)
-          </div>
-          <div className="grid grid-cols-4 gap-1 sm:flex sm:justify-start sm:gap-6">
-            {bench.map((p, i) => (
-              <div key={p.element.id} className="relative min-w-0">
-                <span className="absolute -top-1 left-0 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-[9px] font-bold text-white">
-                  {i + 1}
-                </span>
-                <PlayerCard p={p} teams={teams} fixtures={fixtures} nextEvent={nextEvent} onSelect={onSelect} info={info} />
+
+      {layout === "pitch" ? (
+        <>
+          <div className="pitch-bg relative rounded-xl px-1 py-3 sm:p-6">
+            {cornerTotal && (
+              <div className="absolute left-2 top-2 z-10 rounded-lg bg-black/70 px-2.5 py-1 text-center shadow">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-300">
+                  {cornerTotal.title}
+                </div>
+                <div
+                  className={`text-lg font-bold leading-tight ${
+                    cornerTotal.final ? "text-white" : "text-[#00ff87]"
+                  }`}
+                >
+                  {cornerTotal.points}
+                  <span className="ml-0.5 text-[10px] font-medium text-zinc-300">pts</span>
+                </div>
               </div>
+            )}
+            {formation && (
+              <div className="mb-2 text-center text-xs font-semibold text-emerald-200/80">
+                Formation {formation.join("-")}
+              </div>
+            )}
+            <div className="flex flex-col gap-2.5 sm:gap-6">
+              {rows.map((row, i) => (
+                <div key={i} className="flex justify-center gap-1 sm:gap-6">
+                  {row.map((p) => (
+                    <PlayerCard
+                      key={p.element.id}
+                      p={p}
+                      teams={teams}
+                      fixtures={fixtures}
+                      nextEvent={nextEvent}
+                      onSelect={onSelect}
+                      info={info}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+          {bench.length > 0 && (
+            <div className="mt-2 rounded-xl border border-border-c bg-panel-2 p-3">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                Bench (in order)
+              </div>
+              <div className="grid grid-cols-4 gap-1 sm:flex sm:justify-start sm:gap-6">
+                {bench.map((p, i) => (
+                  <div key={p.element.id} className="relative min-w-0">
+                    <span className="absolute -top-1 left-0 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-[9px] font-bold text-white">
+                      {i + 1}
+                    </span>
+                    <PlayerCard p={p} teams={teams} fixtures={fixtures} nextEvent={nextEvent} onSelect={onSelect} info={info} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <ListView
+          starters={starters}
+          bench={bench}
+          teams={teams}
+          fixtures={fixtures}
+          nextEvent={nextEvent}
+          info={info}
+          onSelect={onSelect}
+          cornerTotal={cornerTotal}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Table layout — every player and the selected metric in one scannable list. */
+function ListView({
+  starters,
+  bench,
+  teams,
+  fixtures,
+  nextEvent,
+  info,
+  onSelect,
+  cornerTotal,
+}: {
+  starters: PitchPlayer[];
+  bench: PitchPlayer[];
+  teams: Map<number, Team>;
+  fixtures: Fixture[];
+  nextEvent: number | null;
+  info: PitchInfoMode;
+  onSelect?: (el: Element) => void;
+  cornerTotal?: { title: string; points: number; final: boolean } | null;
+}) {
+  const POS = ["GK", "DEF", "MID", "FWD"];
+  const groups: { label: string; type: number }[] = [
+    { label: "Goalkeeper", type: 1 },
+    { label: "Defenders", type: 2 },
+    { label: "Midfielders", type: 3 },
+    { label: "Forwards", type: 4 },
+  ];
+
+  const fixtureStr = (el: Element): string => {
+    if (nextEvent == null) return "";
+    return teamFixtures(fixtures, el.team, nextEvent)
+      .map((f) => {
+        const home = f.team_h === el.team;
+        return `${teams.get(home ? f.team_a : f.team_h)?.short_name ?? "?"} (${home ? "H" : "A"})`;
+      })
+      .join(", ");
+  };
+
+  const metric = (p: PitchPlayer) => {
+    const el = p.element;
+    if (info === "price") return <>£{fmtPrice(el.now_cost)}m</>;
+    if (info === "xp")
+      return <span className="text-accent">{p.xp != null ? `${p.xp.toFixed(1)} xp` : "–"}</span>;
+    if (info === "form") return <>{el.form}</>;
+    if (info === "own") return <>{el.selected_by_percent}%</>;
+    if (info === "fdr") {
+      const fdrs: number[] = [];
+      if (nextEvent != null)
+        for (let gw = nextEvent; gw < nextEvent + 3; gw++)
+          for (const f of teamFixtures(fixtures, el.team, gw))
+            fdrs.push(f.team_h === el.team ? f.team_h_difficulty : f.team_a_difficulty);
+      return fdrs.length === 0 ? (
+        <span className="text-muted">–</span>
+      ) : (
+        <span className="inline-flex gap-0.5">
+          {fdrs.slice(0, 3).map((d, i) => (
+            <span key={i} className={`rounded px-1 text-[11px] font-bold ${FDR_BADGE[d] ?? FDR_BADGE[3]}`}>
+              {d}
+            </span>
+          ))}
+        </span>
+      );
+    }
+    // auto
+    if (p.live)
+      return (
+        <span className={`font-bold ${p.live.final ? "" : "text-accent"}`}>
+          {p.live.points} {p.live.points === 1 ? "pt" : "pts"}
+        </span>
+      );
+    return (
+      <span>
+        £{fmtPrice(el.now_cost)}m
+        {p.xp != null && <span className="ml-1 text-accent">· {p.xp.toFixed(1)}xp</span>}
+      </span>
+    );
+  };
+
+  const Row = ({ p, benchNo }: { p: PitchPlayer; benchNo?: number }) => {
+    const el = p.element;
+    const flag = statusFlag(el);
+    const fx = fixtureStr(el);
+    const Tag = onSelect ? "button" : "div";
+    return (
+      <Tag
+        type={onSelect ? "button" : undefined}
+        onClick={onSelect ? () => onSelect(el) : undefined}
+        className={`flex w-full items-center gap-2.5 px-3 py-2 text-left ${onSelect ? "hover:bg-panel-2/60 active:bg-panel-2" : ""}`}
+      >
+        {benchNo != null && (
+          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-panel-2 text-[9px] font-bold text-muted">
+            {benchNo}
+          </span>
+        )}
+        <PlayerAvatar el={el} teamShort={teams.get(el.team)?.short_name} size="sm" center={false} />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5 truncate text-sm font-medium">
+            {flag && <span title={el.news}>{flag}</span>}
+            {el.web_name}
+            {p.isCaptain && (
+              <span className="rounded-full bg-black px-1 text-[9px] font-bold text-white ring-1 ring-white/40">
+                C
+              </span>
+            )}
+            {p.isVice && (
+              <span className="rounded-full bg-zinc-600 px-1 text-[9px] font-bold text-white">V</span>
+            )}
+          </span>
+          <span className="block truncate text-[11px] text-muted">
+            {teams.get(el.team)?.short_name}
+            {fx ? ` · ${fx}` : ""}
+          </span>
+        </span>
+        <span className="shrink-0 whitespace-nowrap text-right font-mono text-sm">{metric(p)}</span>
+      </Tag>
+    );
+  };
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-border-c">
+      {cornerTotal && (
+        <div className="flex items-center justify-between border-b border-border-c bg-panel-2 px-3 py-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+            {cornerTotal.title}
+          </span>
+          <span className={`font-bold ${cornerTotal.final ? "" : "text-accent"}`}>
+            {cornerTotal.points} pts
+          </span>
+        </div>
+      )}
+      {groups.map((g) => {
+        const players = starters.filter((p) => p.element.element_type === g.type);
+        if (players.length === 0) return null;
+        return (
+          <div key={g.type}>
+            <div className="bg-panel-2/50 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+              {g.label}
+            </div>
+            <div className="divide-y divide-border-c/60">
+              {players.map((p) => (
+                <Row key={p.element.id} p={p} />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      {bench.length > 0 && (
+        <div>
+          <div className="bg-panel-2/50 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+            Bench {POS.length ? "(in order)" : ""}
+          </div>
+          <div className="divide-y divide-border-c/60">
+            {bench.map((p, i) => (
+              <Row key={p.element.id} p={p} benchNo={i + 1} />
             ))}
           </div>
         </div>
