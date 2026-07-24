@@ -18,7 +18,14 @@ export default function StatsTable({
 }) {
   const [posFilter, setPosFilter] = useState<0 | ElementType>(0);
   const [sortKey, setSortKey] = useState<SortKey>("xp");
-  const [maxPrice, setMaxPrice] = useState(150);
+  // Slider max tracks the actual priciest player, so record-price premiums
+  // (e.g. Haaland at £15.5m) are never cut off. null = show everyone.
+  const priceCeiling = useMemo(() => {
+    const hi = Math.max(150, ...data.bootstrap.elements.map((e) => e.now_cost));
+    return Math.ceil(hi / 5) * 5;
+  }, [data.bootstrap]);
+  const [maxPrice, setMaxPrice] = useState<number | null>(null);
+  const effMaxPrice = maxPrice ?? priceCeiling;
   const [search, setSearch] = useState("");
 
   const teams = useMemo(
@@ -35,10 +42,13 @@ export default function StatsTable({
     [data, nextEvent]
   );
 
+  // Pre-season everyone is on 0 minutes/points — don't hide the whole game then.
+  const playedGws = data.bootstrap.events.filter((e) => e.finished).length;
   const rows = useMemo(() => {
-    let els = data.bootstrap.elements.filter((e) => e.minutes > 0 || e.total_points > 0);
+    let els = data.bootstrap.elements.filter((e) => e.element_type >= 1 && e.element_type <= 4);
+    if (playedGws > 0) els = els.filter((e) => e.minutes > 0 || e.total_points > 0);
     if (posFilter !== 0) els = els.filter((e) => e.element_type === posFilter);
-    els = els.filter((e) => e.now_cost <= maxPrice);
+    els = els.filter((e) => e.now_cost <= effMaxPrice);
     if (search) {
       const q = search.toLowerCase();
       els = els.filter(
@@ -64,7 +74,7 @@ export default function StatsTable({
       }
     };
     return els.sort((a, b) => val(b) - val(a)).slice(0, 60);
-  }, [data, posFilter, sortKey, maxPrice, search, teams, xp]);
+  }, [data, posFilter, sortKey, effMaxPrice, playedGws, search, teams, xp]);
 
   const th = (key: SortKey, label: string) => (
     <th
@@ -97,13 +107,13 @@ export default function StatsTable({
           ))}
         </div>
         <label className="flex items-center gap-2 text-muted">
-          Max price: £{fmtPrice(maxPrice)}m
+          Max price: £{fmtPrice(effMaxPrice)}m
           <input
             type="range"
             min={40}
-            max={150}
+            max={priceCeiling}
             step={5}
-            value={maxPrice}
+            value={effMaxPrice}
             onChange={(e) => setMaxPrice(parseInt(e.target.value))}
             className="accent-[var(--accent)]"
           />

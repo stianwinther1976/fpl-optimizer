@@ -245,7 +245,7 @@ function buildStateAt(g: number, season: Season) {
   return { bootstrap, fixtures, recentStarts, actual, minutesAt };
 }
 
-const COMP: Record<ElementType, number> = { 1: 2, 2: 5, 3: 5, 4: 3 };
+
 
 /** Actual points scored by a squad this GW: best XI (by projected xp) + captain,
  * with auto-subs and vice takeover applied on REAL minutes. */
@@ -304,7 +304,7 @@ describe(`${SEASON} full-season simulation`, () => {
     // GW1 launch squad from pre-season info.
     const s1 = buildStateAt(1, season);
     const launch = buildLaunchSquad(s1.bootstrap, s1.fixtures, 1, 5);
-    let squad = launch.squad.map((e) => e.id);
+    const squad = launch.squad.map((e) => e.id);
     let bank = 1000 - launch.squad.reduce((sum, e) => sum + e.now_cost, 0);
     let ft = 1;
     const buyPrice = new Map<number, number>(launch.squad.map((e) => [e.id, e.now_cost]));
