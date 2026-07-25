@@ -18,7 +18,14 @@
 //  8. Availability that is gameweek-aware: a one-match ban does not zero
 //     a player's whole 5-GW horizon.
 
-import type { Bootstrap, Element, Fixture, Team } from "./types";
+import type {
+  Bootstrap,
+  Element,
+  Fixture,
+  PastSeasonStats,
+  SeasonWorkload,
+  Team,
+} from "./types";
 import { activeCalibration, calibrationMultiplier } from "./calibration";
 
 export const XP_CONFIG = {
@@ -73,11 +80,29 @@ export const XP_CONFIG = {
   // per-game output (both grounded in reality; both used when available).
   epShare: 0.55,
   pastSeasonShare: 0.45,
-  pastNailedGames: 32, // last-season games that count as "fully nailed"
+  // Pre-season, ep_next is MINUTES-BLIND: FPL hands an unplayed backup keeper
+  // the same ~2.6 it gives a nailed midfielder. Before a ball is kicked the
+  // ep anchor is therefore scaled by our own start probability, normalised so
+  // that anyone at or above this pStart is left untouched.
+  epMinutesBlindPStart: 0.8,
   // --- Own xG assessment (don't take API xG at face value) ---
   // Empirical-Bayes shrinkage: rates from small samples are pulled toward a
   // price/position prior worth `shrinkMins` minutes of evidence.
   shrinkMins: 450,
+  /**
+   * Fewest appearances a per-appearance rate is ever divided by, and fewest
+   * minutes a per-90 points rate is ever divided by.
+   *
+   * A player with one minute and one appearance point is not a 90-points-per-90
+   * player, but that is exactly what raw division says, and pre-season — when
+   * last season's line is the ONLY evidence — that arithmetic put £4.0m squad
+   * fillers with a single cameo above Salah in the launch drafter. These floors
+   * make a tiny sample read as a tiny sample.
+   */
+  pointsPerAppearanceFloor: 5,
+  pastPointsMinMinutes: 450,
+  /** Points per 90 a player is regressed toward when his sample is thin. */
+  priorPoints90: { 1: 3.2, 2: 3.2, 3: 3.4, 4: 3.4 } as Record<number, number>,
   // Finishing-skill blend: goals90 gets up to this weight vs xG90 once the
   // sample reaches xgBlendMinMinutes.
   xgBlendGoalsWeight: 0.3,
@@ -96,9 +121,82 @@ export const XP_CONFIG = {
   // Minutes model
   subProb: 0.15, // chance a non-starter comes off the bench
   recentStartsWeight: 0.65, // last ~5 games vs season starts share
+  // --- Pre-season minutes (no game has been played yet) ---
+  // Last season's STARTS out of 38, shrunk toward a price/position prior worth
+  // `preseasonPriorGames` games of evidence. Shrinkage matters in both
+  // directions: it stops a 38-start regular from being treated as a certainty,
+  // and it stops a player with no Premier League history — a new signing, a
+  // promoted club's regular — from being written off at zero.
+  preseasonSeasonGames: 38,
+  preseasonPriorGames: 6,
+  preseasonMaxPStart: 0.97,
+  /**
+   * Pre-season allocation of a club's single goalkeeping shirt.
+   *
+   * Every other position is scored player-by-player, which is fine when a club
+   * fields five midfielders but nonsense at keeper: a club carries 4.7 of them
+   * on the FPL list and exactly one plays. Each keeper is scored, the scores are
+   * turned into shares of one shirt, and the shares are what the projection uses.
+   *
+   * The numbers are fitted, not guessed. Over the 60 club-seasons in 2023/24,
+   * 2024/25 and 2025/26 — comparing predicted share against the keeper's actual
+   * starts/38 — these minimise Brier score at 0.050, against 0.12 for the flat
+   * split this replaces. The optimum is a broad basin (0.050–0.052 across beta
+   * 2.0–3.0 and mass 0.90–1.00) and leave-one-season-out refitting lands in the
+   * same place, so this is a real effect rather than three seasons of noise.
+   *
+   * Worth knowing before trusting it too far: picking a club's number one from
+   * pre-season information alone is right about 68% of the time, and right
+   * within the top two 92% of the time. Hence a leading share near 0.65 rather
+   * than the near-certainty the raw evidence gap often suggests — Sunderland's
+   * Roefs, Burnley's Trafford and Spurs' Vicario were all unknowns who took the
+   * shirt from a same-priced incumbent.
+   */
+  gkPreseason: {
+    /** Softmax sharpness over keeper scores within a club. */
+    beta: 2.5,
+    /** Weight on last season's minutes, on top of price in £m. */
+    minutesWeight: 0.6,
+    /** Minutes above this add nothing — a full season is a full season. */
+    minutesCap: 2000,
+    /**
+     * Total share of starts the club's keepers divide between them. Below 1
+     * because cups, knocks and rotation take the shirt off the number one for
+     * a few weeks of most seasons.
+     */
+    slotMass: 0.95,
+  },
+  // Prior P(start) at the position's typical price, moved by relative price:
+  // FPL prices a squad filler at £4.0m and a nailed starter far above it.
+  priorPStartBase: { 1: 0.5, 2: 0.5, 3: 0.5, 4: 0.5 } as Record<number, number>,
+  // Steep enough that the bottom of the price ladder can actually reach the
+  // floor. At slope 0.9 a £4.0m squad filler still came out at 0.32 — the range
+  // was decorative. FPL's own pricing is the sharpest available statement about
+  // who a club expects to play.
+  priorPStartSlope: 1.6,
+  priorPStartRange: [0.08, 0.9] as [number, number],
+  /** Minutes per start assumed for a player with no last-season record. */
+  preseasonUnknownMinsPerStart: 80,
+  /** Weight of a season's evidence per year of age (0.55 = last season counts
+   *  roughly twice what the one before it does). */
+  preseasonSeasonDecay: 0.55,
+  /** Start probability floors for set-piece duty. Clubs do not hand penalties
+   *  or corners to squad players, so an order of 1 is a strong statement about
+   *  a player's standing that his raw start count may not yet reflect — a
+   *  regular who missed half of last season injured, for instance. */
+  penaltyTakerPStart: 0.75,
+  setPieceTakerPStart: 0.62,
+  // --- Defensive contribution priors (used only when the whole league's DC
+  // data is missing, i.e. the bootstrap has been reset for the new season) ---
+  priorDc90: { 1: 0, 2: 5.5, 3: 4.0, 4: 1.5 } as Record<number, number>,
   // Availability recovery: how fast doubtful/injured players return to
   // fitness in later horizon GWs (geometric decay of the deficit)
   recoveryRate: 0.6,
+  /** Availability in the first match after a stated return date, and how many
+   *  days it takes to climb back to full. A player is named in the squad before
+   *  he is trusted with 90 minutes. */
+  returnRampStart: 0.35,
+  returnRampDays: 21,
   // Horizon discounting: future GWs are less certain
   gwDecay: 0.88,
   // Availability by status when chance_of_playing is null
@@ -130,10 +228,12 @@ export interface XpContext {
    */
   recentStarts?: Map<number, number>;
   /**
-   * elementId -> last season's total points & minutes (element-summary
-   * history_past). A grounded pre-season signal for who played and delivered.
+   * elementId -> last completed season's stat line (element-summary
+   * history_past). The grounded pre-season signal for who actually played and
+   * what they produced — and the ONLY such signal once FPL resets the
+   * bootstrap counters for the new season.
    */
-  pastSeason?: Map<number, { points: number; minutes: number }>;
+  pastSeason?: Map<number, PastSeasonStats>;
 }
 
 /** Fixtures for a team in a given event (0, 1 or 2 = DGW). */
@@ -179,7 +279,35 @@ function poissonTail(lambda: number, k: number): number {
  * chance_of_playing_next_round applies, by definition, only to the next round;
  * a suspension is usually one match; injuries/doubts recover over time.
  */
-export function availabilityAt(el: Element, offset: number): number {
+const MONTHS = "jan feb mar apr may jun jul aug sep oct nov dec".split(" ");
+
+/**
+ * The expected return date FPL writes into `news`, as a timestamp.
+ *
+ * The string looks like "Knee injury - Expected back 25 Sep". Without reading
+ * it, every injury decays back to fitness on the same blind curve, so a
+ * season-ending ACL is projected 87% fit five gameweeks out — and the launch
+ * optimizer will happily spend £7.5m on him. Returns null when there is no
+ * date, in which case the decay curve is still the best guess available.
+ */
+export function newsReturnTime(el: Element, seasonStartYear: number): number | null {
+  const m = /expected back[^0-9]*(\d{1,2})\s+([A-Za-z]{3})/i.exec(el.news ?? "");
+  if (!m) return null;
+  const day = parseInt(m[1], 10);
+  const month = MONTHS.indexOf(m[2].toLowerCase().slice(0, 3));
+  if (month < 0) return null;
+  // FPL omits the year. A season runs Aug–May, so a month before August belongs
+  // to the following calendar year.
+  const year = month < 7 ? seasonStartYear + 1 : seasonStartYear;
+  return Date.UTC(year, month, day);
+}
+
+/**
+ * Availability for a specific horizon offset (0 = next GW).
+ * chance_of_playing_next_round applies, by definition, only to the next round;
+ * a suspension is usually one match; injuries/doubts recover over time.
+ */
+export function availabilityAt(el: Element, offset: number, kickoff?: number | null): number {
   const cfg = XP_CONFIG;
   if (el.status === "u" || el.status === "n") return 0; // left club / unavailable
   if (el.status === "a") return 1;
@@ -188,6 +316,18 @@ export function availabilityAt(el: Element, offset: number): number {
     a0 = clamp(el.chance_of_playing_next_round / 100, 0, 1);
   } else {
     a0 = cfg.statusProb[el.status] ?? 1;
+  }
+  // A stated return date beats any decay curve: before it he does not play, and
+  // shortly after it he is easing back rather than instantly nailed.
+  if (kickoff != null && (el.status === "i" || el.status === "d")) {
+    const back = newsReturnTime(el, new Date(kickoff).getUTCMonth() >= 7
+      ? new Date(kickoff).getUTCFullYear()
+      : new Date(kickoff).getUTCFullYear() - 1);
+    if (back != null) {
+      const days = (kickoff - back) / 86_400_000;
+      if (days < 0) return 0;
+      return clamp(cfg.returnRampStart + (1 - cfg.returnRampStart) * (days / cfg.returnRampDays), 0, 1);
+    }
   }
   if (offset <= 0) return a0;
   if (el.status === "s") return Math.max(a0, 0.9); // bans are usually one match
@@ -204,6 +344,16 @@ interface StrengthTables {
   byTeam: Map<number, Team>;
   gamesByTeam: Map<number, number>; // finished fixtures per team
   playedGws: number; // fallback when the fixtures list lacks finished games
+  /**
+   * Each club's overall rating relative to the league average.
+   *
+   * Pre-season this is the ONLY team-quality signal FPL still publishes: the
+   * detailed attack/defence ratings are all zero, and FDR describes only the
+   * opponent — so without this a promoted club's defender and an Arsenal
+   * defender get identical clean-sheet odds, which is worth several points a
+   * player across a launch squad.
+   */
+  ownQuality: Map<number, number>;
 }
 
 function buildStrengths(bootstrap: Bootstrap, fixtures: Fixture[]): StrengthTables {
@@ -226,7 +376,26 @@ function buildStrengths(bootstrap: Bootstrap, fixtures: Fixture[]): StrengthTabl
     gamesByTeam.set(f.team_a, (gamesByTeam.get(f.team_a) ?? 0) + 1);
   }
   const playedGws = bootstrap.events.filter((e) => e.finished).length;
-  return { usable: spread > 40, avgAttH, avgAttA, avgDefH, avgDefA, byTeam, gamesByTeam, playedGws };
+  // Overall ratings live on a 1-5 scale pre-season and ~1000-1400 in-season, so
+  // they are used only as a ratio to the league mean — that works on both, and
+  // collapses harmlessly to 1.0 when every club is rated the same.
+  const overall = (t: Team) => (t.strength_overall_home + t.strength_overall_away) / 2;
+  const meanOverall = avg(overall);
+  const ownQuality = new Map<number, number>();
+  for (const t of teams) {
+    ownQuality.set(t.id, meanOverall > 0 ? overall(t) / meanOverall : 1);
+  }
+  return {
+    usable: spread > 40,
+    avgAttH,
+    avgAttA,
+    avgDefH,
+    avgDefA,
+    byTeam,
+    gamesByTeam,
+    playedGws,
+    ownQuality,
+  };
 }
 
 /** Empirical-Bayes per-90 rate: season total shrunk toward a prior. */
@@ -241,6 +410,132 @@ interface Rates {
   ict90: number;
   bonus90: number;
   saves90: number;
+  /** Defensive actions per 90 — the count the +2 DC threshold is tested against. */
+  dc90: number;
+  /** Minutes the rates above were actually estimated from. */
+  sampleMinutes: number;
+  /** Points per 90 of that same sample (the season-form half of the form term). */
+  samplePpg: number;
+}
+
+/**
+ * Which stat line to reason from.
+ *
+ * In-season: the bootstrap element, always. Pre-season — and for anyone with no
+ * minutes yet this season — the bootstrap is empty or stale, so last season's
+ * `history_past` line is used instead. The switch is on minutes, not on a date,
+ * so it degrades gracefully whenever FPL resets the counters.
+ */
+/**
+ * Counting stats are optional on purpose. A season that predates a stat — xG
+ * only goes back to 2022/23, defensive contribution to 2024/25 — must read as
+ * "unknown", never as a hard zero: 3000 minutes of recorded zero xG would
+ * regress a striker to nothing.
+ */
+interface StatLine {
+  minutes: number;
+  starts: number;
+  goals?: number;
+  assists?: number;
+  xg?: number;
+  xa?: number;
+  ict?: number;
+  bonus?: number;
+  saves?: number;
+  /** Points per APPEARANCE over the sample — the same unit as FPL's own
+   *  `points_per_game`, so the two are interchangeable at the call site. Using
+   *  points per 90 here instead would systematically flatter fringe players,
+   *  who bank appearance points over very few minutes. */
+  ppg: number;
+  fromPast: boolean;
+}
+
+function statLine(el: Element, past: PastSeasonStats | undefined, preseason: boolean): StatLine {
+  const cfg = XP_CONFIG;
+  const minutes = el.minutes ?? 0;
+  // Pre-season the bootstrap is at best a stale copy of the same season the
+  // history line describes, and at worst half-wiped: FPL zeroes the columns one
+  // at a time, so `minutes` can still read 3330 while `defensive_contribution`
+  // and the xG columns have already gone. `history_past` is the complete,
+  // stable record — prefer it outright rather than trusting a line that may be
+  // mid-reset.
+  if (past && past.minutes > 0 && (preseason || minutes <= 0)) {
+    return {
+      minutes: past.minutes,
+      starts: past.starts ?? 0,
+      goals: past.goals,
+      assists: past.assists,
+      xg: past.xg,
+      xa: past.xa,
+      ict: past.ict,
+      bonus: past.bonus,
+      saves: past.saves,
+      // Appearances aren't published, but a player's minutes never fall below
+      // his starts and rarely below ~55 per outing counting substitutions, so
+      // this brackets the true count closely enough for a form term.
+      //
+      // The `pointsPerAppearanceFloor` term is what stops a cameo from reading
+      // as superhuman: a player who came on for one minute and banked the
+      // appearance point has "1 point in 1 appearance", and dividing by a raw
+      // count would rate him a returning regular. Below a few full matches
+      // there is no per-appearance rate worth quoting.
+      ppg:
+        past.points /
+        Math.max(
+          cfg.pointsPerAppearanceFloor,
+          past.starts ?? 0,
+          past.minutes / 70
+        ),
+      fromPast: true,
+    };
+  }
+  // A player with real minutes and a literal 0.0 ICT index has not had a quiet
+  // season — that column has been reset. Read it as unknown so the shrinkage
+  // falls back to the prior instead of booking it as evidence of nothing.
+  const ictRaw = parseFloat(el.ict_index);
+  const reset = preseason && minutes > 0 && !(ictRaw > 0);
+  return {
+    minutes,
+    starts: el.starts ?? 0,
+    goals: reset ? undefined : (el.goals_scored ?? 0),
+    assists: reset ? undefined : (el.assists ?? 0),
+    xg: reset ? undefined : parseFloat(el.expected_goals) || 0,
+    xa: reset ? undefined : parseFloat(el.expected_assists) || 0,
+    ict: reset ? undefined : ictRaw || 0,
+    bonus: reset ? undefined : (el.bonus ?? 0),
+    saves: reset ? undefined : (el.saves ?? 0),
+    ppg: parseFloat(el.points_per_game) || 0,
+    fromPast: false,
+  };
+}
+
+/**
+ * Defensive actions per 90. FPL zeroes the bootstrap's `defensive_contribution`
+ * for the new season well before it zeroes minutes, so pre-season the count has
+ * to come from `history_past` — otherwise the +2 DC points silently vanish and
+ * the model systematically under-rates centre-backs and defensive midfielders.
+ */
+function dcPer90(el: Element, past?: PastSeasonStats): number {
+  const cur = el.defensive_contribution ?? 0;
+  if (cur > 0 && el.minutes > 0) return (cur / el.minutes) * 90;
+  const p = past?.defensiveContribution ?? 0;
+  if (p > 0 && (past?.minutes ?? 0) > 0) return (p / past!.minutes) * 90;
+  return -1; // unknown — caller decides whether to fall back to a prior
+}
+
+/**
+ * Prior probability of starting, from price alone. Used where there is no
+ * playing record to go on: a new signing from abroad, a promoted club's regular,
+ * an academy graduate. FPL's own pricing is the only evidence of the role a
+ * player was bought for, and it is a decent one.
+ */
+function priorPStart(el: Element): number {
+  const cfg = XP_CONFIG;
+  const t = el.element_type;
+  const typical = cfg.typicalPriceM[t] ?? 6;
+  const rel = el.now_cost / 10 / typical - 1;
+  const [lo, hi] = cfg.priorPStartRange;
+  return clamp((cfg.priorPStartBase[t] ?? 0.5) + cfg.priorPStartSlope * rel, lo, hi);
 }
 
 /**
@@ -248,9 +543,10 @@ interface Rates {
  * shrunk for small samples, blended with actual output (finishing skill),
  * and adjusted for penalty & set-piece duty.
  */
-function playerRates(el: Element): Rates {
+function playerRates(el: Element, past?: PastSeasonStats, preseason = false): Rates {
   const cfg = XP_CONFIG;
   const t = el.element_type;
+  const s = statLine(el, past, preseason);
   const priceM = el.now_cost / 10;
   const priceFactor = clamp(priceM / (cfg.typicalPriceM[t] ?? 6), 0.6, 2.2);
   const pXg = (cfg.priorXg90[t] ?? 0.1) * priceFactor;
@@ -258,18 +554,24 @@ function playerRates(el: Element): Rates {
   const pIct = (cfg.priorIct90[t] ?? 6) * priceFactor;
   const pBonus = (cfg.priorBonus90[t] ?? 0.2) * priceFactor;
 
-  const xG90 = shrunk90(parseFloat(el.expected_goals) || 0, el.minutes, pXg);
-  const xA90 = shrunk90(parseFloat(el.expected_assists) || 0, el.minutes, pXa);
-  const goals90 = shrunk90(el.goals_scored || 0, el.minutes, pXg);
-  const assists90 = shrunk90(el.assists || 0, el.minutes, pXa);
-  const ict90 = shrunk90(parseFloat(el.ict_index) || 0, el.minutes, pIct);
-  const bonus90 = shrunk90(el.bonus || 0, el.minutes, pBonus);
+  // A stat the source didn't record contributes no evidence — it falls back to
+  // the prior rather than counting as a season's worth of zeroes.
+  const rate = (v: number | undefined, prior90: number) =>
+    shrunk90(v ?? 0, v == null ? 0 : s.minutes, prior90);
+  const xG90 = rate(s.xg, pXg);
+  const xA90 = rate(s.xa, pXa);
+  const goals90 = rate(s.goals, pXg);
+  const assists90 = rate(s.assists, pXa);
+  const ict90 = rate(s.ict, pIct);
+  const bonus90 = rate(s.bonus, pBonus);
   const savesPrior = cfg.priorSaves90 * clamp(2 - priceFactor, 0.7, 1.3);
-  const saves90 = t === 1 ? shrunk90(el.saves ?? 0, el.minutes, savesPrior) : 0;
+  const saves90 = t === 1 ? rate(s.saves, savesPrior) : 0;
+  const rawDc = dcPer90(el, past);
+  const dc90 = rawDc >= 0 ? rawDc : (cfg.priorDc90[t] ?? 0);
 
   // Finishing-skill blend: give actual conversion some weight once the
   // sample is meaningful (regressed, never fully trusted).
-  const wFin = cfg.xgBlendGoalsWeight * Math.min(1, el.minutes / cfg.xgBlendMinMinutes);
+  const wFin = cfg.xgBlendGoalsWeight * Math.min(1, s.minutes / cfg.xgBlendMinMinutes);
   let effXg90 = (1 - wFin) * xG90 + wFin * goals90;
   let effXa90 = (1 - wFin) * xA90 + wFin * assists90;
 
@@ -285,7 +587,16 @@ function playerRates(el: Element): Rates {
   if (spOrder === 1) effXa90 += cfg.setPieceXaBoost;
   else if (spOrder === 2) effXa90 += cfg.setPieceXaBoost / 2;
 
-  return { effXg90, effXa90, ict90, bonus90, saves90 };
+  return {
+    effXg90,
+    effXa90,
+    ict90,
+    bonus90,
+    saves90,
+    dc90,
+    sampleMinutes: s.minutes,
+    samplePpg: s.ppg,
+  };
 }
 
 interface MinutesModel {
@@ -294,8 +605,180 @@ interface MinutesModel {
   share: number; // season minutes share (attacking output scales with this)
 }
 
+/**
+ * A floor on start probability implied by set-piece duty.
+ *
+ * These fields are live pre-season when almost nothing else is, and they say
+ * something the start count cannot: a club's designated penalty taker is, by
+ * construction, someone the manager expects on the pitch. Only a floor — it
+ * can lift a player the raw evidence under-rates, never lower anyone.
+ */
+function setPieceStartFloor(el: Element): number {
+  const cfg = XP_CONFIG;
+  let floor = 0;
+  if (el.penalties_order === 1) floor = Math.max(floor, cfg.penaltyTakerPStart);
+  if (el.direct_freekicks_order === 1 || el.corners_and_indirect_freekicks_order === 1) {
+    floor = Math.max(floor, cfg.setPieceTakerPStart);
+  }
+  return floor;
+}
+
+/**
+ * Which season a `history_past` row describes, counted backwards from the
+ * season about to start. 0 = last season, 1 = the one before, and so on.
+ *
+ * Season names look like "2025/26"; the leading year is all we need. Returns
+ * null for anything unparseable so the caller can fall back rather than
+ * silently treating a bad row as recent.
+ */
+function seasonAge(seasonName: string | undefined, seasonStartYear: number): number | null {
+  if (!seasonName) return null;
+  const y = parseInt(seasonName.slice(0, 4), 10);
+  if (!Number.isFinite(y)) return null;
+  const age = seasonStartYear - 1 - y;
+  // Checked on the way OUT as well as in. `seasonStartYear` is derived from a
+  // date, and an unparseable date makes it NaN — which no caller's `?? 0`
+  // rejects and no `<` comparison rejects either, so it propagates in silence.
+  // Returning null forces the caller down its own no-evidence path instead.
+  return Number.isFinite(age) ? age : null;
+}
+
+/**
+ * How many games a player STARTED, when FPL didn't record starts.
+ *
+ * `starts` only exists from 2021/22. An older row still has minutes, and
+ * minutes/80 is a serviceable estimate — far better than reading the absent
+ * field as zero, which would rate a 3000-minute season below never having
+ * played at all.
+ */
+function impliedStarts(row: SeasonWorkload): number {
+  if (row.starts != null) return row.starts;
+  return clamp(row.minutes / XP_CONFIG.preseasonUnknownMinsPerStart, 0, 38);
+}
+
+/**
+ * Pre-season minutes: nobody has kicked a ball, so past seasons are the evidence
+ * and price is the prior.
+ *
+ * Every completed season counts, weighted by how long ago it was. That single
+ * mechanism handles the three profiles that all look like "no recent starts"
+ * and are wildly different players:
+ *
+ *  - the fading squad player (35 starts, then 20, then 8) — recent evidence
+ *    dominates, and he is correctly marked down;
+ *  - the regular who lost last season to injury — the blank year counts against
+ *    him, but three prior seasons of 34 starts stop him being written off;
+ *  - the player who spent last season abroad or in the Championship — that
+ *    season is simply ABSENT from the record, contributing no evidence either
+ *    way, so his older seasons carry him at reduced confidence toward the prior.
+ *
+ * Absence of evidence and evidence of absence are different things, and getting
+ * that distinction wrong is what makes a pre-season model draft the wrong £4.5m
+ * defender.
+ */
+interface PreseasonEvidence {
+  /** Effective games observed, after age-weighting. */
+  games: number;
+  /** Age-weighted starts. */
+  starts: number;
+  /** Age-weighted minutes. */
+  minutes: number;
+}
+
+function preseasonEvidence(
+  el: Element,
+  past: PastSeasonStats | undefined,
+  seasonStartYear: number
+): PreseasonEvidence | null {
+  const cfg = XP_CONFIG;
+  const rows = past?.seasons ?? (past?.lastSeason ? [past.lastSeason] : []);
+  if (past && rows.length > 0) {
+    let games = 0;
+    let starts = 0;
+    let minutes = 0;
+    for (const row of rows) {
+      const age = seasonAge(row.seasonName, seasonStartYear) ?? 0;
+      if (age < 0) continue; // a row for a season that hasn't finished
+      const w = Math.pow(cfg.preseasonSeasonDecay, age);
+      if (w < 0.05) continue; // ancient history, not worth the arithmetic
+      games += w * cfg.preseasonSeasonGames;
+      starts += w * impliedStarts(row);
+      minutes += w * row.minutes;
+    }
+    return games > 0 ? { games, starts, minutes } : null;
+  }
+  if (past) {
+    // No per-season breakdown, but a rate line survives: treat it as the one
+    // season it came from, aged by its own season name. This keeps the model
+    // working against a partially-populated record instead of silently
+    // discarding the only evidence there is.
+    if (past.minutes > 0) {
+      const age = Math.max(0, seasonAge(past.seasonName, seasonStartYear) ?? 0);
+      const w = Math.pow(cfg.preseasonSeasonDecay, age);
+      return {
+        games: cfg.preseasonSeasonGames,
+        starts: impliedStarts({ minutes: past.minutes, starts: past.starts }) * w,
+        minutes: past.minutes * w,
+      };
+    }
+    // We looked and there is no Premier League record at all: a signing from
+    // abroad, an academy graduate, a promoted club's regular. Price is the only
+    // evidence of the role he was bought for.
+    return null;
+  }
+  // We never looked. The bootstrap still carries last season's totals until FPL
+  // zeroes them — real evidence while it lasts. But a bootstrap ZERO is
+  // ambiguous between "played nothing" and "wasn't in the game", and that is
+  // precisely the ambiguity only history_past can settle, so it is treated as
+  // unknown rather than guessed at.
+  const minutes = el.minutes ?? 0;
+  if (minutes <= 0) return null;
+  return {
+    games: cfg.preseasonSeasonGames,
+    starts: el.starts ?? clamp(minutes / cfg.preseasonUnknownMinsPerStart, 0, 38),
+    minutes,
+  };
+}
+
+function preseasonMinutes(
+  el: Element,
+  past: PastSeasonStats | undefined,
+  seasonStartYear: number
+): MinutesModel {
+  const cfg = XP_CONFIG;
+  const prior = priorPStart(el);
+  const floor = setPieceStartFloor(el);
+  const ev = preseasonEvidence(el, past, seasonStartYear);
+  if (!ev) {
+    const mps = cfg.preseasonUnknownMinsPerStart;
+    const pStart = Math.max(prior, floor);
+    return { pStart, minsPerStart: mps, share: clamp((pStart * mps) / 90, 0, 1) };
+  }
+  const k = cfg.preseasonPriorGames;
+  const pStart = clamp(
+    Math.max((ev.starts + prior * k) / (ev.games + k), floor),
+    0,
+    cfg.preseasonMaxPStart
+  );
+  // How much of a start he actually completes: being hooked on 60 every week is
+  // itself a rotation signal, and it costs appearance and clean-sheet points.
+  const minsPerStart = ev.starts > 0 ? clamp(ev.minutes / ev.starts, 45, 90) : 60;
+  // A regular substitute plays real minutes that `pStart * minsPerStart` throws
+  // away — 900 minutes off the bench is not the same player as 20. The observed
+  // share is a floor, never a cap, so it can only rescue a genuine super-sub.
+  const observedShare = ev.minutes / (ev.games * 90);
+  const share = clamp(Math.max((pStart * minsPerStart) / 90, observedShare), 0, 1);
+  return { pStart, minsPerStart, share };
+}
+
 /** Starts-based minutes model with a pre-season prior fallback. */
-function minutesModel(el: Element, teamGames: number, recentStartShare?: number): MinutesModel {
+function minutesModel(
+  el: Element,
+  teamGames: number,
+  recentStartShare?: number,
+  past?: PastSeasonStats,
+  seasonStartYear = new Date().getUTCFullYear()
+): MinutesModel {
   const starts = el.starts ?? 0;
   let mm: MinutesModel;
   if (teamGames > 0 && starts > 0) {
@@ -308,7 +791,9 @@ function minutesModel(el: Element, teamGames: number, recentStartShare?: number)
     // Sub-only (or no data): low start odds, minutes share carries what we know.
     mm = { pStart: 0, minsPerStart: 0, share: clamp(el.minutes / (teamGames * 90), 0, 1) };
   } else {
-    return { pStart: 0.7, minsPerStart: 90, share: 0.7 }; // pre-season neutral prior
+    // Pre-season: no games played by anyone. Judge on last season, not on a
+    // flat prior that would rate a backup keeper like a nailed defender.
+    return preseasonMinutes(el, past, seasonStartYear);
   }
   // Recency: what happened in the last ~5 team games outweighs the season
   // average (a new nailed starter, a lost place, a returning injury).
@@ -325,6 +810,12 @@ function minutesModel(el: Element, teamGames: number, recentStartShare?: number)
   return mm;
 }
 
+function kickoffTime(f: Fixture | undefined): number | null {
+  if (!f?.kickoff_time) return null;
+  const t = Date.parse(f.kickoff_time);
+  return Number.isFinite(t) ? t : null;
+}
+
 /** xP for one player in one specific fixture. */
 function fixtureXp(
   el: Element,
@@ -336,7 +827,7 @@ function fixtureXp(
   mm: MinutesModel
 ): number {
   const cfg = XP_CONFIG;
-  const avail = availabilityAt(el, gwOffset);
+  const avail = availabilityAt(el, gwOffset, kickoffTime(fixture));
   if (avail === 0) return 0;
   const p60 = avail * mm.pStart * (mm.minsPerStart >= 60 ? 1 : (mm.minsPerStart / 60) * 0.5);
   const pPlay = avail * Math.min(1, mm.pStart + cfg.subProb);
@@ -370,9 +861,28 @@ function fixtureXp(
       (isHome ? cfg.homeGcScale : cfg.awayGcScale);
     csProb = Math.exp(-lambdaGC);
   } else {
-    attackMult = (cfg.attackMultByFdr[fdr] ?? 1) * venue;
-    csProb = (cfg.csProbByFdr[fdr] ?? 0.3) * (isHome ? 1.1 : 0.9);
+    // FDR describes the OPPONENT only. Own-club quality has to come from the
+    // overall ratings, or every defender in the league facing an equal-FDR tie
+    // is given the same clean sheet — the single biggest pre-season distortion
+    // after minutes, and one that systematically drafts promoted-club defenders.
+    const q = st.ownQuality.get(el.team) ?? 1;
+    attackMult = (cfg.attackMultByFdr[fdr] ?? 1) * venue * clamp(q, 0.65, 1.4);
+    csProb = (cfg.csProbByFdr[fdr] ?? 0.3) * (isHome ? 1.1 : 0.9) * clamp(q, 0.45, 1.6);
+    // Shots faced, for the keeper's save points, depend on BOTH sides: how weak
+    // his own club is AND how strong the opponent is. This used to be `1 / q`
+    // alone — own weakness only — which meant that in the FDR fallback, the
+    // branch the app takes for the whole of pre-season because FPL zeroes the
+    // detailed strength ratings over the summer, a keeper facing the champions
+    // and a keeper facing the promoted side were given identical save
+    // expectations. The opponent term is read off `gcPenaltyByFdr` normalised to
+    // its own neutral rating rather than from a new table: goals conceded and
+    // shots faced are the same underlying quantity, and a constant that nothing
+    // fits is a constant nobody can defend.
+    const oppByFdr =
+      (cfg.gcPenaltyByFdr[fdr] ?? cfg.gcPenaltyByFdr[3]) / cfg.gcPenaltyByFdr[3];
+    oppAttRatio = clamp(oppByFdr / Math.max(0.2, q), 0.6, 1.8);
   }
+  csProb = clamp(csProb, 0, 0.9);
 
   const goalPts = cfg.goalPoints[el.element_type];
   const csPts = cfg.cleanSheetPoints[el.element_type];
@@ -385,7 +895,16 @@ function fixtureXp(
     // Goals-conceded penalty: exactly -1 per 2 conceded under the Poisson
     // model, FDR table fallback otherwise.
     if (lambdaGC != null) xp -= p60 * (lambdaGC / 2);
-    else xp -= p60 * (cfg.gcPenaltyByFdr[fdr] ?? 0.5) * (isHome ? 0.9 : 1.1);
+    else {
+      // A weaker club concedes more against the same opponent — the mirror of
+      // the clean-sheet adjustment above.
+      const q = st.ownQuality.get(el.team) ?? 1;
+      xp -=
+        p60 *
+        (cfg.gcPenaltyByFdr[fdr] ?? 0.5) *
+        (isHome ? 0.9 : 1.1) *
+        clamp(1 / Math.max(0.2, q), 0.6, 1.8);
+    }
   }
   // GK save points: 1 per 3 saves, more against strong attacks.
   if (el.element_type === 1 && rates.saves90 > 0) {
@@ -397,22 +916,23 @@ function fixtureXp(
     (1 - cfg.bonusActualWeight) * rates.ict90 * cfg.bonusPerIct90;
   xp += p60 * Math.min(cfg.bonusCap, bonusExp) * clamp(attackMult, 0.8, 1.2);
 
-  // Defensive-contribution points: the API count per 90 vs the +2 threshold.
-  if (el.defensive_contribution != null && el.defensive_contribution > 0) {
-    const dcCount90 = (el.defensive_contribution / Math.max(el.minutes, 1)) * 90;
+  // Defensive-contribution points: actions per 90 vs the +2 threshold.
+  if (rates.dc90 > 0) {
     const threshold = el.element_type <= 2 ? cfg.dcThresholdDef : cfg.dcThresholdMid;
-    xp += p60 * cfg.dcPoints * poissonTail(dcCount90, threshold) * cfg.dcWeight;
+    xp += p60 * cfg.dcPoints * poissonTail(rates.dc90, threshold) * cfg.dcWeight;
   }
 
   // Form component: recency-weighted, fixture-adjusted (venue is already part
   // of attackMult — do not apply it twice).
   const recent = parseFloat(el.form) || 0;
-  const seasonPpg = parseFloat(el.points_per_game) || 0;
+  const seasonPpg = parseFloat(el.points_per_game) || rates.samplePpg;
   const formScore = cfg.recentFormShare * recent + (1 - cfg.recentFormShare) * seasonPpg;
   const fdrFormAdj = st.usable ? attackMult : (1 + (3 - fdr) * 0.1) * venue;
   const formXp = pPlay * formScore * clamp(fdrFormAdj, 0.65, 1.35);
 
-  const enoughData = el.minutes >= cfg.minMinutesForModel;
+  // "Enough data" is about the sample the rates were estimated from — which
+  // pre-season is last season's, not the bootstrap's zeroed counters.
+  const enoughData = rates.sampleMinutes >= cfg.minMinutesForModel;
   if (enoughData) {
     return Math.max(0, cfg.modelWeight * xp + cfg.formWeight * formXp);
   }
@@ -434,6 +954,98 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
   const fxIndex = makeFixtureIndex(ctx.fixtures);
   const cal = activeCalibration(); // self-learned correction from past GWs
   const result = new Map<number, PlayerXp>();
+  // Which season is about to start, taken from the fixture list rather than the
+  // clock, so a backtest replaying 2023/24 ages that season's history correctly.
+  //
+  // Each candidate is PARSED before being accepted, rather than picked with
+  // `??`. The earlier version chained `??`, which only rejects null and
+  // undefined — so an empty-string deadline, which is exactly what a synthetic
+  // event list contains, was taken as a valid date. `new Date("")` is an
+  // Invalid Date and `getUTCFullYear()` on it is NaN, and NaN then walks
+  // straight through every downstream guard: `?? 0` does not catch it, and both
+  // `age < 0` and `w < 0.05` are FALSE for NaN, so nothing rejects it until
+  // `games > 0` fails at the very end and `preseasonEvidence` returns null for
+  // every player who has ever played. The pre-season minutes model — the single
+  // largest signal there is before a ball is kicked — silently switched itself
+  // off, and a nailed 3330-minute starter scored identically to a 300-minute
+  // fringe player at the same price. Nothing failed; the numbers were simply
+  // wrong, and every measurement taken against them was wrong too.
+  const stamps = [
+    events[0]?.deadline_time,
+    ctx.fixtures.find((f) => f.kickoff_time)?.kickoff_time,
+  ];
+  const stamp = stamps.map((v) => (v ? Date.parse(v) : NaN)).find(Number.isFinite);
+  const seasonStartYear = new Date(stamp ?? Date.now()).getUTCFullYear();
+
+  // Exactly one goalkeeper starts per club per match, and a club lists four or
+  // five of them. Scoring each in isolation — which is what the rest of the
+  // model does, reasonably, for positions where a club fields several — is the
+  // reason FPL's own ep_next rates a keeper with no career minutes at 2.6.
+  //
+  // The first attempt at this divided each club's keepers by their total, so
+  // that they summed to one. That is arithmetically tidy and football nonsense:
+  // with 4.7 keepers per club it dragged every keeper in the game down to about
+  // 0.25 of a start, so a proven ever-present rated below an outfield reserve
+  // and the drafter simply bought the two cheapest keepers in the league and
+  // spent the change up front. Dividing preserves the ordering within a club
+  // but destroys the level, and the level is what the squad optimiser compares.
+  //
+  // What follows instead allocates the one shirt by softmax over price and last
+  // season's minutes — see `gkPreseason` for how the constants were fitted and
+  // how much to trust them. Availability multiplies the weight rather than the
+  // result, so a flagged number one hands his share to the deputy instead of
+  // deleting it.
+  //
+  // Computed PER GAMEWEEK, not once. The first version of this took
+  // `availabilityAt(el, 0)` — availability on the day the page is loaded — and
+  // used that one number for the whole horizon. A club's first-choice keeper
+  // with a knock and a stated return date two weeks out was therefore written
+  // off for every gameweek in the projection, and his deputy was handed the
+  // shirt permanently, which is not what the news item says at all. Availability
+  // decays back toward 1 as the return date passes, and this now follows it.
+  //
+  // Note also what the weights do NOT do any more: they no longer multiply the
+  // keeper's own availability into his share. `fixtureXp` already applies
+  // `availabilityAt` to every player including keepers, so doing it here too
+  // discounted a doubtful keeper twice, by the square of the same number. The
+  // rival keepers' availability still appears in the DENOMINATOR, because that
+  // is the part that does the real work: it is what moves the shirt to the
+  // deputy rather than deleting it.
+  const gkPStart = new Map<number, number[]>();
+  {
+    const g = cfg.gkPreseason;
+    const byClub = new Map<number, { id: number; el: Element; score: number }[]>();
+    for (const el of ctx.bootstrap.elements) {
+      if (el.element_type !== 1) continue;
+      const teamGames = st.gamesByTeam.get(el.team) ?? st.playedGws;
+      // Pre-season only. Once real games exist, who the club actually picked is
+      // a direct observation, and no inference from price beats watching.
+      if (teamGames > 0) continue;
+      const mins = ctx.pastSeason?.get(el.id)?.minutes ?? 0;
+      const score =
+        el.now_cost / 10 + (Math.min(mins, g.minutesCap) / g.minutesCap) * g.minutesWeight;
+      const list = byClub.get(el.team) ?? [];
+      list.push({ id: el.id, el, score });
+      byClub.set(el.team, list);
+    }
+    for (const [teamId, list] of byClub) {
+      const shares = list.map(() => new Array<number>(horizon).fill(0));
+      for (let off = 0; off < horizon; off++) {
+        const gw = ctx.nextEvent + off;
+        const kickoff = kickoffTime(fxIndex.get(gw)?.get(teamId)?.[0]);
+        const raw = list.map((k) => Math.exp(g.beta * k.score));
+        const sum = list.reduce(
+          (acc, k, i) => acc + availabilityAt(k.el, off, kickoff) * raw[i],
+          0
+        );
+        if (!Number.isFinite(sum) || sum <= 0) continue;
+        list.forEach((_, i) => {
+          shares[i][off] = clamp((raw[i] / sum) * g.slotMass, 0, cfg.preseasonMaxPStart);
+        });
+      }
+      list.forEach((k, i) => gkPStart.set(k.id, shares[i]));
+    }
+  }
 
   for (const el of ctx.bootstrap.elements) {
     // Only the four outfield/keeper positions score in the normal way. FPL's
@@ -449,37 +1061,135 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
       });
       continue;
     }
-    const rates = playerRates(el);
-    const mm = minutesModel(
-      el,
-      st.gamesByTeam.get(el.team) ?? st.playedGws,
-      ctx.recentStarts?.get(el.id)
-    );
+    const past = ctx.pastSeason?.get(el.id);
+    const teamGames = st.gamesByTeam.get(el.team) ?? st.playedGws;
+    const preseason = teamGames <= 0;
+    const rates = playerRates(el, past, preseason);
+    let mm = minutesModel(el, teamGames, ctx.recentStarts?.get(el.id), past, seasonStartYear);
+    // Replaces rather than adjusts the generic minutes model: for a keeper
+    // pre-season the club's pecking order IS the minutes model. A keeper who
+    // starts finishes the match, barring a red card, so minutes follow starts
+    // directly instead of being modelled as a substitute's share. `mm` here is
+    // the offset-0 view, used for the anchors; the per-gameweek view is applied
+    // inside the loop below, where the fixture is known.
+    const gkp = gkPStart.get(el.id);
+    const gkMm = (off: number): MinutesModel | null => {
+      if (!gkp) return null;
+      const p = gkp[Math.min(off, gkp.length - 1)] ?? 0;
+      return { pStart: p, minsPerStart: 90, share: p };
+    };
+    mm = gkMm(0) ?? mm;
     // Real-world anchors used while our own current-season data is thin:
     //  (a) FPL's own expected points (ep_next) — an independent projection.
     //  (b) Last season's per-game output — who actually played and delivered.
     // Both fade out as real games accrue this season.
-    const ep = el.ep_next != null ? parseFloat(el.ep_next) : NaN;
-    const epUsable = Number.isFinite(ep) && ep >= 0;
-    const playedGames = (el.minutes ?? 0) / 90;
+    const epRaw = el.ep_next != null ? parseFloat(el.ep_next) : NaN;
+    // Pre-season ep_next ignores minutes entirely — FPL gives a keeper with
+    // zero career minutes the same 2.6 it gives a nailed midfielder — so it is
+    // scaled by our own start probability before being used as an anchor.
+    // A function of the minutes model rather than a constant, because for a
+    // pre-season keeper the minutes model varies by gameweek — see `gkMm`. Every
+    // outfield player gets the same `mm` at every offset, so this is identical
+    // to the previous constant for them.
+    const epFor = (m: MinutesModel) =>
+      preseason ? epRaw * clamp(m.pStart / cfg.epMinutesBlindPStart, 0, 1) : epRaw;
+    const epUsable = Number.isFinite(epRaw) && epRaw >= 0;
+    // Pre-season the bootstrap's minutes are last season's (or zero), so
+    // "games played this season" is zero by definition.
+    const playedGames = preseason ? 0 : (el.minutes ?? 0) / 90;
     const thin = clamp((cfg.epThinGames - playedGames) / cfg.epThinGames, 0, 1);
-    // Last-season per-game estimate, scaled by how nailed they were.
-    const past = ctx.pastSeason?.get(el.id);
-    let pastPerGame = NaN;
-    if (past && past.minutes > 0) {
-      const apps = past.minutes / 90;
-      const perApp = past.points / apps;
-      const nailed = clamp(apps / cfg.pastNailedGames, 0.3, 1);
-      pastPerGame = perApp * nailed;
-    }
-    const pastUsable = Number.isFinite(pastPerGame) && pastPerGame >= 0;
+    // Last season's per-90 output, scaled by the minutes we expect this season.
+    // Scaling by expected minutes rather than by last season's own workload is
+    // what stops a fringe player's flattering per-90 from anchoring him high.
+    // Applied to EVERY player, including one with no previous season at all.
+    // That is the point, and it was the fix for the worst structural fault this
+    // model has had.
+    //
+    // The guard here used to be `if (past && past.minutes > 0)`, which sounds
+    // careful and is in fact ruinous. It does not merely withhold an anchor from
+    // a player with no record; it scores him with a DIFFERENT MACHINE. A player
+    // with a record has 70% of his projection pulled toward this anchor and 30%
+    // left to the fixture model; a player without one is 100% fixture model. The
+    // optimiser then compares the two numbers as though they meant the same
+    // thing, and they do not.
+    //
+    // Measured across 2022/23-2025/26, 573-690 candidates a season, ranking the
+    // pre-season projection against the points each player went on to score:
+    //
+    //                       guarded      unguarded    price alone
+    //   no previous season   0.19-0.23    0.46-0.53    0.44-0.51
+    //   has previous season  0.53-0.60    0.53-0.60    0.34-0.43
+    //   pooled               0.38-0.57    0.54-0.64    0.50-0.51
+    //
+    // Two things in that table matter more than the headline. The first is that
+    // the middle row is IDENTICAL to three decimals either way: this is not a
+    // change that trades one group off against another, it leaves the proven
+    // players untouched and only stops mis-scoring the rest. The second is the
+    // comparison the model owes the reader — against simply sorting the list by
+    // price. Guarded, the model does not beat that: 0.49 pooled against price's
+    // 0.50, so all the machinery is worth nothing over reading the price tags.
+    // Unguarded it reaches 0.60. Drafted squads collect 6279 season points
+    // across the four seasons against 5921.
+    //
+    // 2022/23 is the cleanest case, because no 2021/22 file exists here, so
+    // EVERY player that season is a no-record player: 0.38 guarded, 0.54
+    // unguarded, and the guarded version loses to price outright.
+    //
+    // Nothing is needed to fix it beyond deleting the guard, because the
+    // shrinkage formula already degrades to exactly the right thing. With zero
+    // minutes and zero points it returns `prior90` — the price-implied
+    // expectation for the position — which is precisely what should be said
+    // about a player nobody has seen. Evidence then MOVES a player away from
+    // that prior rather than switching him to another scoring regime, and a
+    // proven starter's advantage over an unknown lands where it belongs: in the
+    // minutes model, via `mm.share` below.
+    const priceFactor = clamp(
+      el.now_cost / 10 / (cfg.typicalPriceM[el.element_type] ?? 6),
+      0.6,
+      2.2
+    );
+    const prior90 = (cfg.priorPoints90[el.element_type] ?? 3.3) * priceFactor;
+    // Empirical Bayes, exactly as the attacking rates are treated. Raw division
+    // here was the second-worst bug: a player with 1 minute and the 1
+    // appearance point scored "90 points per 90", and at 70% weight that
+    // drafted a squad of cameo-makers over proven starters.
+    const sm = cfg.pastPointsMinMinutes;
+    // `fetchPastSeason` does not hand back LAST season. It hands back the most
+    // recent season in which the player actually got on the pitch, which for a
+    // man who missed a whole campaign injured is the season before that, and for
+    // someone returning from two years abroad is older still. That is the right
+    // choice for the RATE — a cruciate ligament does not erase what a player can
+    // do per 90 — and the wrong one for the CONFIDENCE, which is what was
+    // happening here: a two-year-old season argued at exactly the same strength
+    // as one that finished in May.
+    //
+    // The minutes model has never done this. `preseasonEvidence` weights each
+    // past season by `preseasonSeasonDecay ^ age` and always has, so the model
+    // was holding two contradictory opinions about the same row — stale enough
+    // to discount when deciding whether he will play, fresh enough to trust at
+    // full strength when deciding how well. Scaling the evidence, not the rate,
+    // is what fixes it: multiplying `pastPts` and `pastMins` by the same weight
+    // leaves the implied per-90 untouched and only changes how far it can pull
+    // away from `prior90`. A season two years old therefore says the same thing
+    // it always said, in a quieter voice, which is all anyone should want from
+    // it.
+    const anchorAge = Math.max(0, seasonAge(past?.seasonName, seasonStartYear) ?? 0);
+    const anchorW = Math.pow(cfg.preseasonSeasonDecay, anchorAge);
+    const pastMinsRaw = past?.minutes ?? 0;
+    const pastMins = pastMinsRaw * anchorW;
+    const pastPts = (pastMinsRaw > 0 ? (past?.points ?? 0) : 0) * anchorW;
+    const per90 = (pastPts + prior90 * (sm / 90)) / ((pastMins + sm) / 90);
+    const pastPerGameFor = (m: MinutesModel) => per90 * clamp(m.share, 0, 1);
+    const pastUsable = Number.isFinite(per90) && per90 >= 0;
     const perGw = new Map<number, number>();
     for (let gw = ctx.nextEvent; gw < ctx.nextEvent + horizon && gw <= lastEvent; gw++) {
       const fx = fxIndex.get(gw)?.get(el.team) ?? [];
       let gwXp = 0;
+      const off = gw - ctx.nextEvent;
+      const mmGw = gkMm(off) ?? mm;
       for (const f of fx) {
         const isHome = f.team_h === el.team;
-        gwXp += fixtureXp(el, f, isHome, gw - ctx.nextEvent, st, rates, mm);
+        gwXp += fixtureXp(el, f, isHome, off, st, rates, mmGw);
       }
       // Blend the real-world anchors — fixture-count aware (scale for DGWs,
       // skip on blanks). Build a combined target from ep_next and last season,
@@ -488,14 +1198,40 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
         let tSum = 0;
         let tW = 0;
         if (epUsable) {
-          tSum += cfg.epShare * ep * fx.length;
+          tSum += cfg.epShare * epFor(mmGw) * fx.length;
           tW += cfg.epShare;
         }
         if (pastUsable) {
-          tSum += cfg.pastSeasonShare * pastPerGame * fx.length;
-          tW += cfg.pastSeasonShare;
+          // A FLAT share, deliberately — the same weight for a player with a
+          // full season behind him and for one with nothing at all.
+          //
+          // The obvious refinement is to scale this by how much evidence is
+          // actually behind it, so an empty record argues quietly and a full
+          // season argues loudly. That was written, shipped, and then measured,
+          // and it is worse: across 2022/23-2025/26 the flat share ranks better
+          // in all four seasons (+0.005 to +0.008 Spearman each, 0.591 -> 0.597
+          // pooled) and drafts squads worth 122 more season points.
+          //
+          // The reason is that the two things being weighed are not evidence and
+          // the absence of evidence. With no minutes the anchor collapses to
+          // `prior90` — the PRICE-implied expectation — and price is a forecast
+          // made by people who watched pre-season, worth 0.50 Spearman entirely
+          // on its own. The other side of the scale is `ep_next`, which is
+          // minutes-blind: FPL rates an unplayed backup keeper the same ~2.6 it
+          // gives a nailed midfielder. Discounting the price signal in order to
+          // defer to a minutes-blind one is the wrong trade, and four seasons
+          // say so.
+          const w = cfg.pastSeasonShare;
+          tSum += w * pastPerGameFor(mmGw) * fx.length;
+          tW += w;
         }
-        const target = tW > 0 ? tSum / tW : gwXp;
+        // The anchors are blind to availability: FPL's own ep_next is 0.0 for an
+        // injured player but last season's per-game output is not, and pulling
+        // 70% of the way toward it would hand a season-ending injury a healthy
+        // score. `fixtureXp` already gates on availability; the target has to be
+        // gated the same way or the blend leaks the points straight back in.
+        const avail = availabilityAt(el, gw - ctx.nextEvent, kickoffTime(fx[0]));
+        const target = (tW > 0 ? tSum / tW : gwXp) * avail;
         const isNext = gw === ctx.nextEvent;
         const w = isNext
           ? Math.max(cfg.epNextWeight, thin * cfg.epThinMaxWeight)

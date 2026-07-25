@@ -1,0 +1,263 @@
+// Pre-season behaviour of the xP model.
+//
+// Before a ball is kicked there is no current-season data at all, and FPL's own
+// feed is misleading in specific, verifiable ways: every strength rating is 0,
+// `form` is "0.0", `defensive_contribution` has already been zeroed, and
+// `ep_next` ignores minutes entirely (an unplayed backup keeper is given 2.6,
+// the same as a nailed midfielder). Every number below was read from the live
+// 2026/27 API on 2026-07-25.
+//
+// These tests pin the properties that matter for drafting a launch squad:
+// the model must know who starts.
+
+import { describe, expect, it } from "vitest";
+import { projectAll } from "../xp";
+import type { Bootstrap, Element, Fixture, PastSeasonStats, Team } from "../types";
+
+// 20 real teams. Detailed attack/defence ratings are ALL ZERO pre-season, so
+// the model falls back to FDR buckets — reproduced faithfully here.
+const teams: Team[] = Array.from({ length: 20 }, (_, i) => ({
+  id: i + 1,
+  name: `Team ${i + 1}`,
+  short_name: `T${i + 1}`,
+  strength: 3,
+  strength_overall_home: 3,
+  strength_overall_away: 3,
+  strength_attack_home: 0,
+  strength_attack_away: 0,
+  strength_defence_home: 0,
+  strength_defence_away: 0,
+}));
+
+// Real GW1 pairings and difficulties.
+const FX: [number, number, number, number][] = [
+  [1, 7, 2, 5], [11, 16, 4, 2], [9, 8, 3, 3], [12, 20, 2, 2], [18, 13, 2, 3],
+  [4, 19, 3, 3], [5, 2, 3, 3], [15, 3, 3, 5], [17, 14, 4, 3], [10, 6, 4, 3],
+];
+const fixtures: Fixture[] = FX.map(([h, a, hd, ad], i) => ({
+  id: i + 1,
+  event: 1,
+  team_h: h,
+  team_a: a,
+  team_h_difficulty: hd,
+  team_a_difficulty: ad,
+  finished: false,
+  started: false,
+  kickoff_time: "2026-08-22T14:00:00Z",
+  team_h_score: null,
+  team_a_score: null,
+}));
+
+function el(p: Partial<Element> & Pick<Element, "id" | "web_name" | "team" | "element_type" | "now_cost">): Element {
+  return {
+    first_name: "",
+    second_name: "",
+    cost_change_start: 0,
+    form: "0.0", // pre-season: zero for everyone
+    event_points: 0,
+    status: "a",
+    news: "",
+    chance_of_playing_next_round: null,
+    selected_by_percent: "5.0",
+    minutes: 0,
+    starts: 0,
+    total_points: 0,
+    points_per_game: "0.0",
+    goals_scored: 0,
+    assists: 0,
+    clean_sheets: 0,
+    goals_conceded: 0,
+    bonus: 0,
+    ict_index: "0.0",
+    expected_goals: "0.00",
+    expected_assists: "0.00",
+    expected_goal_involvements: "0.00",
+    expected_goals_conceded: "0.00",
+    defensive_contribution: 0, // FPL zeroes this before it zeroes minutes
+    ep_next: "2.5",
+    ...p,
+  } as Element;
+}
+
+function project(elements: Element[], pastSeason?: Map<number, PastSeasonStats>) {
+  const bootstrap = {
+    events: [
+      {
+        id: 1,
+        name: "Gameweek 1",
+        deadline_time: "2026-08-21T17:30:00Z",
+        finished: false,
+        is_current: false,
+        is_next: true,
+        average_entry_score: 0,
+        highest_score: null,
+      },
+    ],
+    teams,
+    elements,
+    total_players: 1_167_938,
+  } as unknown as Bootstrap;
+  return projectAll({ bootstrap, fixtures, nextEvent: 1, horizon: 1, pastSeason });
+}
+
+describe("pre-season minutes model", () => {
+  it("separates a nailed starter from a rotation player at the same price", () => {
+    // Identical in every respect FPL publishes pre-season — price, ep_next,
+    // points per game. Only last season's starts differ.
+    const nailed = el({
+      id: 1, web_name: "Nailed", team: 1, element_type: 2, now_cost: 55,
+      minutes: 3420, starts: 38, total_points: 152, points_per_game: "4.0",
+      ep_next: "3.0", bonus: 18, ict_index: "100.0",
+      expected_goals: "2.0", expected_assists: "2.0",
+    });
+    const rotation = el({
+      id: 2, web_name: "Rotation", team: 1, element_type: 2, now_cost: 55,
+      minutes: 1260, starts: 14, total_points: 56, points_per_game: "4.0",
+      ep_next: "3.0", bonus: 7, ict_index: "37.0",
+      expected_goals: "0.74", expected_assists: "0.74",
+    });
+    const xp = project([nailed, rotation]);
+    const a = xp.get(1)!.next;
+    const b = xp.get(2)!.next;
+    // Not a hair's breadth: ~38 starts vs ~14 is most of a season of evidence.
+    expect(a).toBeGreaterThan(b * 1.5);
+  });
+
+  it("does not rate a keeper who has never played like a first-choice keeper", () => {
+    // Live values: Raya 3330 min / 37 starts / ep_next 4.0 at £6.0m;
+    // Meslier 0 min / 0 starts / ep_next 2.6 at £5.0m. FPL's own ep_next puts
+    // Meslier above several nailed midfielders — the model must not follow it.
+    //
+    // The record has to be looked up for this to be knowable at all. Price
+    // alone cannot separate them: a £5.0m keeper is what a mid-table club pays
+    // for its number one, and refusing to guess from price is deliberate.
+    //
+    // Both clubs get their real deputy here, because a keeper's pre-season
+    // projection is a share of one shirt and a share needs someone to share
+    // with. An earlier version of this test listed each keeper alone at his
+    // club, which is a squad the bootstrap cannot produce — every Premier
+    // League club registers three to five — and it quietly asked the model to
+    // rank two men who were never competing for the same place.
+    const rayaDeputy = el({
+      id: 2, web_name: "Setford", team: 1, element_type: 1, now_cost: 40,
+    });
+    const meslierRival = el({
+      id: 4, web_name: "Darlow", team: 13, element_type: 1, now_cost: 45,
+    });
+    const raya = el({
+      id: 1, web_name: "Raya", team: 1, element_type: 1, now_cost: 60,
+      minutes: 3330, starts: 37, total_points: 162, points_per_game: "4.4",
+      ep_next: "4.0", bonus: 11, ict_index: "57.5", saves: 95,
+    });
+    const backup = el({
+      id: 3, web_name: "Meslier", team: 13, element_type: 1, now_cost: 50,
+      ep_next: "2.6",
+    });
+    const past = new Map<number, PastSeasonStats>([
+      [1, {
+        points: 162, minutes: 3330, starts: 37, saves: 95, bonus: 11, ict: 57.5,
+        plSeasons: 1, seasonName: "2025/26",
+        seasons: [{ seasonName: "2025/26", minutes: 3330, starts: 37 }],
+      }],
+      // Registered all season, never picked. That is evidence, and it is the
+      // opposite of the "no record at all" of a new signing.
+      [3, {
+        points: 0, minutes: 0, plSeasons: 1,
+        seasons: [{ seasonName: "2025/26", minutes: 0, starts: 0 }],
+      }],
+      [2, { points: 0, minutes: 0, plSeasons: 1,
+        seasons: [{ seasonName: "2025/26", minutes: 0, starts: 0 }] }],
+      [4, { points: 900, minutes: 1800, starts: 20, saves: 60, plSeasons: 1,
+        seasonName: "2025/26",
+        seasons: [{ seasonName: "2025/26", minutes: 1800, starts: 20 }] }],
+    ]);
+    const xp = project([raya, rayaDeputy, backup, meslierRival], past);
+    // Comfortably clear, but not the 3x this asserted when a keeper's rivals
+    // were missing from the fixture. Meslier is £5.0m against a £4.5m deputy,
+    // and the fitted allocation (see `gkPreseason`) makes price the loudest
+    // pre-season signal about who a club expects to pick — so it puts the two
+    // of them close to even and Meslier's zero-minute record does the rest.
+    // Talking him down further would be a claim the three seasons of outcome
+    // data behind those constants do not support.
+    expect(xp.get(1)!.next).toBeGreaterThan(2.5 * xp.get(3)!.next);
+    // And the reason is competition he loses, not the position being written
+    // off: his own club's deputy, who actually played, outscores him.
+    expect(xp.get(4)!.next).toBeGreaterThan(xp.get(3)!.next * 2);
+  });
+
+  it("gives a player with no Premier League record a price-based estimate, not zero", () => {
+    // A marquee signing from abroad has no history_past at all. Writing him off
+    // would be as wrong as trusting him blindly.
+    const signing = el({
+      id: 1, web_name: "New signing", team: 1, element_type: 3, now_cost: 85, ep_next: "3.5",
+    });
+    const filler = el({
+      id: 2, web_name: "Squad filler", team: 1, element_type: 3, now_cost: 45, ep_next: "1.5",
+    });
+    const xp = project([signing, filler]);
+    expect(xp.get(1)!.next).toBeGreaterThan(1.5);
+    expect(xp.get(1)!.next).toBeGreaterThan(xp.get(2)!.next * 1.5);
+  });
+});
+
+describe("pre-season defensive contribution", () => {
+  it("credits DC from last season even though the bootstrap has been zeroed", () => {
+    // Two identical centre-backs; only last season's defensive-action count
+    // differs. Saliba's real 2025/26 line is 193 actions in 2614 minutes.
+    const base = {
+      team: 1, element_type: 2 as const, now_cost: 55, minutes: 2614, starts: 30,
+      total_points: 137, points_per_game: "4.4", ep_next: "2.5",
+    };
+    const high = el({ id: 1, web_name: "High DC", ...base });
+    const low = el({ id: 2, web_name: "Low DC", ...base });
+    const past = new Map<number, PastSeasonStats>([
+      [1, { points: 137, minutes: 2614, starts: 30, defensiveContribution: 193,
+            seasonName: "2025/26", plSeasons: 1,
+            seasons: [{ seasonName: "2025/26", minutes: 2614, starts: 30 }] }],
+      [2, { points: 137, minutes: 2614, starts: 30, defensiveContribution: 40,
+            seasonName: "2025/26", plSeasons: 1,
+            seasons: [{ seasonName: "2025/26", minutes: 2614, starts: 30 }] }],
+    ]);
+    const xp = project([high, low], past);
+    expect(xp.get(1)!.next).toBeGreaterThan(xp.get(2)!.next);
+  });
+});
+
+describe("survives FPL's summer reset of the bootstrap", () => {
+  it("still ranks players correctly when every bootstrap counter is zero", () => {
+    // Some weeks before GW1, FPL wipes minutes/starts/points too. From then on
+    // element-summary's history_past is the only record of who plays.
+    const a = el({ id: 1, web_name: "Nailed", team: 1, element_type: 3, now_cost: 70, ep_next: "3.0" });
+    const b = el({ id: 2, web_name: "Fringe", team: 1, element_type: 3, now_cost: 70, ep_next: "3.0" });
+    const past = new Map<number, PastSeasonStats>([
+      [1, { points: 190, minutes: 3100, starts: 35, goals: 12, assists: 9, xg: 10.5, xa: 8.1, bonus: 22, ict: 320,
+            seasonName: "2025/26", plSeasons: 1,
+            seasons: [{ seasonName: "2025/26", minutes: 3100, starts: 35 }] }],
+      [2, { points: 34, minutes: 620, starts: 5, goals: 1, assists: 1, xg: 1.2, xa: 0.9, bonus: 2, ict: 45,
+            seasonName: "2025/26", plSeasons: 1,
+            seasons: [{ seasonName: "2025/26", minutes: 620, starts: 5 }] }],
+    ]);
+    const xp = project([a, b], past);
+    expect(xp.get(1)!.next).toBeGreaterThan(xp.get(2)!.next * 2);
+  });
+
+  it("does not read a season that predates a stat as a season of zeroes", () => {
+    // history_past rows before 2022/23 carry no xG. Treating that as "0 xG in
+    // 3000 minutes" would regress a proven striker to nothing.
+    const withXg = el({ id: 1, web_name: "With xG", team: 1, element_type: 4, now_cost: 80, ep_next: "3.0" });
+    const noXg = el({ id: 2, web_name: "No xG field", team: 1, element_type: 4, now_cost: 80, ep_next: "3.0" });
+    const past = new Map<number, PastSeasonStats>([
+      [1, { points: 180, minutes: 3000, starts: 34, goals: 18, assists: 6, xg: 16.0, xa: 5.0,
+            seasonName: "2025/26", plSeasons: 1,
+            seasons: [{ seasonName: "2025/26", minutes: 3000, starts: 34 }] }],
+      // Older season: the xG column did not exist yet, so it is absent — and
+      // `starts` is absent for the same reason.
+      [2, { points: 180, minutes: 3000, seasonName: "2020/21", plSeasons: 1,
+            seasons: [{ seasonName: "2020/21", minutes: 3000 }] }],
+    ]);
+    const xp = project([withXg, noXg], past);
+    // The one with no recorded xG falls back to the price prior, so he lands
+    // lower than a proven scorer but nowhere near zero.
+    expect(xp.get(2)!.next).toBeGreaterThan(xp.get(1)!.next * 0.5);
+  });
+});

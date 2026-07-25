@@ -9,6 +9,7 @@ import type {
   Fixture,
   LeagueStandings,
   OwnedPlayer,
+  PastSeasonStats,
   SquadState,
   Transfer,
 } from "./types";
@@ -84,13 +85,19 @@ export interface ElementSummary {
     season_name: string;
     total_points: number;
     minutes: number;
+    starts?: number;
+    defensive_contribution?: number;
+    goals_scored?: number;
+    assists?: number;
+    bonus?: number;
+    saves?: number;
+    ict_index?: string | number;
+    expected_goals?: string | number;
+    expected_assists?: string | number;
   }[];
 }
 
-export interface PastSeason {
-  points: number;
-  minutes: number;
-}
+export type PastSeason = PastSeasonStats;
 
 export const api = {
   bootstrap: () => get<Bootstrap>("bootstrap-static/"),
@@ -142,38 +149,115 @@ export async function fetchRecentStarts(
 }
 
 /**
- * Last season's totals (points + minutes) per player, from element-summary's
- * history_past. The strongest pre-season signal there is: who actually played
- * and delivered last year. Bounded concurrency; failures left out.
+ * Parse a numeric field that MAY NOT EXIST, preserving the difference.
+ *
+ * `history_past` rows only carry `expected_goals` from 2022/23 onward. Coercing
+ * an absent field to 0 would tell the model "this striker recorded zero xG in
+ * 3000 minutes" — a strong, false piece of evidence that regresses a proven
+ * player to nothing. `undefined` means "not measured", and the shrinkage in
+ * xp.ts falls back to the positional prior instead.
  */
+const num = (v: string | number | undefined | null): number | undefined => {
+  if (v == null) return undefined;
+  const n = typeof v === "string" ? parseFloat(v) : v;
+  return Number.isFinite(n) ? (n as number) : undefined;
+};
+
+/**
+ * Last season's full stat line per player, from element-summary's history_past.
+ * The strongest pre-season signal there is: who actually STARTED, and what they
+ * produced per 90 while they were on the pitch. Crucially this survives FPL's
+ * summer reset of the bootstrap, so it is what the model runs on once the new
+ * season's counters are zeroed.
+ *
+ * One request per player, so a couple of hundred of them at a time. FPL will
+ * occasionally refuse one; a dropped player silently falls back to his price
+ * prior, which is exactly the guess this whole function exists to avoid, so
+ * each failure is retried once and whatever is still missing is COUNTED and
+ * returned. A caller that quietly reports "250/250" while a rate limit ate 190
+ * of them is worse than one that admits the gap.
+ */
+export interface PastSeasonFetch {
+  data: Map<number, PastSeason>;
+  requested: number;
+  /** Players whose summary could not be fetched even after a retry. */
+  failed: number;
+}
+
 export async function fetchPastSeason(
   ids: number[],
   concurrency = 8,
-  onProgress?: (done: number, total: number) => void
-): Promise<Map<number, PastSeason>> {
+  onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal
+): Promise<PastSeasonFetch> {
   const out = new Map<number, PastSeason>();
   const queue = [...new Set(ids)];
+  const requested = queue.length;
   let done = 0;
+  let failed = 0;
   const worker = async () => {
     for (;;) {
+      if (signal?.aborted) return;
       const id = queue.shift();
       if (id == null) return;
       try {
-        const s = await api.elementSummary(id);
-        const past = s.history_past;
-        if (past && past.length > 0) {
-          const last = past[past.length - 1]; // most recent completed season
-          if (last.minutes > 0) out.set(id, { points: last.total_points, minutes: last.minutes });
+        let s: ElementSummary;
+        try {
+          s = await api.elementSummary(id);
+        } catch {
+          // Almost always a transient 429/503 under this much concurrency.
+          await new Promise((r) => setTimeout(r, 400));
+          s = await api.elementSummary(id);
         }
+        const rows = s.history_past ?? [];
+        // An entry is written for EVERY player queried, even one with no
+        // history at all — "we looked and there is nothing" is itself the
+        // signal that separates a new signing from a benched squad player.
+        const newest = rows.length > 0 ? rows[rows.length - 1] : null;
+        // Per-90 rates come from the most recent season with actual pitch time:
+        // a year lost to injury shouldn't erase what the player can do.
+        const src = [...rows].reverse().find((p) => p.minutes > 0);
+        out.set(id, {
+          plSeasons: rows.length,
+          seasons: rows.map((r) => ({
+            seasonName: r.season_name,
+            minutes: r.minutes,
+            starts: r.starts,
+          })),
+          lastSeason: newest
+            ? {
+                seasonName: newest.season_name,
+                minutes: newest.minutes,
+                // `starts` only exists from 2021/22. Absent is NOT zero: a
+                // 3000-minute 2020/21 season read as "0 starts" would rate the
+                // player below someone who has never played at all.
+                starts: newest.starts,
+              }
+            : undefined,
+          seasonName: src?.season_name,
+          points: src?.total_points ?? 0,
+          minutes: src?.minutes ?? 0,
+          starts: src?.starts,
+          defensiveContribution: src?.defensive_contribution,
+          goals: src?.goals_scored,
+          assists: src?.assists,
+          xg: num(src?.expected_goals),
+          xa: num(src?.expected_assists),
+          bonus: src?.bonus,
+          ict: num(src?.ict_index),
+          saves: src?.saves,
+        });
       } catch {
-        // no data — model carries on with prices + ep_next
+        // Still no data. The model carries on with prices + ep_next for this
+        // player, but the caller is told how many were lost.
+        failed++;
       }
       done++;
-      onProgress?.(done, queue.length + done);
+      onProgress?.(done, requested);
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
-  return out;
+  return { data: out, requested, failed };
 }
 
 export interface TeamData {

@@ -108,6 +108,66 @@ export interface Fixture {
   team_a_score: number | null;
 }
 
+/**
+ * A player's completed-season line from element-summary's `history_past`.
+ *
+ * This is the only per-player record that SURVIVES FPL's summer reset: some
+ * weeks before GW1 the bootstrap zeroes `defensive_contribution`, and later
+ * `minutes`/`starts`/`total_points` too. Without this the model would go into
+ * the new season knowing nothing about who actually plays.
+ */
+export interface PastSeasonStats {
+  seasonName?: string;
+  points: number;
+  minutes: number;
+  /** Games STARTED — the single best predictor of next season's minutes. */
+  starts?: number;
+  /** Season count of defensive actions (the +2 DC threshold stat). */
+  defensiveContribution?: number;
+  goals?: number;
+  assists?: number;
+  xg?: number;
+  xa?: number;
+  bonus?: number;
+  ict?: number;
+  saves?: number;
+  /**
+   * How many completed Premier League seasons the player has on record.
+   * 0 means he has never been in the game — a signing from abroad, an academy
+   * graduate — and price is then the only evidence of his expected role.
+   * Distinguishing that from "registered last season and played nothing" is
+   * the difference between rating a marquee arrival and rating a third-choice
+   * keeper, and the two look identical in the bootstrap.
+   */
+  plSeasons?: number;
+  /**
+   * The most recent completed season's workload, INCLUDING zeroes. This is what
+   * the minutes model should judge on: a player who started 30 games two years
+   * ago but none last season is a bench player now.
+   *
+   * `starts` is optional because FPL only began recording it in 2021/22 — an
+   * absent value means "not measured", not "started nothing".
+   */
+  lastSeason?: SeasonWorkload;
+  /**
+   * Every completed Premier League season on record, oldest first.
+   *
+   * The minutes model weights these by age rather than reading only the newest,
+   * which is what lets it tell apart the three cases that all look like "no
+   * recent starts": a player who has faded, a nailed regular who lost a season
+   * to injury, and a regular who spent last season outside the Premier League.
+   * A season the player spent abroad or in the Championship is simply ABSENT —
+   * no evidence, which is very different from evidence of zero.
+   */
+  seasons?: SeasonWorkload[];
+}
+
+export interface SeasonWorkload {
+  seasonName?: string;
+  minutes: number;
+  starts?: number;
+}
+
 export interface EntryLeague {
   id: number;
   name: string;

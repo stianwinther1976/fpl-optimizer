@@ -305,7 +305,7 @@ describe("xp model — recent starts", () => {
 });
 
 describe("pre-season: leans on FPL's ep_next (premium-aware)", () => {
-  it("a zero-minute premium with a high ep_next projects near that estimate", () => {
+  it("a zero-minute premium moves a long way toward a high ep_next without reaching it", () => {
     const b = makeMockBootstrap();
     // Everyone pre-season: no minutes, no data.
     b.elements.forEach((e) => {
@@ -321,10 +321,33 @@ describe("pre-season: leans on FPL's ep_next (premium-aware)", () => {
     const premium = b.elements.find((e) => e.element_type === 4)!;
     premium.now_cost = 145;
     premium.ep_next = "7.5"; // FPL rates this player highly
-    const xp = projectAll({ bootstrap: b, fixtures: makeMockFixtures(), nextEvent: 11, horizon: 1 });
-    // With no data of our own, the projection should track FPL's estimate,
-    // clearly above the field's 2.0.
-    expect(xp.get(premium.id)!.next).toBeGreaterThan(5);
+    const run = () =>
+      projectAll({ bootstrap: b, fixtures: makeMockFixtures(), nextEvent: 11, horizon: 1 });
+    const high = run();
+    const withHigh = high.get(premium.id)!.next;
+    const rest = b.elements.filter((e) => e.element_type === 4 && e.id !== premium.id);
+    const field = rest.reduce((s, e) => s + high.get(e.id)!.next, 0) / rest.length;
+    premium.ep_next = "2.0";
+    const withField = run().get(premium.id)!.next;
+
+    // This test used to assert `> 5` — that the projection should essentially
+    // TRACK FPL's 7.5. That threshold was not derived from anything; it was
+    // fitted to a since-removed weighting whose only justification was passing
+    // this test, which is circular, and the four-season backtest says the
+    // weighting was wrong. So the assertion now says the two things that are
+    // actually defensible about a player with zero minutes on record.
+    //
+    // First, ep_next has to MOVE him a long way. Holding everything else fixed
+    // and changing only FPL's estimate from 2.0 to 7.5 must at least double him.
+    expect(withHigh).toBeGreaterThan(withField * 2);
+    expect(withHigh).toBeGreaterThan(field * 2.5);
+    // Second, it must not carry him to the estimate itself. `ep_next` is
+    // minutes-blind — FPL gives an unplayed backup keeper the same ~2.6 it gives
+    // a nailed midfielder — so a number that has never been tested against a
+    // minute of football is not worth taking at face value. The bound is 5
+    // because the removed weighting produced 5.79 here: this assertion is what
+    // would have caught it, and a looser one would not have.
+    expect(withHigh).toBeLessThan(5);
   });
 
   it("a proven last-season performer outprojects an unknown at the same price", () => {

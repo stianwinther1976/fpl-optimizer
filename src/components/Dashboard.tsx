@@ -9,6 +9,8 @@ import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
 import { projectAutoSubs } from "@/lib/live";
 import { saveRecentTeam } from "@/lib/recent";
+import { launchPool } from "@/lib/pool";
+import { cachedPastSeason, loadPastSeason } from "@/lib/pastSeasonStore";
 import {
   reconcileFinishedGws,
   seedDemoCalibration,
@@ -165,6 +167,9 @@ export default function Dashboard({
   // the outcome into the calibration factors, then snapshot the (freshly
   // calibrated) prediction for the upcoming GW so IT can be graded next.
   const [calVersion, setCalVersion] = useState(0);
+  // Bumped once the shared last-season record has landed, so the pitch view
+  // re-projects on the same evidence the drafter used.
+  const [pastReady, setPastReady] = useState(0);
   useEffect(() => {
     if (!data) return;
     let cancelled = false;
@@ -178,12 +183,27 @@ export default function Dashboard({
       if (cancelled) return;
       const nextEv = data.bootstrap.events.find((e) => e.is_next)?.id ?? null;
       if (nextEv != null) {
+        // Grade the model we actually ship. Before GW1 the whole projection
+        // rests on last season's per-player record, so snapshotting a run that
+        // never loaded it would teach the calibration a correction for a model
+        // nobody uses. Load it (cached; the drafter shares this) and wait.
+        let past = cachedPastSeason() ?? undefined;
+        if (!past && !demo) {
+          try {
+            past = (await loadPastSeason(launchPool(data.bootstrap.elements))).data;
+          } catch {
+            past = undefined;
+          }
+          if (cancelled) return;
+        }
         const xp = projectAll({
           bootstrap: data.bootstrap,
           fixtures: data.fixtures,
           nextEvent: nextEv,
+          pastSeason: past && past.size > 0 ? past : undefined,
         });
         snapshotPredictions(demo, nextEv, xp);
+        setPastReady((v) => v + 1);
       }
       if (changed || demo) setCalVersion((v) => v + 1);
     })();
@@ -253,8 +273,15 @@ export default function Dashboard({
     const nextEv = data?.bootstrap.events.find((e) => e.is_next)?.id ?? null;
     if (!data || nextEv == null) return null;
     void calVersion;
-    return projectAll({ bootstrap: data.bootstrap, fixtures: data.fixtures, nextEvent: nextEv });
-  }, [data, calVersion]);
+    void pastReady;
+    const past = cachedPastSeason();
+    return projectAll({
+      bootstrap: data.bootstrap,
+      fixtures: data.fixtures,
+      nextEvent: nextEv,
+      pastSeason: past ?? undefined,
+    });
+  }, [data, calVersion, pastReady]);
 
   const liveMinutesOf = useMemo(() => {
     const m = new Map<number, number>();

@@ -2,7 +2,14 @@
 // Search strategy: exact formation enumeration for the XI + beam search over
 // transfer combinations (documented in README). Fast enough to run in the browser.
 
-import type { Bootstrap, Element, ElementType, Fixture, OwnedPlayer } from "./types";
+import type {
+  Bootstrap,
+  Element,
+  ElementType,
+  Fixture,
+  OwnedPlayer,
+  PastSeasonStats,
+} from "./types";
 import { MAX_FREE_TRANSFERS, MAX_PER_CLUB, TRANSFER_HIT, VALID_FORMATIONS } from "./rules";
 import { makeFixtureIndex, projectAll, XP_CONFIG, type PlayerXp, type XpContext } from "./xp";
 
@@ -497,9 +504,10 @@ export function buildLaunchSquad(
   bootstrap: Bootstrap,
   fixtures: Fixture[],
   nextEvent: number,
-  horizon = 5
+  horizon = 5,
+  pastSeason?: Map<number, PastSeasonStats>
 ): LaunchSquad {
-  const xp = projectAll({ bootstrap, fixtures, nextEvent, horizon });
+  const xp = projectAll({ bootstrap, fixtures, nextEvent, horizon, pastSeason });
   const { squad, cost } = buildSquadWithinBudget(bootstrap.elements, xp, 1000);
   const xi = pickBestXi(squad, (id) => xp.get(id)?.next ?? 0);
   return { squad, cost, xi, xp };
@@ -526,7 +534,7 @@ export function buildLaunchVariants(
   fixtures: Fixture[],
   nextEvent: number,
   horizon = 5,
-  pastSeason?: Map<number, { points: number; minutes: number }>
+  pastSeason?: Map<number, PastSeasonStats>
 ): { xp: Map<number, PlayerXp>; variants: LaunchVariant[] } {
   const xp = projectAll({ bootstrap, fixtures, nextEvent, horizon, pastSeason });
   const score = (id: number) => xp.get(id)?.totalDiscounted ?? 0;

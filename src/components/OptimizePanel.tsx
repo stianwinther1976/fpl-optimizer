@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { fetchRecentStarts, fetchPastSeason, type TeamData } from "@/lib/fpl";
+import { fetchRecentStarts, type TeamData } from "@/lib/fpl";
+import { loadPastSeason } from "@/lib/pastSeasonStore";
+import { launchPool } from "@/lib/pool";
 import {
   optimize,
   buildLaunchVariants,
@@ -67,6 +69,9 @@ export default function OptimizePanel({
   const [planning, setPlanning] = useState(false);
   const [chipView, setChipView] = useState<ChipScenario | null>(null);
   const [chipLoading, setChipLoading] = useState<string | null>(null);
+  // Non-null when the last-season lookup came back incomplete: how many of
+  // the drafted pool fell back to a price guess.
+  const [gap, setGap] = useState<{ failed: number; requested: number } | null>(null);
 
   const squad = data.squad;
   const teams = useMemo(
@@ -81,17 +86,16 @@ export default function OptimizePanel({
     const runLaunch = async () => {
       setLaunchRunning(true);
       setPhase("Checking last season's minutes & returns…");
+      setGap(null);
       try {
-        // Fetch last-season totals for the realistic pool (priciest players
-        // across positions — cheap unknowns aren't draft-worthy anyway).
-        const pool = [...data.bootstrap.elements]
-          .filter((e) => e.element_type >= 1 && e.element_type <= 4 && e.status !== "u")
-          .sort((a, b) => b.now_cost - a.now_cost)
-          .slice(0, 140)
-          .map((e) => e.id);
-        const pastSeason = await fetchPastSeason(pool, 8, (done, total) =>
+        const pool = launchPool(data.bootstrap.elements);
+        const past = await loadPastSeason(pool, (done, total) =>
           setPhase(`Checking last season… ${done}/${total}`)
         );
+        // A player we failed to look up falls back to his price, which is the
+        // guess the lookup exists to replace. Say so rather than presenting a
+        // thinner draft as if it were the full one.
+        if (past.failed > 0) setGap({ failed: past.failed, requested: past.requested });
         setPhase("Drafting your options…");
         await new Promise((r) => setTimeout(r, 20));
         const { variants } = buildLaunchVariants(
@@ -99,10 +103,12 @@ export default function OptimizePanel({
           data.fixtures,
           upcomingEvent,
           5,
-          pastSeason.size > 0 ? pastSeason : undefined
+          past.data.size > 0 ? past.data : undefined
         );
         setLaunch(variants);
         setLaunchPick(0);
+      } catch {
+        setGap({ failed: -1, requested: 0 });
       } finally {
         setLaunchRunning(false);
         setPhase(null);
@@ -124,6 +130,13 @@ export default function OptimizePanel({
             {launchRunning ? "Drafting…" : launch ? "Re-draft" : "Build my launch squads"}
           </button>
           {launchRunning && phase && <div className="mt-2 text-xs text-muted">{phase}</div>}
+          {!launchRunning && gap && (
+            <div className="mt-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              {gap.failed < 0
+                ? "Couldn't reach FPL for last season's minutes — this draft is based on prices and FPL's own projections only. Try again in a moment."
+                : `Last season's record was unavailable for ${gap.failed} of ${gap.requested} players, so those were estimated from price. Re-draft to try them again.`}
+            </div>
+          )}
         </div>
 
         {launch && chosen && (

@@ -1,10 +1,10 @@
 {
   "season": "2025-26",
   "gameweeks": 38,
-  "modelManagerPoints": 1981,
-  "setAndForgetPoints": 1287,
+  "modelManagerPoints": 2146,
+  "setAndForgetPoints": 1528,
   "transfersMade": 37,
-  "perGwModel": "52.1",
-  "projectedXiTotal": 2153,
-  "realizedVsProjected": "0.920"
+  "perGwModel": "56.5",
+  "projectedXiTotal": 2129,
+  "realizedVsProjected": "1.008"
 }
