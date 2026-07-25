@@ -566,6 +566,52 @@ describe(`${SEASON} full-season simulation`, () => {
         nonXp: +mean(non.map((c) => c.xp)).toFixed(2),
         nonGot: +mean(non.map((c) => c.got)).toFixed(1),
       };
+      // Spearman over the whole pool is dominated by the easy comparisons. Most
+      // pairs in it are a £12.5m forward against a £4.0m fourth-choice
+      // defender, and getting those the right way round takes no model at all —
+      // which is what `priceR` says. The decisions a draft actually turns on
+      // are made WITHIN a price band, between players FPL has already declared
+      // equivalent, and the pooled figure can rise while in-band ordering gets
+      // worse.
+      //
+      // That is not hypothetical. Shrinking a thin player's own rate toward the
+      // price prior necessarily compresses the gap between a productive and an
+      // unproductive fringe player, because price is the thing they have in
+      // common. These two bands are what says whether the compression costs
+      // more than the stability buys, and `priceR` inside each band is the
+      // baseline that makes them readable: within a band price barely varies,
+      // so a model that has stopped adding information falls toward it.
+      //
+      // The first thing they were pointed at was that exact worry, raised in
+      // review against the continuous price/model blend that replaced
+      // `minMinutesForModel`. A two-player probe suggested the blend had cut
+      // the separation between a productive and an unproductive £5.0m fringe
+      // player from 1.89x to 1.51x, and that pooled Spearman was too coarse to
+      // notice. Measured on the band it targets, the opposite is true —
+      // threshold first, blend second:
+      //
+      //   cheapR (<= £5.5m)   2022-23  2023-24  2024-25  2025-26   mean
+      //     threshold           0.453    0.554    0.608    0.617   0.558
+      //     blend               0.458    0.577    0.630    0.643   0.577
+      //   topR (dearest 150)
+      //     threshold           0.387    0.438    0.443    0.373   0.410
+      //     blend               0.387    0.434    0.440    0.376   0.409
+      //
+      // Better in all four seasons among the cheap players, flat among the
+      // expensive ones. Compression and information loss are not the same
+      // thing: shrinking a 400-minute sample toward the price prior discards
+      // mostly noise, and the narrower ordering that survives is more accurate
+      // than the wider one it replaced.
+      const byPrice = [...cand].sort((a, b) => b.price - a.price);
+      const cheap = cand.filter((c) => c.price <= 55);
+      const top150 = byPrice.slice(0, 150);
+      const bands = {
+        cheapN: cheap.length,
+        cheapR: +spearman(cheap).toFixed(3),
+        cheapPriceR: +spearman(cheap, "price").toFixed(3),
+        topR: +spearman(top150).toFixed(3),
+        topPriceR: +spearman(top150, "price").toFixed(3),
+      };
       // What the drafter is really judged on: of the 15 it could have picked,
       // how many season points did its actual 15 collect?
       console.log(JSON.stringify({
@@ -574,7 +620,7 @@ describe(`${SEASON} full-season simulation`, () => {
         all: +spearman(cand).toFixed(3),
         // The baseline the model has to beat to have earned its existence.
         priceR: +spearman(cand, "price").toFixed(3),
-        ...byPos, ...split,
+        ...byPos, ...split, ...bands,
         squadSeasonPts: launch.squad.reduce((t, e) => t + (seasonPts.get(e.id) ?? 0), 0),
       }));
     }

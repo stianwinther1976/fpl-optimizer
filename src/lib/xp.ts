@@ -308,6 +308,22 @@ export const XP_CONFIG = {
    * where thin players are the genuine minority — new signings, promoted-club
    * regulars, the population this branch exists for — all prefer the high floor,
    * 2025-26 most strongly at 0.617 -> 0.665.
+   *
+   * One objection to the whole blend deserves its answer here rather than in a
+   * commit message, because it is the right objection and it was raised by a
+   * reviewer who had not been told the answer. Shrinking a thin player's own
+   * rate toward the price prior must COMPRESS the gap between a productive and
+   * an unproductive fringe player, since price is what they have in common —
+   * and pooled Spearman is dominated by £12.5m-vs-£4.0m comparisons that take
+   * no model at all, so it could rise while the within-band ordering that a
+   * draft actually turns on gets worse.
+   *
+   * So the harness was given a within-band Spearman (`cheapR` / `topR` in
+   * `scripts/simulate.test.ts`) and the question was measured. Among players at
+   * £5.5m and below — the population this branch exists for — the blend beats
+   * the threshold in all four archived seasons, mean 0.558 -> 0.577. Among the
+   * dearest 150 it is flat, 0.410 -> 0.409. Compression is not the same as
+   * information loss: what a 400-minute sample mostly contains is noise.
    */
   priceBlendFloor: 0.4,
   // Price prior: xp ≈ priceSlope * price(£m) + priceIntercept
