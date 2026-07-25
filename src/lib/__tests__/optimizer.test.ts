@@ -360,13 +360,45 @@ describe("pre-season: leans on FPL's ep_next (premium-aware)", () => {
       e.points_per_game = "0.0";
       e.ep_next = null; // isolate the last-season signal
     });
+    // The mock marks events 1-10 finished while its fixture list contains no
+    // finished games, and `teamGames` falls back to the event count when the
+    // fixtures cannot answer. Zeroing every player's minutes on top of that
+    // produced a state no real gameweek can be in — ten weeks played, nobody in
+    // the league having taken the field — and in it the in-season minutes model
+    // correctly reports that nobody starts, so both projections collapsed and
+    // the comparison was settled by leftovers rather than by the 3200-minute
+    // record in the title. Zeroed minutes ARE last season's record, which is
+    // pre-season; saying so in the events makes the mock self-consistent and
+    // puts the test in the regime it was always describing.
+    b.events.forEach((e) => {
+      e.finished = false;
+    });
     const mids = b.elements.filter((e) => e.element_type === 3);
     const proven = mids[0];
     const unknown = mids[1];
     proven.now_cost = unknown.now_cost = 80; // same price
+    // The rows were `{ points, minutes }` and nothing else, which is legal —
+    // `starts`, `seasons` and `plSeasons` are all optional on `PastSeasonStats`
+    // — so the minutes model, which reads exactly those, had nothing to read and
+    // gave the 3200-minute regular and the 500-minute fringe player the same
+    // start probability. Optional fields on a fixture are how a test quietly
+    // stops being one.
+    //
     const pastSeason = new Map([
-      [proven.id, { points: 220, minutes: 3200 }], // nailed, high-scoring
-      [unknown.id, { points: 30, minutes: 500 }], // fringe
+      [
+        proven.id,
+        {
+          points: 220, minutes: 3200, starts: 35, plSeasons: 1,
+          seasons: [{ seasonName: "2024/25", minutes: 3200, starts: 35 }],
+        },
+      ], // nailed, high-scoring
+      [
+        unknown.id,
+        {
+          points: 30, minutes: 500, starts: 4, plSeasons: 1,
+          seasons: [{ seasonName: "2024/25", minutes: 500, starts: 4 }],
+        },
+      ], // fringe
     ]);
     const xp = projectAll({
       bootstrap: b,
@@ -375,7 +407,17 @@ describe("pre-season: leans on FPL's ep_next (premium-aware)", () => {
       horizon: 1,
       pastSeason,
     });
-    expect(xp.get(proven.id)!.next).toBeGreaterThan(xp.get(unknown.id)!.next);
+    // `toBeGreaterThan` alone would pass on a hair. 35 starts against 4 is the
+    // clearest signal this model ever gets, and it should be worth a lot more
+    // than a rounding difference. Measured ratio is 3.21; the bar is set at 2.5
+    // to leave room for retuning while still biting on a real regression — the
+    // bug this test was blind to scored the pair at 0.34.
+    //
+    // Deleting `starts` and `seasons` from the fixture above does NOT break
+    // this (the ratio goes to 3.62, since `impliedStarts` reads 3200/80 = 38,
+    // more than the 35 actually recorded). They are there so the fixture
+    // describes a real player rather than to carry the assertion.
+    expect(xp.get(proven.id)!.next).toBeGreaterThan(xp.get(unknown.id)!.next * 2.5);
   });
 });
 

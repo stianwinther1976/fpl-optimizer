@@ -1,0 +1,16 @@
+// Typechecking for the measurement code.
+//
+// `scripts/` is excluded from the main tsconfig, because Next's build would
+// otherwise typecheck the backtest harness on every deploy. The effect was that
+// roughly 1150 lines of the code that decides whether a model change is an
+// improvement were never typechecked at all, and a real error was sitting in
+// them: `st.minutes ?? st.minutesAt`, where `st.minutes` does not exist and the
+// `??` therefore rescued it silently on every single row.
+//
+// So they get their own config and their own npm script instead of no coverage.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "allowImportingTsExtensions": true },
+  "include": ["scripts/**/*.ts", "src/**/*.ts"],
+  "exclude": ["node_modules"]
+}

@@ -261,3 +261,87 @@ describe("survives FPL's summer reset of the bootstrap", () => {
     expect(xp.get(2)!.next).toBeGreaterThan(xp.get(1)!.next * 0.5);
   });
 });
+
+describe("price/model blend is continuous in the size of the record", () => {
+  // The blend between our stats model and FPL's price-implied prior used to be
+  // a threshold — `minMinutesForModel: 270` — which made the whole scoring
+  // formula a step function. 269 minutes of last-season evidence projected
+  // 0.835 and 271 projected 0.479: two minutes moved a player 74%, and moved
+  // him DOWN for having more evidence. It sat exactly in the £4.5-5.5m band
+  // where a draft's marginal calls live.
+  //
+  // These pin the shape of the replacement rather than its coefficients, so
+  // retuning `priceBlendMins` or `priceBlendFloor` does not break them.
+
+  function fringe(id: number, minutes: number, starts: number) {
+    const e = el({
+      id, web_name: `P${id}`, team: 1, element_type: 3, now_cost: 50,
+      ep_next: "2.0",
+    });
+    const past = new Map<number, PastSeasonStats>([
+      [id, { points: Math.round(minutes / 25), minutes, starts,
+             seasonName: "2025/26", plSeasons: 1,
+             seasons: [{ seasonName: "2025/26", minutes, starts }] }],
+    ]);
+    return project([e], past).get(id)!.next;
+  }
+
+  it("does not jump across the old 270-minute boundary", () => {
+    const below = fringe(1, 269, 3);
+    const above = fringe(2, 271, 3);
+    // Two minutes of extra evidence is worth vanishingly little. The old
+    // threshold moved this pair by 74%; anything above a couple of percent
+    // means a discontinuity has been reintroduced.
+    expect(Math.abs(above - below) / below).toBeLessThan(0.02);
+  });
+
+  it("rewards a bigger record when the whole record grows", () => {
+    // Note what is NOT asserted: monotonicity in minutes alone. Raising minutes
+    // while holding starts fixed can lower a fringe player's score, and that is
+    // correct — extra evidence shifts weight off the price prior and onto his
+    // own (worse-than-price) model rate. Evidence winning over price is the
+    // point of the blend, not a bug in it. What must rise is the score for a
+    // record that grows as a whole.
+    const scores = [1, 2, 5, 10, 20, 30, 38].map((k, i) =>
+      fringe(i + 1, k * 90, k)
+    );
+    for (let i = 1; i < scores.length; i++) {
+      expect(scores[i]).toBeGreaterThan(scores[i - 1]);
+    }
+  });
+
+  it("moves smoothly across the whole fringe range", () => {
+    // The continuity check above only pins the one boundary that used to break.
+    // This one says no OTHER boundary has been introduced anywhere in the band
+    // where a draft's marginal calls are made.
+    const mins = [0, 45, 90, 135, 180, 225, 269, 271, 315, 360, 405, 450];
+    const scores = mins.map((m, i) => fringe(i + 1, m, Math.round(m / 90)));
+    for (let i = 1; i < scores.length; i++) {
+      const step = Math.abs(scores[i] - scores[i - 1]) / scores[i - 1];
+      expect(step).toBeLessThan(0.1);
+    }
+  });
+
+  it("still lets the fixture move a player with an empty record", () => {
+    // `priceBlendFloor` exists so the weight on the model never reaches zero.
+    // At zero, a player with no history is scored on price alone — position,
+    // opponent and clean-sheet odds all discarded, none of which price knows.
+    //
+    // Both are at HOME deliberately. The price prior carries its own venue
+    // multiplier, so an easy-home-vs-hard-away pair separates even at floor 0
+    // and would have tested nothing. Same venue, same price, same empty record:
+    // the only thing left that can tell them apart is the model term.
+    const easy = el({ id: 1, web_name: "Easy", team: 1, element_type: 3, now_cost: 50, ep_next: "2.0" });
+    const hard = el({ id: 2, web_name: "Hard", team: 11, element_type: 3, now_cost: 50, ep_next: "2.0" });
+    const xp = project([easy, hard]);
+    // Team 1 hosts at difficulty 2; team 11 hosts at difficulty 4. Measured
+    // separation is 0.687 vs 0.675 — 1.8%, which is all the floor buys and is
+    // deliberately all this asserts. Worth noting for later that two FDR
+    // buckets apart moving a thin player less than two percent looks weak
+    // against `attackMultByFdr` of 1.25 vs 0.82; the reason is that an empty
+    // record leaves almost everything sitting in the appearance term, which no
+    // fixture multiplier touches. That is a separate question from whether the
+    // floor should exist.
+    expect(xp.get(1)!.next).toBeGreaterThan(xp.get(2)!.next * 1.01);
+  });
+});

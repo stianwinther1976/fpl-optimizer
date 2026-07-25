@@ -201,7 +201,79 @@ export const XP_CONFIG = {
   gwDecay: 0.88,
   // Availability by status when chance_of_playing is null
   statusProb: { a: 1, d: 0.5, i: 0, s: 0, u: 0, n: 0 } as Record<string, number>,
-  minMinutesForModel: 270, // below this, lean on the price prior
+  /**
+   * Minutes of evidence the price prior is worth, in the blend between the
+   * stats model and the price-implied one.
+   *
+   * This replaces a threshold — `minMinutesForModel: 270`, "below this, lean on
+   * the price prior" — and a threshold was the wrong shape for it. It made the
+   * whole scoring formula a step function: 269 minutes of last-season evidence
+   * projected 0.835 and 271 projected 0.479, so two minutes moved a player 74%,
+   * and moved him DOWN for having more evidence. It sat exactly where fringe
+   * squad player becomes rotation option, which is the £4.5-5.5m band where a
+   * draft's marginal decisions actually live, and every other shrinkage in this
+   * file is a smooth n/(n+k) blend already.
+   *
+   * A second defect went with it: the thin-side weights were 0.55 + 0.35 +
+   * 0.25 = 1.15, a 15% uplift applied only to the players the model knows least
+   * about, which nothing in the code claimed to intend. The complementary
+   * weights below sum to 1 by construction.
+   *
+   * This change was first justified by a stronger claim than the evidence
+   * supported, and the correction belongs on the record next to it. A price
+   * sweep appeared to show an empty-record player OVERTAKING a proven 35-start
+   * regular above about £9.5m (0.21x / 0.59x / 0.98x / 1.00x / 1.05x at £4.5m /
+   * £6.5m / £8.5m / £9.5m / £12.5m). That sweep held the proven player's record
+   * fixed at 145 points and 3100 minutes while varying his price, so by £12.5m
+   * the comparator was not a proven premium but an overpriced one, and the
+   * crossover was an artefact of the probe. Re-run with the record scaled to
+   * the price, the unknown never wins at any point on the curve — 0.281 at
+   * £4.5m rising to 0.774 at £12.5m, monotone and always below 1, on the
+   * shipped code as well as this one.
+   *
+   * So the ordering was never inverted, and what justifies the change is the
+   * step function itself plus the harness numbers: mean launch Spearman over
+   * the four archived seasons 0.610 -> 0.623, squad points 6279 -> 6330, and
+   * in-season 2024-25 rho 0.396 -> 0.419 with bias 0.088 -> 0.026.
+   *
+   * A third change was tried here and REJECTED on measurement, which is worth
+   * recording so nobody re-proposes it. The price prior is multiplied by
+   * availability but not by the minutes model, so a £9.0m player believed to
+   * start a quarter of the time still collects the full price floor; scaling
+   * the prior by `mm.share` looked obviously right and cost 0.556 -> 0.532
+   * Spearman on 2022-23. The reason is that this branch only ever runs for
+   * players with a thin record, and for those the minutes model is running on
+   * the same absence of evidence the rates are — so the correction multiplies
+   * one shrunk-to-prior guess by another and compounds the noise instead of
+   * cancelling it. Price already encodes FPL's own view of a player's role.
+   */
+  priceBlendMins: 270,
+  /**
+   * Least weight the stats model is ever given against the price prior.
+   *
+   * Without it `n / (n + k)` reaches exactly zero and a player with no record is
+   * scored on price alone, discarding fixture difficulty, venue, position and
+   * the minutes model — none of which price knows, and all of which the model
+   * still supplies when its rates are shrunk all the way to the positional
+   * prior.
+   *
+   * Fitted rather than argued. Mean Spearman over the four archived seasons,
+   * against 0.610 for the threshold this replaces:
+   *
+   *   floor  0     0.15   0.35   0.40   0.50   0.65
+   *   mean   0.607 0.616  0.623  0.623  0.623  0.620
+   *
+   * A broad plateau over 0.35-0.65, which is what a real effect looks like, and
+   * 0.40 is its centre. One caveat belongs on the record: 2022-23 pulls the
+   * other way (0.579 at floor 0 down to 0.559 at 0.40) because it is the
+   * earliest season in the archive, so no player in it has a preceding season
+   * and all 573 run through this branch with zero evidence. That is a harness
+   * artefact rather than a pre-season anyone will ever face; the three seasons
+   * where thin players are the genuine minority — new signings, promoted-club
+   * regulars, the population this branch exists for — all prefer the high floor,
+   * 2025-26 most strongly at 0.617 -> 0.665.
+   */
+  priceBlendFloor: 0.4,
   // Price prior: xp ≈ priceSlope * price(£m) + priceIntercept
   priceSlope: 0.5,
   priceIntercept: -0.4,
@@ -930,18 +1002,42 @@ function fixtureXp(
   const fdrFormAdj = st.usable ? attackMult : (1 + (3 - fdr) * 0.1) * venue;
   const formXp = pPlay * formScore * clamp(fdrFormAdj, 0.65, 1.35);
 
-  // "Enough data" is about the sample the rates were estimated from — which
-  // pre-season is last season's, not the bootstrap's zeroed counters.
-  const enoughData = rates.sampleMinutes >= cfg.minMinutesForModel;
-  if (enoughData) {
-    return Math.max(0, cfg.modelWeight * xp + cfg.formWeight * formXp);
-  }
-  // Early season / new signing: lean on the price prior (price encodes
-  // FPL's own expectation) blended with whatever thin data exists.
+  // How far to trust the model over the price prior. The sample in question is
+  // the one the rates were estimated from, which pre-season is last season's
+  // minutes rather than the bootstrap's zeroed counters.
+  //
+  // This used to be a threshold, and a threshold is the wrong shape for it. A
+  // player on 269 sample minutes and a player on 271 differ by two minutes of
+  // football and were handed to two different formulas; measured on a real pair
+  // the step was 0.835 against 0.479, a 74% jump across a boundary that
+  // corresponds to nothing. `n / (n + k)` says the same thing the threshold was
+  // trying to say — thin sample, lean on price; thick sample, trust the model —
+  // without the discontinuity, and it is the same shrinkage form already used
+  // for the rates themselves, so it needs no new justification.
+  //
+  // The old weights on the thin side summed to 1.15 (0.55 prior + 0.35 xp +
+  // 0.25 formXp), a fifteen percent uplift applied only to the players the model
+  // knows least about and claimed nowhere. The two below are complementary and
+  // sum to 1 by construction.
+  //
+  // What justifies it is the step and the harness, not the price-inversion
+  // story an earlier version of this comment told — that one came from a probe
+  // that varied price while holding the record fixed, and it does not survive a
+  // fair sweep. See `priceBlendMins` for the retraction and the numbers.
+  //
+  // See `priceBlendFloor` for why w never reaches zero, and for the change that
+  // was tried here and rejected on measurement.
+  const w = Math.max(
+    cfg.priceBlendFloor,
+    rates.sampleMinutes / (rates.sampleMinutes + cfg.priceBlendMins)
+  );
+  const model = cfg.modelWeight * xp + cfg.formWeight * formXp;
   const priceM = el.now_cost / 10;
-  const prior = Math.max(0.5, cfg.priceSlope * priceM + cfg.priceIntercept) * avail;
-  const thin = 0.35 * xp + 0.25 * formXp;
-  return Math.max(0, 0.55 * prior * (isHome ? 1.04 : 0.96) + thin);
+  const prior =
+    Math.max(0.5, cfg.priceSlope * priceM + cfg.priceIntercept) *
+    avail *
+    (isHome ? 1.04 : 0.96);
+  return Math.max(0, w * model + (1 - w) * prior);
 }
 
 /** Full xP projection for every element over the horizon. */

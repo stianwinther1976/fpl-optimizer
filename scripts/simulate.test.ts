@@ -513,10 +513,26 @@ describe(`${SEASON} full-season simulation`, () => {
         }));
       type Cand = { xp: number; price: number; got: number };
       const spearman = (a: Cand[], pred: "xp" | "price" = "xp") => {
+        // MIDRANKS. Ties are not a corner case here, they are most of the data:
+        // a season has about sixteen distinct prices and two hundred players at
+        // the cheapest one, and a fifth of the pool finishes on exactly zero
+        // points. Breaking ties by array index gives tied players distinct ranks
+        // in BOTH vectors, in the same order, which manufactures agreement out
+        // of nothing — and it flattered the price baseline hardest, because
+        // price is the tied-est variable of the three. Correcting it costs the
+        // model most of its apparent margin in 2022/23, the season its own
+        // source comment calls the cleanest case.
         const rank = (key: "xp" | "price" | "got") => {
           const idx = a.map((_, i) => i).sort((i, j) => a[j][key] - a[i][key]);
           const r = new Array(a.length).fill(0);
-          idx.forEach((v, k) => (r[v] = k + 1));
+          let i = 0;
+          while (i < idx.length) {
+            let j = i;
+            while (j + 1 < idx.length && a[idx[j + 1]][key] === a[idx[i]][key]) j++;
+            const mid = (i + j) / 2 + 1;
+            for (let k = i; k <= j; k++) r[idx[k]] = mid;
+            i = j + 1;
+          }
           return r;
         };
         const x = rank(pred), y = rank("got"), n = a.length;
@@ -633,7 +649,7 @@ describe(`${SEASON} full-season simulation`, () => {
         squad.map((id) => elById.get(id)!).filter(Boolean),
         xpNext
       ).totalXp;
-      modelTotal += actualGwPoints(squad, elById, xpNext, st.actual, st.minutes ?? st.minutesAt);
+      modelTotal += actualGwPoints(squad, elById, xpNext, st.actual, st.minutesAt);
       // Set & forget: captain by best season PPG, else same engine.
       const ppgNext = (id: number) => parseFloat(elById.get(id)?.points_per_game ?? "0") || 0;
       setForgetTotal += actualGwPoints(

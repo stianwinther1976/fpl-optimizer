@@ -285,10 +285,24 @@ function buildStateAt(
 
 // ---------- metrics ---------------------------------------------------------
 function spearman(pairs: [number, number][]): number {
+  // MIDRANKS, for the same reason the launch simulator needs them, only more
+  // so. Over a SINGLE gameweek the actual-points vector is mostly ties: a
+  // majority of the pool does not play or plays and scores nothing, so they all
+  // sit on the same value. Ranking those by array index gives them distinct
+  // ranks in both vectors in the same order, which invents agreement out of
+  // nothing and inflates every number this harness reports. Tied values must
+  // share a rank; that is what makes the coefficient mean what it says.
   const rank = (vals: number[]) => {
-    const idx = vals.map((v, i) => [v, i] as const).sort((a, b) => a[0] - b[0]);
+    const idx = vals.map((_, i) => i).sort((a, b) => vals[a] - vals[b]);
     const ranks = new Array(vals.length).fill(0);
-    idx.forEach(([, orig], r) => (ranks[orig] = r));
+    let i = 0;
+    while (i < idx.length) {
+      let j = i;
+      while (j + 1 < idx.length && vals[idx[j + 1]] === vals[idx[i]]) j++;
+      const mid = (i + j) / 2;
+      for (let k = i; k <= j; k++) ranks[idx[k]] = mid;
+      i = j + 1;
+    }
     return ranks;
   };
   const ra = rank(pairs.map((p) => p[0]));
