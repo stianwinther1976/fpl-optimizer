@@ -23,6 +23,22 @@ import path from "node:path";
 import { projectAll } from "../src/lib/xp";
 import { pickBestXi, optimize, buildLaunchSquad } from "../src/lib/optimizer";
 import { isValidFormation } from "../src/lib/rules";
+import { launchPool, LAUNCH_QUOTA } from "../src/lib/pool";
+
+/**
+ * The pool size to measure at. `QUOTA=210` scales the shipped per-position quota
+ * to that total, preserving its shape, so the sweep recorded in `pool.ts` can be
+ * re-run without editing the shipped file — which is how that table went stale
+ * against the code the first time. Unset means "whatever ships".
+ */
+function sweepQuota(): Record<number, number> {
+  const want = Number(process.env.QUOTA);
+  if (!want || !Number.isFinite(want)) return LAUNCH_QUOTA;
+  const base = Object.values(LAUNCH_QUOTA).reduce((a, b) => a + b, 0);
+  const out: Record<number, number> = {};
+  for (const [pos, n] of Object.entries(LAUNCH_QUOTA)) out[+pos] = Math.round((n * want) / base);
+  return out;
+}
 import { setActiveCalibration, IDENTITY_FACTORS } from "../src/lib/calibration";
 import type {
   Bootstrap,
@@ -35,6 +51,23 @@ import type {
 } from "../src/lib/types";
 
 const SEASON = process.env.SEASON ?? "2025-26";
+// A stand-in for the season's actual manager count, used only as a denominator
+// for ownership.
+//
+// The first version of this comment said the exact figure did not matter because
+// only relative order does. That is wrong, and wrong in a way worth keeping a
+// note about: the value is rendered through `.toFixed(1)` to match what the FPL
+// API publishes, which makes it a QUANTIZER, and the quantization grid moves
+// with the denominator. Re-running 2023-24 against its real implied figure
+// (~8.2e6 — Haaland's 7,200,159 selections were about 87% ownership, which 1e7
+// renders as 72%) swaps 11 of the 420 players in the pool; 2024-25 and 2025-26
+// move 4 and 5. That is inside the noise of anything measured here, but it is
+// not zero, and "the scale cannot matter" was the kind of claim that stops
+// people checking.
+//
+// The rounding is kept rather than dropped, because reproducing FPL's dense tie
+// block at "0.0" is the whole reason the harness is a fair test of `launchPool`.
+const TOTAL_PLAYERS = 1e7;
 const DATA = path.resolve(__dirname, `../../fpl-data/data/${SEASON}`);
 
 function parseCsv(text: string): Record<string, string>[] {
@@ -89,6 +122,12 @@ interface Row {
   xg: number;
   xa: number;
   value: number;
+  /** How many managers owned him that week. Recorded at the deadline, so it is
+   *  the crowd's pre-deadline view and contains no information about how the
+   *  round then went — the same standing as `value` and `xp` beside it. It is
+   *  what `launchPool` ranks by once FPL has wiped `starts`, so hardcoding it
+   *  to zero left the pool sorting on price alone. */
+  selected: number;
   /** FPL's own expected-points estimate for that gameweek — the `ep_next` the
    *  live app reads. Without it the backtest runs a model the app never ships:
    *  `epShare` is 0.55 of the thin-data anchor, so leaving it null hands the
@@ -170,6 +209,7 @@ function loadSeason() {
       xg: +(r.expected_goals || 0),
       xa: +(r.expected_assists || 0),
       value: +r.value,
+      selected: +(r.selected || 0),
     };
     const a = byElement.get(row.element);
     if (a) a.push(row);
@@ -275,6 +315,13 @@ function buildStateAt(g: number, season: Season) {
       { minutes: 0, starts: 0, points: 0, goals: 0, assists: 0, bonus: 0, saves: 0, ict: 0, xg: 0, xa: 0 }
     );
     const price = atG[0]?.value ?? past[past.length - 1]?.value ?? 50;
+    // Ownership as of the round being projected, on the same footing as price.
+    // `?? ` will not catch a row that exists with a blank `selected` column,
+    // because line 198 parses that to 0 and 0 is not nullish — the player would
+    // silently become 0.0%-owned instead of inheriting last week's figure. No
+    // row in the current archive does this, but it is the same class of bug the
+    // `deadline_time` note below was written about, so fall back on falsiness.
+    const selected = atG[0]?.selected || past[past.length - 1]?.selected || 0;
     // The club as of the week being projected, falling back to the last week he
     // appeared and only then to the end-of-season file.
     const teamName = atG[0]?.teamName || past[past.length - 1]?.teamName || "";
@@ -311,7 +358,7 @@ function buildStateAt(g: number, season: Season) {
       status: "a",
       news: "",
       chance_of_playing_next_round: null,
-      selected_by_percent: "0.0",
+      selected_by_percent: ((selected / TOTAL_PLAYERS) * 100).toFixed(1),
       minutes: cum.minutes,
       starts: cum.starts,
       goals_scored: cum.goals,
@@ -364,7 +411,7 @@ function buildStateAt(g: number, season: Season) {
     })),
     teams,
     elements,
-    total_players: 1e7,
+    total_players: TOTAL_PLAYERS,
   };
   const fixtures: Fixture[] = fixturesBase.map((f) => ({
     ...f,
@@ -434,7 +481,34 @@ describe(`${SEASON} full-season simulation`, () => {
 
     // GW1 launch squad from pre-season info.
     const s1 = buildStateAt(1, season);
-    const previous = process.env.NO_PAST ? undefined : loadPreviousSeason(season);
+    let previous = process.env.NO_PAST ? undefined : loadPreviousSeason(season);
+    if (previous && process.env.POOL) {
+      // POOL=1 measures what the app can actually see.
+      //
+      // Last season's record arrives one HTTP request per player, so the app
+      // does not fetch all ~690 of them — `launchPool` chooses a few hundred
+      // and everyone else is projected with no record at all. Handing
+      // `previous` to the whole list, as the default run does, grades a model
+      // that has strictly more information than the shipped one.
+      //
+      // The default is deliberately left unrestricted anyway, for two reasons.
+      // It is the more sensitive instrument for a model change — under POOL
+      // most of the cheap band is players the model cannot say anything about,
+      // so real improvements get diluted by a constant. And every measurement
+      // recorded in a comment in this repo was taken without it, so switching
+      // the default would quietly invalidate all of them.
+      //
+      // What matters is that the two now agree where it counts. At the quota
+      // this file's `launchPool` currently ships, POOL=1 reproduces the managed
+      // total (8805), the set-and-forget total (6496) and the launch squad's
+      // season points (6315) exactly; only `all` (.623 -> .594) and `cheapR`
+      // (.577 -> .535) move, and they move because of players no squad
+      // contains. The full sweep is recorded in `src/lib/pool.ts`.
+      const keep = new Set(launchPool(s1.bootstrap.elements, sweepQuota()));
+      const trimmed = new Map<number, PastSeasonStats>();
+      for (const [id, v] of previous) if (keep.has(id)) trimmed.set(id, v);
+      previous = trimmed;
+    }
     const launch = buildLaunchSquad(s1.bootstrap, s1.fixtures, 1, 5, previous);
     const squad = launch.squad.map((e) => e.id);
     if (process.env.DUMP_LAUNCH) {
@@ -503,6 +577,38 @@ describe(`${SEASON} full-season simulation`, () => {
       // materially lower, and `priceR` below exists so they can be read against
       // something — a projection that cannot beat sorting the list by price is
       // not adding anything.
+      if (process.env.POOL_DIAG) {
+        // How many of a season's best players the app never even looks up.
+        //
+        // The table in `src/lib/pool.ts` that these numbers back was taken at the
+        // RETIRED quota of 210, so a bare `POOL_DIAG=1` today prints something
+        // smaller than anything recorded there. Reproduce the recorded row with
+        // `POOL_DIAG=1 QUOTA=210`; see `sweepQuota`.
+        const keep = new Set(launchPool(s1.bootstrap.elements, sweepQuota()));
+        const prevAll = loadPreviousSeason(season);
+        const rows = s1.bootstrap.elements
+          .filter((e) => e.element_type >= 1 && e.element_type <= 4)
+          .map((e) => ({
+            id: e.id, n: e.web_name, pos: e.element_type, price: e.now_cost,
+            own: parseFloat(e.selected_by_percent) || 0,
+            chg: e.cost_change_start ?? 0,
+            inPool: keep.has(e.id),
+            got: seasonPts.get(e.id) ?? 0,
+            prevMin: prevAll?.get(e.id)?.minutes ?? 0,
+          }))
+          .sort((a, b) => b.got - a.got);
+        const top = rows.slice(0, 150);
+        console.log(JSON.stringify({
+          diag: SEASON,
+          poolN: keep.size,
+          missedTop50: top.slice(0, 50).filter((r) => !r.inPool).length,
+          missedTop150: top.filter((r) => !r.inPool).length,
+          missed: top.filter((r) => !r.inPool).map((r) => ({
+            n: r.n, pos: r.pos, price: r.price, own: r.own, chg: r.chg,
+            got: r.got, prevMin: r.prevMin,
+          })),
+        }));
+      }
       const cand = s1.bootstrap.elements
         .filter((e) => e.element_type >= 1 && e.element_type <= 4)
         .map((e) => ({

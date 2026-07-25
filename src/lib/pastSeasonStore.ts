@@ -43,12 +43,36 @@ export function loadPastSeason(
   onProgress?: (done: number, total: number) => void
 ): Promise<PastSeasonFetch> {
   const key = keyOf(ids);
-  if (cached && cachedIds === key) return Promise.resolve(cached);
+  // A COMPLETE result is cached and reused; a partial one is kept for rendering
+  // but not treated as final.
+  //
+  // It used to be cached unconditionally, which made the drafter's "Re-draft to
+  // try them again" message a lie: re-drafting recomputes the same pool, so the
+  // same key hits the cache and returns the identical failure count without
+  // issuing a single request. The user could press it forever and keep the same
+  // price-prior squad until they reloaded the page. Both retries inside
+  // `fetchPastSeason` are already spent by the time a player lands in `failed`,
+  // so those lookups are genuinely gone until something asks again — and asking
+  // again is exactly what the button claims to do.
+  //
+  // This is worth more now than it was: the pool doubled to 420, so a rate-limit
+  // that used to clip a handful of requests has twice as much to clip.
+  if (cached && cachedIds === key && cached.failed === 0) return Promise.resolve(cached);
   if (inflight && cachedIds === key) return inflight;
   cachedIds = key;
   inflight = fetchPastSeason(ids, 10, onProgress)
     .then((r) => {
-      cached = r;
+      // Never trade a fuller result for a thinner one: a retry that goes worse
+      // (offline, say) must not blank out records already on screen. On an exact
+      // tie the newer result wins, which is unobservable — equal `data.size`
+      // against an equal `requested` means an equal `failed` — and `>=` here is
+      // a surviving equivalent mutant rather than a gap in the tests.
+      //
+      // Still missing, and worth naming: `fetchPastSeason` takes an
+      // `AbortSignal` and nothing passes one. Changing entry id mid-fetch leaves
+      // the previous 420 requests running alongside the new ones. Doubling the
+      // pool doubled that window without making the plumbing any better.
+      cached = cached && cachedIds === key && cached.data.size > r.data.size ? cached : r;
       return r;
     })
     .finally(() => {
