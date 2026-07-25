@@ -517,5 +517,42 @@ describe("buildLaunchSquad (pre-season)", () => {
     expect(
       validateSquad(launch.squad.map((e) => ({ id: e.id, elementType: e.element_type, teamId: e.team })))
     ).toEqual([]);
+
+    // The cost bar alone is weak, and it is worth saying why rather than
+    // leaving it looking sufficient. It passes if the pass runs exactly ONCE
+    // and then stops, because the first upgrade already clears £99.0m. It also
+    // passes if the pass is made to accept DOWNGRADES — swapping in strictly
+    // worse players still spends money. Both were tried; both survived the
+    // assertion above.
+    //
+    // So assert the post-condition the loop is actually supposed to establish:
+    // when it returns, no single affordable, legal, like-for-like swap can
+    // raise the squad's score. That is the definition of "done", and it kills
+    // the downgrade mutant — swapping in a worse player leaves the reverse swap
+    // sitting there as an improvement, and the assertion names it.
+    //
+    // It does NOT kill the truncated loop, and the reason is the mock rather
+    // than the assertion: one upgrade exhausts every improving swap here, so
+    // `guard = 1` reaches the same fixed point as `guard = 60`. On the archived
+    // seasons the loop runs one to four times. Catching that would need a
+    // universe with a deeper price ladder than this one has.
+    const bank = 1000 - launch.cost;
+    const score = (id: number) => launch.xp.get(id)?.totalDiscounted ?? 0;
+    const clubs = new Map<number, number>();
+    for (const e of launch.squad) clubs.set(e.team, (clubs.get(e.team) ?? 0) + 1);
+    const missed: string[] = [];
+    for (const out of launch.squad) {
+      for (const inEl of b.elements) {
+        if (inEl.element_type !== out.element_type) continue;
+        if (launch.squad.some((s) => s.id === inEl.id)) continue;
+        if (inEl.now_cost - out.now_cost > bank) continue;
+        const after = (clubs.get(inEl.team) ?? 0) + (inEl.team === out.team ? -1 : 0);
+        if (after >= 3) continue;
+        if (score(inEl.id) > score(out.id) + 1e-9) {
+          missed.push(`${out.web_name} -> ${inEl.web_name}`);
+        }
+      }
+    }
+    expect(missed).toEqual([]);
   });
 });

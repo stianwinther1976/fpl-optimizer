@@ -314,12 +314,38 @@ describe("price/model blend is continuous in the size of the record", () => {
     // The continuity check above only pins the one boundary that used to break.
     // This one says no OTHER boundary has been introduced anywhere in the band
     // where a draft's marginal calls are made.
-    const mins = [0, 45, 90, 135, 180, 225, 269, 271, 315, 360, 405, 450];
-    const scores = mins.map((m, i) => fringe(i + 1, m, Math.round(m / 90)));
+    //
+    // What it measures is the SLOPE, not the step, and the difference matters.
+    // A bound on "no step bigger than X%" is really a bound on how fine the
+    // grid is: this curve genuinely climbs 0.446 -> 0.723 across the first 600
+    // minutes, so on a 30-minute grid the honest steps are already 3-5% and any
+    // bar loose enough to admit them is too loose to catch much else. Dividing
+    // by the spacing turns steps into slopes, and a discontinuity is then not a
+    // large slope but an OUTLIER slope — one interval where the curve moves at
+    // a completely different rate from its neighbours.
+    //
+    // `starts` is carried as a fraction of minutes rather than a rounded count
+    // on purpose. Rounding put the largest jump in the whole sweep at 45
+    // minutes, where the fixture's own `Math.round(m / 90)` flipped starts from
+    // 0 to 1 — the test's arithmetic, not the model's, and 12x the model's real
+    // movement across the same interval.
+    const mins: number[] = [];
+    for (let m = 0; m <= 600; m += 30) mins.push(m);
+    mins.push(269, 271); // straddle the old threshold on a fine grid too
+    mins.sort((a, b) => a - b);
+    const scores = mins.map((m, i) => fringe(i + 1, m, m / 90));
+    const slopes: number[] = [];
     for (let i = 1; i < scores.length; i++) {
-      const step = Math.abs(scores[i] - scores[i - 1]) / scores[i - 1];
-      expect(step).toBeLessThan(0.1);
+      slopes.push(Math.abs(scores[i] - scores[i - 1]) / (mins[i] - mins[i - 1]));
     }
+    const sorted = [...slopes].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const worst = sorted[sorted.length - 1];
+    // Measured 1.52. Putting the threshold back makes it 384 — the two-minute
+    // interval from 269 to 271 moves the player further than the other 600
+    // minutes put together. The bar at 4 has room for a real retune on one side
+    // and two orders of magnitude of margin against the regression on the other.
+    expect(worst / median).toBeLessThan(4);
   });
 
   it("still lets the fixture move a player with an empty record", () => {
@@ -331,18 +357,31 @@ describe("price/model blend is continuous in the size of the record", () => {
     // multiplier, so an easy-home-vs-hard-away pair separates even at floor 0
     // and would have tested nothing. Same venue, same price, same empty record:
     // the only thing left that can tell them apart is the model term.
-    const easy = el({ id: 1, web_name: "Easy", team: 1, element_type: 3, now_cost: 50, ep_next: "2.0" });
-    const hard = el({ id: 2, web_name: "Hard", team: 11, element_type: 3, now_cost: 50, ep_next: "2.0" });
-    const xp = project([easy, hard]);
-    // Team 1 hosts at difficulty 2; team 11 hosts at difficulty 4. Measured
-    // separation is 0.687 vs 0.675 — 1.8%, which is all the floor buys and is
-    // deliberately all this asserts. Worth noting for later that two FDR
-    // buckets apart moving a thin player less than two percent looks weak
-    // against `attackMultByFdr` of 1.25 vs 0.82; the reason is that an empty
-    // record leaves almost everything sitting in the appearance term, which no
-    // fixture multiplier touches. That is a separate question from whether the
-    // floor should exist.
-    expect(xp.get(1)!.next).toBeGreaterThan(xp.get(2)!.next * 1.01);
+    //
+    // The shape is a difference of differences rather than a bare ratio. An
+    // earlier version asserted `easy > hard * 1.01` against a measured 1.0183 —
+    // 0.8pp of headroom on a 1.8pp effect, so any downward retune of the floor
+    // would have broken it without anything actually regressing. The control
+    // pair fixes that: teams 1 and 12 both host at difficulty 2, so whatever
+    // the floor is worth, THEY must stay level. The claim is that the fixture
+    // gap is large next to the noise floor, which is scale-free.
+    const at = (id: number, team: number) =>
+      el({ id, web_name: `P${id}`, team, element_type: 3, now_cost: 50, ep_next: "2.0" });
+    const xp = project([at(1, 1), at(2, 11), at(3, 12)]);
+    const easy = xp.get(1)!.next;   // team 1 hosts at difficulty 2
+    const hard = xp.get(2)!.next;   // team 11 hosts at difficulty 4
+    const control = xp.get(3)!.next; // team 12 also hosts at difficulty 2
+    const noise = Math.abs(easy - control);
+    // Measured: easy 0.6873, hard 0.6752, control 0.6873. The control pair is
+    // identical to the last digit, so the noise floor is 0 and the ratio below
+    // is infinite; the guard keeps it finite for the assertion's sake.
+    expect(easy - hard).toBeGreaterThan(Math.max(noise, 1e-6) * 5);
+    // Worth noting for later that two FDR buckets apart moving a thin player
+    // only 1.8% looks weak against `attackMultByFdr` of 1.25 vs 0.82; the
+    // reason is that an empty record leaves almost everything sitting in the
+    // appearance term, which no fixture multiplier touches. That is a separate
+    // question from whether the floor should exist.
+    expect(easy).toBeGreaterThan(hard);
   });
 });
 
@@ -429,5 +468,64 @@ describe("pre-season goalkeeper depth chart", () => {
     // The middle row is why this reads `preseasonEvidence` rather than the
     // obvious one-token change.
     expect(established).toBeGreaterThan(deputy * 2);
+  });
+
+  it("does not let a long career flatten the depth chart", () => {
+    // The unit bug the two tests above were blind to. `preseasonEvidence`
+    // returns a weighted SUM over every season on record — rows survive while
+    // `0.55^age >= 0.05`, so six seasons multiply out to 2.16x a single one —
+    // and the allocator compared it against `minutesCap: 2000`, a ceiling whose
+    // own comment says "a full season is a full season".
+    //
+    // A career deputy playing a third of every season for five years therefore
+    // saturated a one-season cap just as completely as an ever-present, and the
+    // two then separated on price alone. Neither test above catches it: their
+    // deputies sit at 540 and 1683 weighted minutes, both under 2000. This one
+    // puts the deputy at 2334, over it.
+    const seasons = ["2021/22", "2022/23", "2023/24", "2024/25", "2025/26"];
+    const past = new Map<number, PastSeasonStats>([
+      [1, { points: 140, minutes: 3420, starts: 38, seasonName: "2025/26", plSeasons: 5,
+            lastSeason: { seasonName: "2025/26", minutes: 3420, starts: 38 },
+            seasons: seasons.map((s) => ({ seasonName: s, minutes: 3420, starts: 38 })) }],
+      [2, { points: 45, minutes: 1080, starts: 12, seasonName: "2025/26", plSeasons: 5,
+            lastSeason: { seasonName: "2025/26", minutes: 1080, starts: 12 },
+            seasons: seasons.map((s) => ({ seasonName: s, minutes: 1080, starts: 12 })) }],
+    ]);
+    const [nailed, deputy] = keepers(past);
+    // Measured 1.92x with the units fixed, 1.015x with the raw sum — the shirt
+    // was being split down the middle between a club's number one and his
+    // backup. The bar sits at 1.5 to leave room for retuning `minutesWeight`
+    // while still killing anything close to the coin toss.
+    expect(nailed).toBeGreaterThan(deputy * 1.5);
+  });
+
+  it("does not hand out the shirt more confidently than the evidence allows", () => {
+    // Every other assertion in this block is one-sided, so doubling `beta` or
+    // `minutesWeight` — making the allocator far SHARPER than intended —
+    // survives all of them. That direction is a named modelling error, not a
+    // harmless retune: `gkPreseason`'s own comment records that picking a
+    // club's number one from pre-season information alone is right about 68%
+    // of the time, and cites Roefs, Trafford and Vicario as unknowns who took
+    // the shirt off a same-priced incumbent. `slotMass: 0.95` says the same
+    // thing — even a nailed keeper loses a few weeks to cups and knocks.
+    //
+    // So the clearest evidence gap the allocator can be shown — four full
+    // seasons against a keeper who has never played a minute — should still
+    // not produce near-certainty. Measured 3.27x. The ceiling is 4.0x, which
+    // is where it bites: beta 2.5 -> 3.5 gives 4.48x and doubling either beta
+    // or `minutesWeight` gives 6.13x, so both die, and the shipped value keeps
+    // 22% of headroom.
+    const seasons = ["2022/23", "2023/24", "2024/25", "2025/26"];
+    const past = new Map<number, PastSeasonStats>([
+      [1, { points: 140, minutes: 3420, starts: 38, seasonName: "2025/26", plSeasons: 4,
+            lastSeason: { seasonName: "2025/26", minutes: 3420, starts: 38 },
+            seasons: seasons.map((s) => ({ seasonName: s, minutes: 3420, starts: 38 })) }],
+      [2, { points: 0, minutes: 0, starts: 0, seasonName: "2025/26", plSeasons: 4,
+            lastSeason: { seasonName: "2025/26", minutes: 0, starts: 0 },
+            seasons: seasons.map((s) => ({ seasonName: s, minutes: 0, starts: 0 })) }],
+    ]);
+    const [nailed, never] = keepers(past);
+    expect(nailed).toBeGreaterThan(never * 1.5);
+    expect(nailed).toBeLessThan(never * 4);
   });
 });

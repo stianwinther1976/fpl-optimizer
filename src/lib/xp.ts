@@ -1170,7 +1170,22 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
       // being thrown away because he missed the most recent one to injury. A
       // straight `lastSeason?.minutes` would fix the inversion but introduce
       // that second error in its place.
-      const mins = preseasonEvidence(el, ctx.pastSeason?.get(el.id), seasonStartYear)?.minutes ?? 0;
+      //
+      // And `preseasonEvidence.minutes` is a WEIGHTED SUM over every season on
+      // record, not a per-season figure. Rows survive while `0.55^age >= 0.05`,
+      // so six seasons multiply out to 2.16x a single one — while `minutesCap`
+      // below is documented as "a full season is a full season" and set at
+      // 2000. Handing the sum straight in compared a career total against a
+      // one-season ceiling, which saturated the cap for anyone who had simply
+      // been around: a career deputy on 1080 minutes a season for five years
+      // reached it just as surely as a 3420-minute ever-present, and the two
+      // then separated on price alone. Measured, a nailed number one against
+      // that deputy at the same price went from 1.92x to 1.015x — the depth
+      // chart flattened into a coin toss. Dividing by `ev.games` restores the
+      // units, which is what every other caller of this function already does
+      // (`ev.starts / ev.games`, `ev.minutes / (ev.games * 90)`).
+      const ev = preseasonEvidence(el, ctx.pastSeason?.get(el.id), seasonStartYear);
+      const mins = ev && ev.games > 0 ? (ev.minutes / ev.games) * cfg.preseasonSeasonGames : 0;
       const score =
         el.now_cost / 10 + (Math.min(mins, g.minutesCap) / g.minutesCap) * g.minutesWeight;
       const list = byClub.get(el.team) ?? [];
