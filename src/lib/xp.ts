@@ -211,6 +211,127 @@ export const XP_CONFIG = {
   // who a club expects to play.
   priorPStartSlope: 1.6,
   priorPStartRange: [0.08, 0.9] as [number, number],
+  /**
+   * How much of the pre-season start prior comes from where the crowd has put
+   * its money rather than from where the club has put its price tag.
+   *
+   * `selected_by_percent` was already fetched, already displayed, and never
+   * once read by this file. It is the only field on the bootstrap that carries
+   * information generated AFTER last season ended: five weeks of pre-season
+   * friendlies, of announced transfers, of a manager saying in a press
+   * conference that a player is not in his plans. Every other input here is
+   * either last season's record or a price set in June.
+   *
+   * That matters because the model's characteristic failure is a
+   * discontinuity. Of the launch picks that finished a season under 1000
+   * minutes, nine of ten had a prior season of 2339+ minutes and 29+ starts —
+   * the record was not wrong, it was answering a question about a situation
+   * that no longer existed. Bucketing four archived seasons by prior-season
+   * minutes and then, WITHIN each bucket, by GW1 ownership percentile:
+   *
+   *   prior mins    own pct 0-.25   .25-.5   .5-.75   .75-.9   .9-1
+   *     >= 2500          1817        2073     2554     2335     2647
+   *     1500-2500        1385        1363     1814     1939     2087
+   *      500-1500         675        1127     1056     1271     1527
+   *      < 500            102         262      322      544      814
+   *
+   * (this season's minutes, mean). Monotone in every row, and steepest where
+   * the record is thinnest — which is precisely the shape of a prior, and the
+   * reason this enters as a prior on P(start) and not as a multiplier on
+   * points. A crowd that likes a player is not evidence he will score; it is
+   * evidence that somebody has seen him named in a pre-season XI.
+   *
+   * The weight was swept over the four archived seasons —
+   * `OWNW=<w> OHI=<hi> OGAMMA=<g> RANK=1 POOL=1 SEASON=<s> npx vitest run -c
+   * vitest.sim.config.ts` — jointly with the shape of the map it is applied to,
+   * because a weight sweep on its own cannot tell "the crowd is worth less"
+   * from "the curve is wrong". Spearman of projected xP against what players
+   * actually went on to score, means over the four seasons (n ≈ 573-690 each).
+   * Weight, at the shipped shape:
+   *
+   *   OWNW        0     0.25     0.4      0.5     0.6     0.75      1
+   *   all      .5927   .6182   .6242   .6272   .6292   .6238   .6085
+   *   cheapR   .5328   .5680   .5755   .5790   .5815   .5725   .5500
+   *   nonR     .4555   .5108   .5150   .5168   .5185   .5102   .4675
+   *   topR     .4097   .4235   .4290   .4327   .4377   .4455   .4560
+   *   priceR   .5145   .5145   .5145   .5145   .5145   .5145   .5145
+   *
+   * Gamma, at w = 0.5:
+   *
+   *   OGAMMA    1.35     1.8     2.2     2.6     3.0     3.5     4.5     6.0
+   *   all      .6218   .6248   .6265   .6272   .6270   .6265   .6245   .6208
+   *   cheapR   .5765   .5765   .5783   .5790   .5793   .5782   .5753   .5705
+   *   nonR     .5115   .5157   .5162   .5168   .5170   .5160   .5117   .5048
+   *
+   * `nonR` is players with no previous season at all, where the prior is doing
+   * all of the work; `topR` is the price-dominated band and is the one series
+   * that keeps climbing to w = 1, which is not a reason to go there — it is
+   * 60-odd players a season against 600. `priceR` is the control: price is not
+   * touched by any of this and does not move by a digit, so the movement above
+   * is the projection's and not the harness's.
+   *
+   * Two of those numbers were chosen against the metric rather than with it,
+   * and both deserve saying out loud. w = 0.6 scores higher on every
+   * correlation than the 0.5 that ships (.6292 vs .6272) — and drafts squads
+   * that start LESS: 1046 starts against 1104 over the three seasons whose
+   * `starts` column is trustworthy, with flops up from 7 to 9. Getting real
+   * starters into the fifteen is the point of the exercise, so a starts
+   * diagnostic that moves by 58 outranks a correlation that moves by .0020.
+   * Likewise the market top: pushing it from 0.7 to 0.9 buys .6272 -> .6280,
+   * almost all of it in `topR`, but 0.7 is what the archive's start rates
+   * actually say (below) and .0008 is well inside the season-to-season spread.
+   * Fitting the range to the metric it is scored by would be fitting twice.
+   *
+   * What is NOT claimed: the auto-drafted XV barely moves. Squad season points
+   * over the four seasons go 6315 -> 6437, set-and-forget 6496 -> 6529, managed
+   * 8805 -> 8682. Those are single squads, they swing by hundreds on which
+   * premium stayed fit (2022-23 alone runs 1538/1908/1611/1614/1484/1810/1720
+   * across the seven weights, with no trend in it at all), and they disagree in
+   * sign with each other — managed goes DOWN while the other two go up. The
+   * starts diagnostic moves 1094 -> 1104 with `squadRegulars` and `squadFlops`
+   * unchanged, and 2024-25 drafts a byte-identical XV at every weight. So: the
+   * ordering of 600 players improves consistently and measurably, and the
+   * fifteen that get picked out of it do not visibly change. Both halves of
+   * that are the record.
+   *
+   * And one thing the sweep could not see at all: the backtest harness sets
+   * `penalties_order: null` and never populates any set-piece order field, so
+   * `setPieceStartFloor` returns 0 for every player in every run above. In the
+   * live game it fires for something like 60-100 players — exactly the ones
+   * whose start probability is least in doubt. Every figure in these tables is
+   * therefore measured with the floor switched off, and how the floor and this
+   * prior interact is untested by anything here.
+   *
+   * Neither this weight nor `priorPStartOwnGamma` is pinned by a test, and no
+   * test should pretend to pin them: every value in (0, 1] gives the same
+   * behaviour the tests assert (more owned -> higher prior, ties equal, rank
+   * not percentage), so a test that failed on 0.6 would be pinning an
+   * arithmetic accident rather than a property. The tables above are what
+   * justify the numbers; the tests guard the shape.
+   */
+  priorPStartOwnWeight: 0.5,
+  /**
+   * Market-implied P(start) at the bottom and top of a position's ownership
+   * order, with the curve between them. Read off the same archive: the least
+   * owned quarter of a position averages about 4 starts of 38 and the top
+   * decile about 25, so the range is roughly [0.1, 0.66] and slightly convex.
+   * The top is deliberately NOT `priorPStartRange`'s 0.9 — the most owned
+   * players in a position still lose weeks to injury, and 0.9 would be
+   * claiming the crowd can see that coming.
+   */
+  priorPStartOwnRange: [0.08, 0.7] as [number, number],
+  /**
+   * Convexity of the curve between those two ends. 2.6, not the 1.35 this
+   * shipped with, and the correction is worth more than the tuning: at 1.35 the
+   * curve ran roughly 0.10 high across the whole upper half of the ownership
+   * order, because `oLo` and `oHi` were read off the archive as BUCKET MEANS
+   * (bottom quarter, top decile) and then installed as the values at percentile
+   * 0 and 1. A bucket mean sits at the middle of its bucket, so pinning it to
+   * the edge stretches everything between. Bending the curve is the cheap fix;
+   * it peaks at 2.6 and falls away by 4.5 (table above), so this is a maximum
+   * rather than a ramp that was stopped somewhere convenient.
+   */
+  priorPStartOwnGamma: 2.6,
   /** Minutes per start assumed for a player with no last-season record. */
   preseasonUnknownMinsPerStart: 80,
   /** Weight of a season's evidence per year of age (0.55 = last season counts
@@ -653,13 +774,83 @@ function dcPer90(el: Element, past?: PastSeasonStats): number {
  * an academy graduate. FPL's own pricing is the only evidence of the role a
  * player was bought for, and it is a decent one.
  */
-function priorPStart(el: Element): number {
+function priorPStart(el: Element, ownPct?: number): number {
   const cfg = XP_CONFIG;
   const t = el.element_type;
   const typical = cfg.typicalPriceM[t] ?? 6;
   const rel = el.now_cost / 10 / typical - 1;
   const [lo, hi] = cfg.priorPStartRange;
-  return clamp((cfg.priorPStartBase[t] ?? 0.5) + cfg.priorPStartSlope * rel, lo, hi);
+  // Clamped BEFORE the blend, not after, and that ordering is the whole
+  // difference between a weight that means something and one that does not.
+  // The raw price term is unbounded above — it passes 1.1 at £8.9m for a
+  // midfielder — so blending raw and clamping the result left every premium
+  // pinned at `hi` no matter where the crowd had put him: an £8.0m defender
+  // came out 0.900 at the 1st percentile of ownership and 0.900 at the 99th.
+  // The ownership term was not weighted down for those players, it was
+  // switched off, and since the clamp only bites upward the crowd could cast
+  // doubt on a premium (via `oHi` = 0.7 < `hi` = 0.9) but never confirm one.
+  const price = clamp((cfg.priorPStartBase[t] ?? 0.5) + cfg.priorPStartSlope * rel, lo, hi);
+  // No usable ownership order for this position — see `ownershipPercentiles`.
+  // Price alone, exactly as before.
+  if (ownPct == null) return price;
+  const [oLo, oHi] = cfg.priorPStartOwnRange;
+  const market = oLo + (oHi - oLo) * Math.pow(clamp(ownPct, 0, 1), cfg.priorPStartOwnGamma);
+  const w = cfg.priorPStartOwnWeight;
+  return clamp((1 - w) * price + w * market, lo, hi);
+}
+
+/**
+ * Where each player sits in his own position's ownership order, as a percentile
+ * in [0, 1]. Feeds the pre-season start prior; see `priorPStartOwnWeight`.
+ *
+ * A RANK, not the percentage itself, and that is the load-bearing choice.
+ * `selected_by_percent` is a share of a manager count that grows by a million
+ * or so a year, so the same player is a different number in 2022 and in 2025,
+ * and the backtest harness has to reconstruct it from a raw `selected` count
+ * divided by an estimate of that year's total. A percentile is invariant to
+ * every one of those, so what is measured on the archive is what ships. It is
+ * also the statistic the evidence is actually in: the in-band correlation that
+ * started this was a Spearman.
+ *
+ * Ties share a mid-rank. FPL publishes ownership to one decimal, so at GW1 well
+ * over a third of a position sits at exactly "0.0" — the cheap tail, where this
+ * signal would otherwise be inventing an order out of rounding. They all get
+ * the same percentile, which is the honest answer: the crowd has not
+ * distinguished them.
+ *
+ * A position whose ownership does not vary at all is left out of the map
+ * entirely rather than given a flat 0.5. That is not a hypothetical: a fixture
+ * harness or a mock with a constant ownership string would otherwise have every
+ * player's prior dragged halfway to the middle of the market range, silently,
+ * on no information.
+ *
+ * Must be handed the COMPLETE bootstrap, never a filtered pool. A percentile is
+ * a statement about a denominator: rank a player against the 420 the drafter
+ * shortlisted and the least owned of them lands at 0.0, when against all 700-odd
+ * he is at 0.4 and the shortlist itself was the crowd's opinion of him. The one
+ * caller is `projectAll`, which passes `ctx.bootstrap.elements` whole; anything
+ * that starts passing a subset has to compute this before the filter, not
+ * after.
+ */
+function ownershipPercentiles(elements: Element[]): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const pos of [1, 2, 3, 4]) {
+    const inPos = elements.filter((e) => e.element_type === pos);
+    if (inPos.length < 2) continue;
+    const own = (e: Element) => parseFloat(e.selected_by_percent) || 0;
+    const sorted = [...inPos].sort((a, b) => own(a) - own(b));
+    const n = sorted.length;
+    if (own(sorted[0]) === own(sorted[n - 1])) continue;
+    let i = 0;
+    while (i < n) {
+      let j = i;
+      while (j + 1 < n && own(sorted[j + 1]) === own(sorted[i])) j++;
+      const pct = (i + j) / 2 / (n - 1);
+      for (let k = i; k <= j; k++) out.set(sorted[k].id, pct);
+      i = j + 1;
+    }
+  }
+  return out;
 }
 
 /**
@@ -839,8 +1030,28 @@ function preseasonEvidence(
     if (past.minutes > 0) {
       const age = Math.max(0, seasonAge(past.seasonName, seasonStartYear) ?? 0);
       const w = Math.pow(cfg.preseasonSeasonDecay, age);
+      // `games` is weighted too, and that is not cosmetic. Every consumer of
+      // this struct divides by it — `ev.starts / ev.games`, `ev.minutes /
+      // (ev.games * 90)` — so weighting the numerators and leaving the
+      // denominator at a flat 38 does not age the evidence, it DILUTES it: a
+      // two-season-old record came out with 0.55x the starts spread over the
+      // full 38 games, which is a claim that the player was benched, not a
+      // claim that we are less sure. At age 2 it put `pStart` about 2.5x too
+      // low. Age is supposed to shrink a record toward the prior, and shrinking
+      // toward the prior means less evidence, not worse evidence.
+      //
+      // Which is exactly why this branch now needs the same ancient-history
+      // cut-off the multi-season branch has above, and did not before. With a
+      // flat denominator, `observedShare = minutes / (games * 90)` decayed with
+      // the record and a seven-year-old season floored `share` at nothing.
+      // Weighting the denominator makes that ratio w-INVARIANT: the same
+      // 3060-minute line from 2018/19 now floors `share` at 0.895 forever,
+      // because a ratio does not care how little you believe both halves of it.
+      // Shrinking `pStart` toward the prior and then letting an un-shrunk floor
+      // overwrite the answer is not shrinkage at all.
+      if (w < 0.05) return null;
       return {
-        games: cfg.preseasonSeasonGames,
+        games: cfg.preseasonSeasonGames * w,
         starts: impliedStarts({ minutes: past.minutes, starts: past.starts }) * w,
         minutes: past.minutes * w,
       };
@@ -867,10 +1078,11 @@ function preseasonEvidence(
 function preseasonMinutes(
   el: Element,
   past: PastSeasonStats | undefined,
-  seasonStartYear: number
+  seasonStartYear: number,
+  ownPct?: number
 ): MinutesModel {
   const cfg = XP_CONFIG;
-  const prior = priorPStart(el);
+  const prior = priorPStart(el, ownPct);
   const floor = setPieceStartFloor(el);
   const ev = preseasonEvidence(el, past, seasonStartYear);
   if (!ev) {
@@ -901,7 +1113,8 @@ function minutesModel(
   teamGames: number,
   recentStartShare?: number,
   past?: PastSeasonStats,
-  seasonStartYear = new Date().getUTCFullYear()
+  seasonStartYear = new Date().getUTCFullYear(),
+  ownPct?: number
 ): MinutesModel {
   const starts = el.starts ?? 0;
   let mm: MinutesModel;
@@ -917,7 +1130,7 @@ function minutesModel(
   } else {
     // Pre-season: no games played by anyone. Judge on last season, not on a
     // flat prior that would rate a backup keeper like a nailed defender.
-    return preseasonMinutes(el, past, seasonStartYear);
+    return preseasonMinutes(el, past, seasonStartYear, ownPct);
   }
   // Recency: what happened in the last ~5 team games outweighs the season
   // average (a new nailed starter, a lost place, a returning injury).
@@ -1192,6 +1405,10 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
   // rival keepers' availability still appears in the DENOMINATOR, because that
   // is the part that does the real work: it is what moves the shirt to the
   // deputy rather than deleting it.
+  // Read once for the whole projection rather than per player: it is a sort per
+  // position, and `minutesModel` is called ~700 times.
+  const ownPct = ownershipPercentiles(ctx.bootstrap.elements);
+
   const gkPStart = new Map<number, number[]>();
   {
     const g = cfg.gkPreseason;
@@ -1278,7 +1495,14 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
     const teamGames = st.gamesByTeam.get(el.team) ?? st.playedGws;
     const preseason = teamGames <= 0;
     const rates = playerRates(el, past, preseason);
-    let mm = minutesModel(el, teamGames, ctx.recentStarts?.get(el.id), past, seasonStartYear);
+    let mm = minutesModel(
+      el,
+      teamGames,
+      ctx.recentStarts?.get(el.id),
+      past,
+      seasonStartYear,
+      ownPct.get(el.id)
+    );
     // Replaces rather than adjusts the generic minutes model: for a keeper
     // pre-season the club's pecking order IS the minutes model. A keeper who
     // starts finishes the match, barring a red card, so minutes follow starts

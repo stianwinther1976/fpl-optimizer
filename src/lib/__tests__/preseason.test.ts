@@ -11,7 +11,7 @@
 // the model must know who starts.
 
 import { describe, expect, it } from "vitest";
-import { projectAll } from "../xp";
+import { projectAll, XP_CONFIG } from "../xp";
 import type { Bootstrap, Element, Fixture, PastSeasonStats, Team } from "../types";
 
 // 20 real teams. Detailed attack/defence ratings are ALL ZERO pre-season, so
@@ -185,6 +185,112 @@ describe("pre-season minutes model", () => {
     expect(xp.get(4)!.next).toBeGreaterThan(xp.get(3)!.next * 2);
   });
 
+  it("does not treat a super-sub's minutes as a starter's minutes", () => {
+    // The one comparison nobody had written, and the one the whole pre-season
+    // minutes model exists to get right. Two players with an IDENTICAL minutes
+    // total, one who got there by starting twenty games and one who got there
+    // in thirty-four cameos. Everything FPL publishes about them pre-season is
+    // the same; only `starts` differs.
+    //
+    // Every other test in this file varies minutes and starts together, so
+    // `starts` could be deleted from every fixture in the file and all of them
+    // still pass — the assertions were being carried by the minutes. That is
+    // exactly the failure mode a regression test is supposed to catch, and it
+    // was not being caught.
+    //
+    // The bar is deliberately modest. `share` takes `max(pStart * minsPerStart
+    // / 90, observedShare)`, and the observed share is the same 0.526 for both,
+    // so the separation is carried by `p60` and `pPlay` alone — a starter
+    // completes an hour and collects the two-point appearance bonus, a
+    // substitute mostly does not. The floor is a deliberate design choice (900
+    // minutes off the bench is not 20 minutes) and this test pins the size of
+    // what survives it rather than pretending the floor is not there.
+    const starter = el({
+      id: 1, web_name: "Starter", team: 1, element_type: 3, now_cost: 55,
+      ep_next: "2.5",
+    });
+    const sub = el({
+      id: 2, web_name: "Supersub", team: 1, element_type: 3, now_cost: 55,
+      ep_next: "2.5",
+    });
+    const line = { points: 80, goals: 6, assists: 4, xg: 5.0, xa: 3.5, bonus: 8, ict: 90 };
+    const past = new Map<number, PastSeasonStats>([
+      [1, { ...line, minutes: 1800, starts: 20, seasonName: "2025/26", plSeasons: 1,
+            seasons: [{ seasonName: "2025/26", minutes: 1800, starts: 20 }] }],
+      [2, { ...line, minutes: 1800, starts: 0, seasonName: "2025/26", plSeasons: 1,
+            seasons: [{ seasonName: "2025/26", minutes: 1800, starts: 0 }] }],
+    ]);
+    const xp = project([starter, sub], past);
+    expect(xp.get(1)!.next).toBeGreaterThan(xp.get(2)!.next * 1.15);
+  });
+
+  it("ages a stale record by trusting it less, not by pretending he was benched", () => {
+    // The rate-line fallback in `preseasonEvidence`: a record with no
+    // per-season breakdown, only totals and the season they came from. It
+    // weighted `starts` and `minutes` by the age decay and left `games` at a
+    // flat 38 — and every consumer divides by `games`. So a two-season-old
+    // ever-present arrived as "0.30 of a season's starts spread over a full 38
+    // games", which is not an aged record, it is a made-up bad one.
+    //
+    // Both players below have the identical line. Only the season it is
+    // attributed to differs, and the fixture's deadline is in 2026, so one is
+    // last season and the other is two years older. Ageing must cost the older
+    // man something — the prior is worth 6 games against 38 — but not the
+    // collapse the bug produced.
+    const recent = el({
+      id: 1, web_name: "Recent", team: 1, element_type: 3, now_cost: 55, ep_next: "2.5",
+    });
+    const stale = el({
+      id: 2, web_name: "Stale", team: 1, element_type: 3, now_cost: 55, ep_next: "2.5",
+    });
+    const line = { points: 150, minutes: 3060, starts: 34, goals: 10, assists: 8, xg: 9, xa: 7 };
+    // No `seasons` array at all — this is the branch under test.
+    const past = new Map<number, PastSeasonStats>([
+      [1, { ...line, seasonName: "2025/26", plSeasons: 1 }],
+      [2, { ...line, seasonName: "2023/24", plSeasons: 1 }],
+    ]);
+    const xp = project([recent, stale], past);
+    const a = xp.get(1)!.next;
+    const b = xp.get(2)!.next;
+    expect(b).toBeLessThan(a);
+    // With the denominator left unweighted this ratio was close to 3. Shrinking
+    // toward a price prior worth six games cannot legitimately halve a
+    // 34-start season.
+    expect(a).toBeLessThan(b * 1.35);
+  });
+
+  it("lets an ancient rate line decay out instead of freezing it forever", () => {
+    // The other half of the fix above, and the hazard it created. Once `games`
+    // is aged along with `minutes`, `observedShare = minutes / (games * 90)`
+    // stops depending on the age at all — a ratio does not care how little you
+    // believe both halves of it — and `share` takes that observed value as a
+    // FLOOR. So a 3060-minute season from eight years ago, aged to a weight of
+    // 0.008, still asserted that the man plays 89% of every available minute.
+    //
+    // The multi-season branch has always dropped rows below a weight of 0.05.
+    // This branch now does the same, and the assertion is against a player with
+    // no Premier League record at all: once the evidence is that old, having it
+    // must be worth the same as not having it.
+    const line = { points: 150, minutes: 3060, starts: 34, goals: 10, assists: 8, xg: 9, xa: 7 };
+    const ancient = el({
+      id: 1, web_name: "Ancient", team: 1, element_type: 3, now_cost: 55, ep_next: "2.5",
+    });
+    const unknown = el({
+      id: 2, web_name: "Unknown", team: 1, element_type: 3, now_cost: 55, ep_next: "2.5",
+    });
+    const past = new Map<number, PastSeasonStats>([
+      [1, { ...line, seasonName: "2018/19", plSeasons: 1 }],
+    ]);
+    const xp = project([ancient, unknown], past);
+    // Not equality: the scoring-rate terms read the same aged line by their own
+    // route and shrink it as well, so the man with the ancient record lands a
+    // shade BELOW the one with no record. What is pinned is the minutes side —
+    // an eight-year-old season must not buy a starter's share. Leave the
+    // cut-off out and he comes back at nearly double the unknown player.
+    expect(xp.get(1)!.next).toBeLessThan(xp.get(2)!.next);
+    expect(xp.get(1)!.next).toBeGreaterThan(xp.get(2)!.next * 0.8);
+  });
+
   it("gives a player with no Premier League record a price-based estimate, not zero", () => {
     // A marquee signing from abroad has no history_past at all. Writing him off
     // would be as wrong as trusting him blindly.
@@ -197,6 +303,271 @@ describe("pre-season minutes model", () => {
     const xp = project([signing, filler]);
     expect(xp.get(1)!.next).toBeGreaterThan(1.5);
     expect(xp.get(1)!.next).toBeGreaterThan(xp.get(2)!.next * 1.5);
+  });
+});
+
+describe("pre-season ownership prior", () => {
+  // `selected_by_percent` is the only field on the bootstrap generated after
+  // last season ended. Everything else here is a record from May or a price set
+  // in June; ownership is five weeks of managers watching friendlies, reading
+  // team news and hearing a manager say a player is not in his plans. It enters
+  // as a prior on P(start) — never as a multiplier on points — because a crowd
+  // that likes a player is evidence he has been seen in an XI, not evidence he
+  // will score.
+
+  /** `n` interchangeable midfielders, differing only in ownership. */
+  function crowd(
+    own: number[],
+    now_cost = 55
+  ): { elements: Element[]; past: Map<number, PastSeasonStats> } {
+    const line = { points: 70, minutes: 1500, starts: 17, goals: 5, assists: 4, xg: 4, xa: 3 };
+    const past = new Map<number, PastSeasonStats>();
+    const elements = own.map((o, i) => {
+      past.set(i + 1, {
+        ...line, seasonName: "2025/26", plSeasons: 1,
+        seasons: [{ seasonName: "2025/26", minutes: line.minutes, starts: line.starts }],
+      });
+      // All at the same club on purpose: GW1 fixture difficulty varies by team
+      // and would otherwise swamp the thing being measured. An earlier draft
+      // spread them across four clubs and the 1.0%-owned player came out below
+      // the 0.1%-owned one — not because the prior was broken, but because one
+      // of them was away at a difficulty-5 side.
+      return el({
+        id: i + 1, web_name: `M${i + 1}`, team: 1, element_type: 3,
+        now_cost, ep_next: "2.5", selected_by_percent: o.toFixed(1),
+      });
+    });
+    return { elements, past };
+  }
+
+  it("prefers the player the market has spent five weeks looking at", () => {
+    // Identical price, identical record, identical everything FPL publishes —
+    // except that one of them is in 20% of squads and one is in a fiftieth of a
+    // percent. Bucketing four archived seasons by prior-season minutes and then
+    // by GW1 ownership within each bucket, this season's minutes rise with
+    // ownership in every bucket: for players on 1500-2500 prior minutes, from
+    // 1385 in the least-owned quarter to 2087 in the top decile.
+    const { elements, past } = crowd([0.0, 0.1, 1.0, 20.0]);
+    const xp = project(elements, past);
+    const got = elements.map((e) => xp.get(e.id)!.next);
+    expect(got[3]).toBeGreaterThan(got[2]);
+    expect(got[2]).toBeGreaterThan(got[1]);
+    expect(got[1]).toBeGreaterThan(got[0]);
+  });
+
+  it("reads ownership as a rank, so the size of the game does not change the answer", () => {
+    // The load-bearing property, and the reason this is a percentile rather
+    // than the percentage itself. FPL's manager count grows by about a million
+    // a year, so the same player is a different number in 2022 and in 2025, and
+    // the backtest has to reconstruct the figure from a raw selection count
+    // over an ESTIMATE of that year's total. Anything that read the percentage
+    // directly would be measured on the archive at one scale and shipped at
+    // another.
+    //
+    // The two sets below are not a rescaling of each other, deliberately. An
+    // earlier version tripled every figure, which sounds like the right test
+    // and is not: dividing by the position maximum — a normalised PERCENTAGE,
+    // the exact thing this must not be — is itself invariant to scaling, so it
+    // passed. Only the ORDER is shared here, and nothing else; any reading of
+    // the magnitudes gives a different answer.
+    const a = crowd([0.1, 0.5, 2.0, 9.0]);
+    const b = crowd([0.3, 4.0, 5.0, 30.0]);
+    const xa = project(a.elements, a.past);
+    const xb = project(b.elements, b.past);
+    for (const e of a.elements) expect(xb.get(e.id)!.next).toBe(xa.get(e.id)!.next);
+  });
+
+  it("ranks a player against his own position, not against the whole game", () => {
+    // Ownership is not comparable across positions — a 6%-owned goalkeeper is
+    // his club's number one, a 6%-owned midfielder is a differential — so the
+    // order is read within `element_type` and nowhere else. Nothing else in
+    // this describe block would notice if the position loop were removed,
+    // because every fixture in it is midfielders only.
+    //
+    // Two midfielders and two defenders on the same two ownership figures.
+    // Rank them globally and the midfielders stop being 0 and 1 of their own
+    // position and become joint-lowest and joint-highest of four, which moves
+    // both of them; rank them within position and the defenders are simply not
+    // there.
+    const mids = crowd([0.1, 5.0]);
+    const withDefs = crowd([0.1, 5.0]);
+    const defs = [0.1, 5.0].map((o, i) =>
+      el({
+        id: 10 + i, web_name: `D${i + 1}`, team: 1, element_type: 2,
+        now_cost: 45, ep_next: "2.5", selected_by_percent: o.toFixed(1),
+      })
+    );
+    const xm = project(mids.elements, mids.past);
+    const xd = project([...withDefs.elements, ...defs], withDefs.past);
+    for (const e of mids.elements) expect(xd.get(e.id)!.next).toBe(xm.get(e.id)!.next);
+  });
+
+  it("puts the ends of a position at the ends of the range, whatever its size", () => {
+    // The percentile is `rank / (n - 1)`, so the least owned player in a
+    // position is 0 and the most owned is 1 — and that has to hold for a
+    // position of two as well as a position of eighty, because the divisor is
+    // the only thing that differs between them. Every other test here compares
+    // fixtures of the SAME size, where any consistent reparametrisation —
+    // `/ n`, `/ (n + 1)`, or a factor of a half across the board — cancels out
+    // and passes. Those mutations halve the signal in production and are
+    // invisible without this.
+    const two = crowd([0.1, 9.0]);
+    const five = crowd([0.1, 2.0, 3.0, 4.0, 9.0]);
+    const x2 = project(two.elements, two.past);
+    const x5 = project(five.elements, five.past);
+    expect(x5.get(5)!.next).toBe(x2.get(2)!.next);
+    expect(x5.get(1)!.next).toBe(x2.get(1)!.next);
+  });
+
+  it("does not go deaf to the crowd at the top of the price list", () => {
+    // The price prior is unbounded above — it passes 1.1 for a £8.9m
+    // midfielder — while the blended result is clamped to [0.08, 0.9]. Blend
+    // first and clamp afterwards and every premium comes out pinned at 0.9 no
+    // matter where the market has him: an £11.0m midfielder scored identically
+    // at the 1st percentile of ownership and the 99th, and since the clamp
+    // only bites upward the crowd could cast doubt on a premium but never
+    // confirm one. These four are priced where that used to happen.
+    const { elements, past } = crowd([0.1, 1.0, 5.0, 25.0], 110);
+    const xp = project(elements, past);
+    const got = elements.map((e) => xp.get(e.id)!.next);
+    expect(got[3]).toBeGreaterThan(got[2]);
+    expect(got[2]).toBeGreaterThan(got[1]);
+    expect(got[1]).toBeGreaterThan(got[0]);
+  });
+
+  it("puts the most owned player at the top of the market range and the least at the bottom", () => {
+    // The endpoint test above pins that the ends are the ends RELATIVE to each
+    // other, which any consistent rescaling of the percentile survives —
+    // halving it everywhere quietly halves the whole signal and passes. This
+    // pins them absolutely, by collapsing the range to a single value and
+    // showing the extremes were already there.
+    //
+    // With gamma 1 and weight 1 the prior IS the market map, so a position
+    // whose range is [lo, hi] must give its most owned player exactly what a
+    // range of [hi, hi] gives him, and its least owned exactly what [lo, lo]
+    // gives him. Nothing else in the fixture changes.
+    const cfg = XP_CONFIG;
+    const before = [cfg.priorPStartOwnRange, cfg.priorPStartOwnGamma, cfg.priorPStartOwnWeight] as const;
+    try {
+      cfg.priorPStartOwnGamma = 1;
+      cfg.priorPStartOwnWeight = 1;
+      const run = (range: [number, number]) => {
+        cfg.priorPStartOwnRange = range;
+        const c = crowd([0.1, 1.0, 5.0, 20.0]);
+        return project(c.elements, c.past);
+      };
+      const spread = run([0.08, 0.9]);
+      const allTop = run([0.9, 0.9]);
+      const allBottom = run([0.08, 0.08]);
+      expect(spread.get(4)!.next).toBe(allTop.get(4)!.next);
+      expect(spread.get(1)!.next).toBe(allBottom.get(1)!.next);
+    } finally {
+      [cfg.priorPStartOwnRange, cfg.priorPStartOwnGamma, cfg.priorPStartOwnWeight] = before;
+    }
+  });
+
+  it("switches off completely at weight zero", () => {
+    // `priorPStartOwnWeight` is swept from the harness, and `OWNW=0` is the
+    // control every measured claim about this prior is stated against. So the
+    // meaning of zero is load-bearing even though the shipped VALUE of the
+    // weight deliberately is not pinned by any test: swapping the two sides of
+    // the blend is an exact no-op at 0.5 and passes everything else in this
+    // file, while silently turning the control run into a price-free model.
+    const spread = crowd([0.0, 0.1, 1.0, 20.0]);
+    const flat = crowd([5.0, 5.0, 5.0, 5.0]);
+    const before = XP_CONFIG.priorPStartOwnWeight;
+    try {
+      XP_CONFIG.priorPStartOwnWeight = 0;
+      const xs = project(spread.elements, spread.past);
+      const xf = project(flat.elements, flat.past);
+      for (const e of spread.elements) expect(xs.get(e.id)!.next).toBe(xf.get(e.id)!.next);
+    } finally {
+      XP_CONFIG.priorPStartOwnWeight = before;
+    }
+  });
+
+  it("does not invent an order inside FPL's rounding", () => {
+    // Ownership is published to one decimal, so at GW1 well over a third of a
+    // position sits at exactly "0.0" — and it is the cheap tail, precisely
+    // where a made-up ordering would do the most damage. A tie is a tie: the
+    // crowd has not distinguished them, so neither may the model.
+    const { elements, past } = crowd([0.0, 0.0, 0.0, 6.0]);
+    const xp = project(elements, past);
+    expect(xp.get(2)!.next).toBe(xp.get(1)!.next);
+    expect(xp.get(3)!.next).toBe(xp.get(1)!.next);
+    expect(xp.get(4)!.next).toBeGreaterThan(xp.get(1)!.next);
+  });
+
+  it("puts a tied block at its middle rather than at its foot", () => {
+    // The test above pins that ties agree with each other, which every
+    // plausible tie rule satisfies — including the wrong ones. Replacing the
+    // mid-rank `(i + j) / 2` with the block's first index `i` leaves that test
+    // green while quietly demoting every tied player to the bottom of his own
+    // block, and at GW1 the tied block is a third of the position. So this
+    // pins the LEVEL, not just the agreement.
+    //
+    // Five otherwise identical midfielders. Break the ties and they occupy
+    // percentiles 0, .25, .5, .75, 1; leave the bottom three tied and all
+    // three sit at the average of the ranks they cover — .25, which is
+    // exactly where the middle one of them would have been anyway. Reading a
+    // tie as "all of them are bottom of the position" would put them at 0.
+    const tied = crowd([0.0, 0.0, 0.0, 4.0, 5.0]);
+    const distinct = crowd([1.0, 2.0, 3.0, 4.0, 5.0]);
+    const xt = project(tied.elements, tied.past);
+    const xd = project(distinct.elements, distinct.past);
+    expect(xt.get(1)!.next).toBe(xd.get(2)!.next);
+    expect(xt.get(1)!.next).toBeGreaterThan(xd.get(1)!.next);
+  });
+
+  it("leaves a position alone when its ownership carries no information at all", () => {
+    // A fixture, a mock or a harness with a constant ownership string must not
+    // have every player's prior quietly dragged halfway to the middle of the
+    // market range on no evidence. Flat ownership means the signal is switched
+    // off, not that everyone is average — which is why `ownershipPercentiles`
+    // omits such a position from its map rather than filling it with 0.5.
+    //
+    // The reference has to be a projection where the ownership column provably
+    // does nothing, and comparing one flat set against another flat set is not
+    // that: drop the guard and both sides get 0.5, so they still agree and the
+    // test passes having measured nothing. A position of ONE is the honest
+    // reference — there is no ownership ORDER to read, by a different branch —
+    // and a lone player must score exactly what he scores in a crowd that is
+    // all on the same number.
+    const flat = crowd([4.0, 4.0, 4.0, 4.0]);
+    const alone = crowd([4.0]);
+    const xf = project(flat.elements, flat.past);
+    const xa = project(alone.elements, alone.past);
+    expect(xf.get(1)!.next).toBe(xa.get(1)!.next);
+    // And the value being pinned is not accidentally the mid-market one: a
+    // player the crowd HAS put in the middle of this position scores something
+    // else, so the assertion above has teeth.
+    const ranked = crowd([1.0, 2.0, 3.0, 4.0, 5.0]);
+    const xr = project(ranked.elements, ranked.past);
+    expect(xr.get(3)!.next).not.toBe(xa.get(1)!.next);
+  });
+
+  it("still lets a record outrank the crowd", () => {
+    // The prior is a prior. A player who started 34 games last season and is
+    // owned by nobody must still project above one who started none and is
+    // owned by a fifth of the game — otherwise this has stopped being a
+    // shrinkage term and become a popularity contest.
+    const proven = el({
+      id: 1, web_name: "Proven", team: 1, element_type: 3, now_cost: 55,
+      ep_next: "2.5", selected_by_percent: "0.1",
+    });
+    const popular = el({
+      id: 2, web_name: "Popular", team: 2, element_type: 3, now_cost: 55,
+      ep_next: "2.5", selected_by_percent: "20.0",
+    });
+    const past = new Map<number, PastSeasonStats>([
+      [1, { points: 150, minutes: 3060, starts: 34, goals: 10, assists: 8, xg: 9, xa: 7,
+            seasonName: "2025/26", plSeasons: 1,
+            seasons: [{ seasonName: "2025/26", minutes: 3060, starts: 34 }] }],
+      [2, { points: 4, minutes: 90, starts: 0, seasonName: "2025/26", plSeasons: 1,
+            seasons: [{ seasonName: "2025/26", minutes: 90, starts: 0 }] }],
+    ]);
+    const xp = project([proven, popular], past);
+    expect(xp.get(1)!.next).toBeGreaterThan(xp.get(2)!.next * 2);
   });
 });
 

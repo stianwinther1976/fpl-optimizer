@@ -20,7 +20,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { projectAll } from "../src/lib/xp";
+import { projectAll, XP_CONFIG } from "../src/lib/xp";
 import { pickBestXi, optimize, buildLaunchSquad } from "../src/lib/optimizer";
 import { isValidFormation } from "../src/lib/rules";
 import { launchPool, LAUNCH_QUOTA } from "../src/lib/pool";
@@ -51,6 +51,30 @@ import type {
 } from "../src/lib/types";
 
 const SEASON = process.env.SEASON ?? "2025-26";
+// `OWNW=0` switches the pre-season ownership prior off, back to price alone;
+// any other value sweeps its weight. Kept as an env switch for the same reason
+// `QUOTA` is: the alternative is hand-editing `xp.ts` between runs, which is
+// how a recorded table went stale against the code once already. Unset means
+// whatever ships.
+// `OHI` and `OGAMMA` sweep the shape of the market map the weight is applied
+// to; without them a weight sweep cannot tell "the crowd is worth less" from
+// "the curve is wrong".
+const numEnv = (name: string): number | null => {
+  const raw = process.env[name];
+  // `Number("")` is 0 and finite, so an empty or blank value would silently set
+  // the weight to zero and get recorded as a swept result. An unparseable one
+  // must be loud rather than ignored, for the same reason.
+  if (raw == null || raw.trim() === "") return null;
+  const v = Number(raw);
+  if (!Number.isFinite(v)) throw new Error(`${name}=${raw} is not a number`);
+  return v;
+};
+const ownW = numEnv("OWNW");
+if (ownW != null) XP_CONFIG.priorPStartOwnWeight = ownW;
+const ownHi = numEnv("OHI");
+if (ownHi != null) XP_CONFIG.priorPStartOwnRange = [XP_CONFIG.priorPStartOwnRange[0], ownHi];
+const ownGamma = numEnv("OGAMMA");
+if (ownGamma != null) XP_CONFIG.priorPStartOwnGamma = ownGamma;
 // A stand-in for the season's actual manager count, used only as a denominator
 // for ownership.
 //
@@ -566,8 +590,21 @@ describe(`${SEASON} full-season simulation`, () => {
       // pre-season projection is actually BETTER, score every plausible pick
       // against what he went on to do — a few hundred samples instead of one.
       const seasonPts = new Map<number, number>();
+      // What the drafted XV went on to DO, as distinct from what it scored.
+      //
+      // A squad's season points is one sample and swings by hundreds on which
+      // premium stayed fit — the comment above says so and then the file went on
+      // to use it as the headline anyway. Minutes and starts are the same fifteen
+      // players measured on a far less noisy scale, and they are the thing a
+      // pre-season minutes model is actually claiming to predict. A change that
+      // moves points by less than its own run-to-run spread but moves starts
+      // consistently in every season has done something real.
+      const seasonMins = new Map<number, number>();
+      const seasonStarts = new Map<number, number>();
       for (const [id, rows] of season.byElement) {
         seasonPts.set(id, rows.reduce((t, r) => t + r.tp, 0));
+        seasonMins.set(id, rows.reduce((t, r) => t + r.minutes, 0));
+        seasonStarts.set(id, rows.reduce((t, r) => t + r.starts, 0));
       }
       // Every player in the game at GW1, with NO condition on how the season
       // turned out. There used to be a `.filter(e => seasonPts > 0 || cost >= 45)`
@@ -728,6 +765,12 @@ describe(`${SEASON} full-season simulation`, () => {
         priceR: +spearman(cand, "price").toFixed(3),
         ...byPos, ...split, ...bands,
         squadSeasonPts: launch.squad.reduce((t, e) => t + (seasonPts.get(e.id) ?? 0), 0),
+        squadStarts: launch.squad.reduce((t, e) => t + (seasonStarts.get(e.id) ?? 0), 0),
+        // How many of the fifteen turned out to be regulars, and how many never
+        // got going at all. `< 900` is ten full matches: below that a pick was
+        // not a rotation risk, it was a mistake about the role.
+        squadRegulars: launch.squad.filter((e) => (seasonStarts.get(e.id) ?? 0) >= 25).length,
+        squadFlops: launch.squad.filter((e) => (seasonMins.get(e.id) ?? 0) < 900).length,
       }));
     }
     let bank = 1000 - launch.squad.reduce((sum, e) => sum + e.now_cost, 0);
