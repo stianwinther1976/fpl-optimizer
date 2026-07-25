@@ -75,6 +75,17 @@ const ownHi = numEnv("OHI");
 if (ownHi != null) XP_CONFIG.priorPStartOwnRange = [XP_CONFIG.priorPStartOwnRange[0], ownHi];
 const ownGamma = numEnv("OGAMMA");
 if (ownGamma != null) XP_CONFIG.priorPStartOwnGamma = ownGamma;
+// `GKOWNW` and `GKSLOT` do the same job for the keeper depth chart. `GKSLOT`
+// especially has to be swept here rather than offline: it scales every
+// keeper's projected minutes at once, so it moves not just which keeper the
+// chart prefers but whether a keeper is worth drafting against an outfielder,
+// and no club-level accuracy measure can see that.
+const gkOwnW = numEnv("GKOWNW");
+if (gkOwnW != null) XP_CONFIG.gkPreseason = { ...XP_CONFIG.gkPreseason, ownWeight: gkOwnW };
+const gkSlot = numEnv("GKSLOT");
+if (gkSlot != null) XP_CONFIG.gkPreseason = { ...XP_CONFIG.gkPreseason, slotMass: gkSlot };
+const gkBeta = numEnv("GKBETA");
+if (gkBeta != null) XP_CONFIG.gkPreseason = { ...XP_CONFIG.gkPreseason, beta: gkBeta };
 // A stand-in for the season's actual manager count, used only as a denominator
 // for ownership.
 //

@@ -695,16 +695,28 @@ describe("one shirt per club in goal", () => {
     // version this was 0 for all four.
     expect(nailed.get(4)!).toBeGreaterThan(2);
     expect(nailed.get(4)!).toBeGreaterThan(deputy.get(4)!);
-    // And the deputy gives it back rather than keeping it all season.
     // And the deputy gives the shirt BACK rather than keeping it all season:
-    // 2.75 a week in the two gameweeks he is actually the keeper, 0.41 once the
-    // first choice is fit again. Two separate defects had to be fixed for this
-    // line to hold. The allocation itself was frozen at offset 0, which kept the
-    // deputy on the full 2.75 for all four; and the ep_next and last-season
-    // anchors were still being scaled by the offset-0 minutes model even after
-    // the allocation was fixed, which held him at 2.30. Each on its own leaves
-    // this assertion failing, which is the point of asserting it.
-    expect(deputy.get(4)!).toBeLessThan(deputy.get(1)! * 0.3);
+    // 2.70 a week in the two gameweeks he is actually the keeper, 0.82 once the
+    // first choice is back and most of the way to fit. Two separate defects had
+    // to be fixed for this line to hold. The allocation itself was frozen at
+    // offset 0, which kept the deputy on the full 2.70 for all four; and the
+    // ep_next and last-season anchors were still being scaled by the offset-0
+    // minutes model even after the allocation was fixed, which held him at 2.30.
+    // Each on its own leaves this assertion failing, which is the point of
+    // asserting it.
+    //
+    // The bar was 0.3 and read 0.25 while the club's start mass was leaking. On
+    // the recovery ramp the incumbent measures `availabilityAt` = 0.80139 in
+    // this gameweek, and his conditional share is capped at `preseasonMaxPStart`,
+    // so what is left of the shirt is genuinely the deputy's that week —
+    // 0.95 - 0.80139 * 0.97 = 0.1727 — and it used to go nowhere. An earlier
+    // draft of this comment said "about 72% likely to be fit" and "= 0.25";
+    // both were guessed rather than read off the ramp, and the arithmetic was
+    // then wrong in the deputy's favour. He now reads 0.305 of his own two-week peak,
+    // which is the correct answer and not a weakening of the assertion: what is
+    // being asserted is that he loses the shirt as the incumbent returns, and
+    // losing 70% of it while the incumbent is still a doubt is exactly that.
+    expect(deputy.get(4)!).toBeLessThan(deputy.get(1)! * 0.4);
     expect(nailed.get(4)!).toBeGreaterThan(deputy.get(4)! * 3);
   });
 });

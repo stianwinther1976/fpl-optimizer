@@ -174,31 +174,282 @@ export const XP_CONFIG = {
    * on the FPL list and exactly one plays. Each keeper is scored, the scores are
    * turned into shares of one shirt, and the shares are what the projection uses.
    *
-   * The numbers are fitted, not guessed. Over the 60 club-seasons in 2023/24,
-   * 2024/25 and 2025/26 — comparing predicted share against the keeper's actual
-   * starts/38 — these minimise Brier score at 0.050, against 0.12 for the flat
-   * split this replaces. The optimum is a broad basin (0.050–0.052 across beta
-   * 2.0–3.0 and mass 0.90–1.00) and leave-one-season-out refitting lands in the
-   * same place, so this is a real effect rather than three seasons of noise.
+   * HOW THESE WERE MEASURED, because an earlier version of this comment was
+   * wrong about it twice. The scoring set is the 60 club-seasons in 2023/24,
+   * 2024/25 and 2025/26 that have a prior season to read, carry two or more
+   * keepers on the GW1 list, and have at least one start between them. Every
+   * figure below comes from calling THIS function through the real projection,
+   * not from a Python replica of the scoring rule: the replica's evidence term
+   * was not the same as this one — it took the age-weighted mean of each
+   * season's total minutes, where this takes age-weighted minutes-per-game
+   * times 38, and it skipped seasons a player was absent from where this counts
+   * them as zeroes — and every headline number it produced was wrong, in both
+   * directions. The target is each keeper's own realised start fraction, not
+   * normalised within the club and not scaled by `slotMass`. Scaling the target
+   * by `slotMass` grades the model against its own assumption; that was the
+   * first error.
    *
-   * Worth knowing before trusting it too far: picking a club's number one from
-   * pre-season information alone is right about 68% of the time, and right
-   * within the top two 92% of the time. Hence a leading share near 0.65 rather
-   * than the near-certainty the raw evidence gap often suggests — Sunderland's
-   * Roefs, Burnley's Trafford and Spurs' Vicario were all unknowns who took the
-   * shirt from a same-priced incumbent.
+   * The second was the window. This projects the next five gameweeks. Grading
+   * it against `starts / 38` asks it a question about May that it never
+   * answers, and the two windows do not agree — `slotMass` in particular is
+   * justified by one and not the other. W=5 below means the fraction of GW1-5
+   * started; W=38 means the season. Where they disagree, W=5 is the one that
+   * governs, and it is said explicitly each time.
+   *
+   * Worth knowing before trusting any of it: picking a club's number one from
+   * pre-season information alone is right 48 times in 60 over GW1-5, and 46 in
+   * 60 over the season. Two earlier versions of this comment claimed 47/60 for
+   * a configuration that really scores 44/60, which is the sort of thing a
+   * replica does to you.
+   *
+   * What this whole block is and is not worth: it improves the pre-season
+   * keeper ranking, and in all four archived seasons it drafts a byte-identical
+   * squad. Nothing here has ever been shown to change a team sheet. It changes
+   * which keeper the model would tell you to pick if you asked it, and the
+   * evidence that it changes it for the better is the accuracy and calibration
+   * below, not a points total. The simulator cannot see any of these constants:
+   * across `beta` 1.2 to 3.0 and `slotMass` 0.85 to 0.95 the drafted squad is
+   * identical in all four seasons and the Spearman moves inside .0018. That is
+   * why they are fitted against the archive's realised starts, and it is also
+   * the reason to be modest about all of it.
    */
   gkPreseason: {
-    /** Softmax sharpness over keeper scores within a club. */
+    /**
+     * Softmax sharpness over keeper scores within a club.
+     *
+     * Stays at 2.5, having survived a serious attempt to lower it. The attempt
+     * is recorded because the reasoning was sound and the conclusion was not.
+     *
+     * The case for lowering it: at 2.5 the chart reads 0.806 on the keeper it
+     * names number one, and that man goes on to start 0.639 of the season —
+     * over-confident by +0.167. Brier against the season-long target falls
+     * monotonically from .0710 at beta 3.5 to .0542 at beta 1.25. A chart that
+     * picks right 46 times in 60 is not obviously entitled to read 0.81.
+     *
+     * Three things killed it. First, the over-confidence is not spread evenly:
+     * split the 60 clubs into quartiles by how far apart the top two keepers'
+     * SCORES sit, and the residual is worst in the smallest-gap quartile
+     * (+0.286) — where the model's top-scoring keeper actually started FEWER
+     * games than his rival, accuracy 0.33. No value of beta fixes a sign error.
+     * Dropping 2.5 to 1.25 moves that quartile's mean prediction from 0.55 to
+     * 0.52 and leaves the mistake exactly where it was.
+     *
+     * Second, the fault was locatable and fixable: it was `minutesWeight`, see
+     * below. With that at 0 the chart reads 0.751 for a man who starts 0.760
+     * over GW1-5 — a calibration gap of -0.009, from +0.092 — at beta 2.5,
+     * untouched. Beta was absorbing a signal error, and retuning it would have
+     * buried the error rather than fixed it.
+     *
+     * Third, on the horizon this actually projects the Brier surface is flat
+     * between beta 1.25 and 2.0 (.0657 / .0642 / .0643 / .0653), which is
+     * inside noise on 60 clusters. There was never enough there to justify the
+     * change on its own.
+     *
+     * Beta is a monotone transform of the score, so accuracy does not move with
+     * it at all — 46/60 at every value tried. Anything beta appears to buy is a
+     * confidence statement, never a better pick.
+     */
     beta: 2.5,
-    /** Weight on last season's minutes, on top of price in £m. */
-    minutesWeight: 0.6,
-    /** Minutes above this add nothing — a full season is a full season. */
+    /**
+     * Weight on last season's minutes, on top of price in £m.
+     *
+     * ZERO, and this is the finding the rest of the block is organised around.
+     * The term is left in the code rather than deleted so the measurement can
+     * be reproduced by moving one number, and because `minutesCap` below is
+     * only meaningful alongside it.
+     *
+     * The keeper's own career record, read through `preseasonEvidence`, makes
+     * this chart WORSE at every weight tried, on every horizon, in every
+     * partition of the sample:
+     *
+     *   minutesWeight     0     0.2    0.4    0.6    1.0    2.4
+     *   Brier (W=5)     .0557  .0607  .0661  .0715  .0816  .0967
+     *
+     *   at minutesWeight   0        0.6 (was shipped)
+     *   W=5   accuracy   48/60      46/60
+     *         Brier      .0559      .0726
+     *         gap        -0.009     +0.092
+     *   W=38  accuracy   46/60      44/60
+     *         Brier      .0528      .0670
+     *         gap        +0.166 -> +0.105
+     *
+     * The two shipped-column Brier figures above read .0682 and .0633 until a
+     * review re-derived them: they had been produced against a ONE-SEASON
+     * record, while the live path reads the age-weighted MULTI-SEASON record
+     * out of `preseasonEvidence`. On the code that actually runs they are .0726
+     * and .0670. The w=0 column is unaffected — the record does not enter it —
+     * so the correction only widens the margin the conclusion rests on, which
+     * is exactly why it is worth stating rather than quietly patching: a
+     * mistake that happens to favour the answer you already reached is the one
+     * you are least likely to catch.
+     *
+     * The `gap` rows are the calibration fingerprint and are the reason this is
+     * a signal problem rather than a tuning one. `gap` is mean predicted share
+     * for the club's real number one minus his realised start fraction, so a
+     * negative gap is under-confidence and a positive one over-confidence. At
+     * W=5 the term flips a small under-confidence (-0.009) into a large
+     * over-confidence (+0.092): it is not adding information and then needing
+     * cooling, it is manufacturing certainty about the wrong keeper. Turning
+     * `beta` down would move both columns together and cannot repair that.
+     *
+     * NINE SHAPES, 100+ CONFIGURATIONS, AND NONE OF THEM WORKS. Before settling
+     * on zero the record was tried as: raw minutes, minutes per game, start
+     * rate, a log of minutes, a cap-and-normalise, a rank within the club, a
+     * difference against the club's best, a gate on the crowd being quiet, and
+     * a two-sided version that could demote as well as promote. Sweeping each
+     * across weights, the baseline at w=0 was at or above the best W=5 Brier of
+     * EVERY shape at EVERY weight, and the two closest candidates collapsed
+     * onto the baseline to four decimals once matched on confidence. There is
+     * no version of "read the keeper's record" that pays here, which is a
+     * stronger statement than "this particular version does not".
+     *
+     * The degenerate case the shapes were meant to rescue happens ONCE IN 60
+     * CLUB-SEASONS. With price and ownership the whole score, two keepers who
+     * are identical on both get an exact 50/50 — Brighton 2024/25, Steele and
+     * Verbruggen, both GBP 4.5m, both 0.5% owned. And there the coin flip was
+     * nearly right: the realised GW1-5 split was 2 starts to 3, so a 50/50
+     * scored a Brier of about 0.01 on the single club-season where the
+     * pathology bites. A rescue worth 0.01 on one club-season is not worth
+     * .0167 of Brier on the other 59.
+     *
+     * Paired clustered bootstrap over the 60 club-seasons, 50k resamples:
+     * ΔBrier -0.0105 at W=5, CI [-0.0219, -0.0011]; -0.0093 at W=38, CI
+     * [-0.0174, -0.0027]. Leave-one-season-out prefers 0 on the held-out season
+     * in 3 of 3 at W=38 and 2 of 3 at W=5, the exception losing by .0008.
+     *
+     * It is not a disguised beta reduction. Matching configurations on
+     * confidence — picking, at each weight, the one whose mean predicted share
+     * is nearest 0.78 — accuracy still falls monotonically (48, 47, 46, 46, 46,
+     * 43 of 60) while Brier rises (.0568 to .0991). Accuracy is invariant to
+     * beta and to any monotone rescaling, so this is a signal problem and not a
+     * temperature problem.
+     *
+     * WHY, which is the part worth keeping. Last season's minutes back the
+     * OUTGOING incumbent. The four picks that flip when the term is removed:
+     * West Ham 2023/24 backed Fabianski's 3111 prior minutes over Areola, who
+     * started 0.82; Palace 2023/24 backed Guaita's 2430 over Johnstone, who
+     * started 0.53; United 2025/26 backed Onana's 3060 over Bayindir. Three
+     * right, one wrong (Brighton 2024/25, where Verbruggen was correct and the
+     * chart now prefers Steele). The rest of the gain is deconfidencing men who
+     * had lost the shirt by August: Lloris predicted 0.73 and started 0.00,
+     * Ederson 0.90 and 0.00, Neto 0.87 and 0.05. This is the same failure the
+     * `priorPStartOwnWeight` comment describes for outfield players — the
+     * record was not wrong, it was answering a question about a situation that
+     * no longer existed — and at keeper it is fatal rather than merely costly,
+     * because a keeper who has lost his place plays nothing at all.
+     *
+     * The obvious rescue was tested and does not work. "Let the record speak
+     * only where the crowd is silent" predicts the term should help in
+     * crowd-quiet clubs. It does not: partitioning by how far apart the crowd
+     * puts the club's keepers, Brier rises with this weight in BOTH halves
+     * (quiet, n=21: .0731 -> .0882; loud, n=39: .0463 -> .0571). Explicit
+     * gating was implemented and measured seven ways, and not one variant beat
+     * a flat zero at either horizon. An ORACLE that picks the best weight per
+     * club in hindsight — an upper bound on any implementable rule — buys
+     * .0040 of Brier and one club. There is nothing there to capture.
+     *
+     * Silence does not make this signal correct. It only removes the crowd,
+     * which was the thing overruling it: Palace and United above are both
+     * crowd-quiet clubs, and both are cases where the record is wrong.
+     */
+    minutesWeight: 0,
+    /**
+     * Minutes above this add nothing — a full season is a full season. Inert
+     * while `minutesWeight` is 0, and kept for whoever revisits that. Swept at
+     * the old weight it never earned its range: Brier at W=5 was .0643 / .0658
+     * / .0682 / .0668 / .0618 for caps of 800 / 1200 / 2000 / 3420 / 6000, so
+     * both ends beat the middle and the setting that gives the term the most
+     * discriminating power was the worst one. That is the shape of a term
+     * carrying no signal, and it is the first place the finding above showed up.
+     */
     minutesCap: 2000,
     /**
+     * Weight on where the crowd has put the keeper in the ownership order,
+     * added in the same units as price. See `priorPStartOwnWeight` for why
+     * ownership is worth reading at all; a depth chart is where it is worth
+     * the most, because "who is the number one" is precisely the question a
+     * million managers spend pre-season answering and precisely the one price
+     * answers worst. Two keepers at a promoted club arrive at £4.5m each.
+     *
+     * With `minutesWeight` at 0 this and price are the whole score. Measured
+     * over the 60 club-seasons:
+     *
+     *   ownWeight       0.75    1.0    1.25    1.5     2.0
+     *   W=5  accuracy   49/60  48/60  47/60  48/60   48/60
+     *        Brier      .0599  .0571  .0559  .0559   .0579
+     *        gap        -.095  -.052  -.012  -.009   +.017
+     *   W=38 accuracy   47/60  46/60  45/60  46/60   47/60
+     *        Brier      .0511  .0504  .0512  .0528   .0571
+     *        gap        +.018  +.061  +.095  +.105   +.127
+     *
+     * The two windows disagree and W=5 decides, because W=5 is what leaves this
+     * function. At 1.5 the chart is at the Brier minimum for that window and
+     * very nearly perfectly calibrated (-0.009). Dropping to 1.0 costs .0012 of
+     * Brier, which is noise, and moves the calibration gap to -0.052 — the
+     * model would begin systematically under-selling its own pick by five
+     * points of start share. Bootstrap puts the probability that 1.0 has the
+     * smaller absolute gap at 0.244.
+     *
+     * It was tempting to take 1.0 anyway, because it turns the ceiling
+     * assertion in `preseason.test.ts` green without argument. That is fitting
+     * a constant to a bar this repo set for itself, and the bar was wrong — see
+     * that test. Leave-one-season-out picks 1.0, 2.0 and 1.25 on the three
+     * held-out seasons at W=5, which is to say it picks nothing; the surface is
+     * flat between 1.0 and 1.5 and the data does not choose. Calibration does.
+     *
+     * Whether it is really the crowd doing the work: 5 of the 7 picks the term
+     * newly gets right are same-price pairs, where price cannot speak at all.
+     * Where price already decides, it adds +2 of 39. It is not double-counting
+     * price. But it is not a small voice either — the median crowd-term gap
+     * inside a club is 0.602 against a median price gap of 0.50, and with the
+     * minutes term gone those two are now the entire score, so this is the
+     * loudest thing in the function.
+     *
+     * The curve is `priorPStartOwnGamma`, deliberately reused rather than given
+     * its own constant, and the reason is not that the shape does not reach
+     * inside a club — an earlier version of this comment argued that, and it is
+     * backwards. What `q^gamma` does here is scale CONFIDENCE by league
+     * position: two keepers separated by the same ownership distance are spaced
+     * far apart near the top of the league's keeper order and pressed together
+     * near the bottom. That is the desired behaviour, because the crowd's
+     * opinion of who keeps for a title contender is worth more than its opinion
+     * of who keeps for a newly promoted club. The alternative was tested — a
+     * club-relative crowd term, which normalises the gap within the club and so
+     * discards exactly that scaling. It measures better offline and worse in
+     * the simulator (.6303 and .6283 against .6315), which is the clearest
+     * evidence available that the league-wide curve is carrying something the
+     * club-level score cannot see. Rejected on that basis, not on a decimal.
+     */
+    ownWeight: 1.5,
+    /**
      * Total share of starts the club's keepers divide between them. Below 1
-     * because cups, knocks and rotation take the shirt off the number one for
-     * a few weeks of most seasons.
+     * because cups, knocks and rotation take the shirt off the number one, and
+     * because a keeper who was not on the GW1 list sometimes takes it: a
+     * mid-season signing, a loan, an academy call-up.
+     *
+     * 0.95 is right for the five gameweeks this projects, and is NOT the
+     * season-long figure. Measuring the fraction of a club's league games
+     * started by keepers who were on that club's GW1 list:
+     *
+     *   window    GW1    1-3    1-5    1-10   1-19   1-38
+     *   coverage  1.000  .983   .963   .942   .920   .883
+     *
+     * An earlier version of this comment quoted 0.9364, "exactly 1.0 for 50 of
+     * the 60 clubs", and that number is an artefact worth remembering. It came
+     * from grouping the end-of-season `players_raw.csv` by `team_code`, which
+     * is the player's club in MAY: a keeper who moved in January carries his
+     * new club's code together with his old club's starts. Contamination is
+     * +0.053, concentrated in seven clubs — Arsenal 2023/24 reads 1.000 against
+     * a true 0.158, because Raya arrived on loan from Brentford — and it is
+     * self-evidently broken, since Arsenal 2024/25 came out at 1.053 and a
+     * coverage figure above 1.0 is impossible. Counted properly, from round-1
+     * `merged_gw` rows using that week's club, the season figure is 0.883 with
+     * 46 of 60 clubs at exactly 1.0.
+     *
+     * The Brier surface agrees with the horizon reading: at W=5 it is .0590 /
+     * .0570 / .0559 / .0557 across 0.85 / 0.90 / 0.95 / 1.00, flat with its
+     * optimum at 0.95-1.00, while at W=38 it falls monotonically toward 0.85.
+     * Two windows, two answers, and the projection's own horizon picks 0.95.
      */
     slotMass: 0.95,
   },
@@ -334,6 +585,153 @@ export const XP_CONFIG = {
   priorPStartOwnGamma: 2.6,
   /** Minutes per start assumed for a player with no last-season record. */
   preseasonUnknownMinsPerStart: 80,
+  /**
+   * Outfield starts a club hands out per match: eleven shirts minus the
+   * keeper's. Pre-season, a club's outfielders' `pStart` is made to sum to at
+   * least this — see `clubStartMass` for the mechanism and for why only the
+   * players with NO Premier League record absorb the difference.
+   *
+   * AN EARLIER VERSION OF THIS COMMENT CALLED IT "not a fitted parameter"
+   * because the sweep that could have fitted it was flat from 9.0 to 11.0
+   * (.1955 / .1953 / .1953 / .1955 / .1966 at targets 9.0 / 9.5 / 10.0 / 10.5
+   * / 11.0). That sweep does not reproduce on the current model, and the
+   * flatness it asserted was the whole argument for taking the football number
+   * on faith. Re-measured through `projectAll` at the GW1 state, scoring the
+   * stored `pStart` against realised "started" per player-gameweek over GW1-5,
+   * launch pool, outfield, pooled over 2023/24-2025/26 (n = 5619), and
+   * independently reproduced to four decimals by a second harness:
+   *
+   *     target    0    7.0   7.5   8.0   9.0   9.5   9.6  10.0  10.5  11.0
+   *     Brier  .2019 .1980 .1972 .1970 .1967 .1972 .1975 .1989 .2024 .2055
+   *
+   * The flat region is 7.5-9.5, where the sweep moves by .0005; above that it
+   * climbs monotonically, and by 11.0 the mechanism is worse than being
+   * switched off. Ten is not in the plateau. It sits on the rising edge and
+   * gives back .0022 of the .0030 the mechanism is worth in total.
+   *
+   * WHY THE SHIPPED VALUE IS 9.6 AND WHY THAT IS STILL NOT A FITTED NUMBER.
+   * Ten outfielders start every match; that is an identity and it is not in
+   * doubt. But the identity this mechanism can act on is not the whole of it,
+   * because the mechanism can only allocate over the element list it can see
+   * at the deadline, and some of those ten shirts go to players who are not on
+   * it yet. Counting outfield starts per match that went to players present on
+   * their club's GW1 element list: 9.775 pooled over 60 club-seasons, and
+   * 9.597 at the clubs this rule actually touches (9.66 / 9.50 / 9.63 by
+   * season), falling to 9.43 at clubs short by a full start. The residual is
+   * window signings. The same count run on goalkeepers, where one shirt is
+   * likewise an identity, returns 0.993 — which is the control that says the
+   * method is measuring what it claims to. So 9.6 is the visible part of the
+   * ten-shirt identity, measured and stable across all three seasons, rather
+   * than the low point of a sweep: the sweep's own optimum is 9.0, and 9.0 is
+   * NOT what ships, because it loses in 2025/26 taken alone. At 9.6 the
+   * mechanism wins in each of the three seasons separately (.2017 / .1867 /
+   * .2039 against 10's .2029 / .1895 / .2043), and a paired bootstrap over
+   * 4000 resamples clustered on club-season puts 9.6 against 10 at -0.00146
+   * [-0.00277, -0.00041]. Set to 0 to switch the mechanism off entirely.
+   *
+   * A SHARPER ALLOCATION WAS TRIED HERE AND REFUTED. The obvious reading of a
+   * sub-ten optimum is that the total is fine and the SHAPE is wrong: real
+   * clubs concentrate ten shirts on thirteen or fourteen men, while this rule
+   * spreads the deficit proportionally across every record-less outfielder,
+   * including squad filler and youth who will not play at all. The descriptive
+   * half of that is true — the top five record-less players hold 0.533 of the
+   * predicted mass against 0.638 realised — but the conclusion drawn from it is
+   * backwards. Cutting the 9-to-10 damage by within-club rank (ranked ex ante,
+   * because ranking by realised starts would be circular) puts 113% of it in
+   * ranks 1 and 2 and about 8% in ranks 7 and below:
+   *
+   *     rank      n    p@9   p@10    obs   share of damage
+   *     1        53   .497   .612   .536       +6.39
+   *     2        36   .398   .490   .388       +7.70
+   *     3-6      58   .368   .414   .437       -2.59
+   *     7-14     50   .333   .372   .312       +0.64
+   *     15+      28   .207   .232   .159       +0.34
+   *
+   * The head is already over-predicted at 10 (rank 1: .601 against .502
+   * observed), so sharpening drives the wrong players further wrong. Eighteen
+   * shapes were swept over fourteen targets — top-N-only, powers of
+   * `priorPStart`, and caps on how many players may receive lift. At target 10
+   * the best of all eighteen is the shipped proportional rule, and every
+   * concentrating shape's own optimum moves DOWN to 7.5-8.0 rather than up
+   * toward 10. A paired bootstrap clears none of them (top-16 at 10 against
+   * proportional at 10: -0.00000 [-0.00097, +0.00113]), and under
+   * leave-one-season-out the freely chosen shape never beats the proportional
+   * rule held out. The tail is nearly free; there is nothing to win here.
+   *
+   * WHY IT IS NEEDED. `priorPStart` maps a player onto the LEAGUE-WIDE price
+   * and ownership order, and a promoted club's entire XI sits at the bottom of
+   * that order. Measured with the mechanism off, across the three seasons with
+   * a prior season on the archive, the sum of `pStart` over a promoted club's
+   * outfielders came to 4.42-6.35 against an observed 8.4-10.5 for every club
+   * alike. The model was giving a promoted club about five outfield starters
+   * where the league gives it ten, so every player at that club was marked
+   * down: over GW1-5 the promoted clubs' pool players were predicted 0.194,
+   * 0.245 and 0.227 against a realised 0.347, 0.426 and 0.434 — gaps of
+   * -0.153, -0.181 and -0.208 on n = 53, 46 and 47. Nought of them was ever
+   * drafted, in any of the three seasons, with the mechanism on or off.
+   *
+   * It is NOT a "promoted club" rule and deliberately does not look for one.
+   * `strength` does not identify promotion — Wolves were a 2 in 2025/26
+   * without being promoted and Leeds and Sunderland were 3s with — and the
+   * clubs that need the correction are not only the promoted three. An earlier
+   * version of this comment put an established club at 10.5-11.2 and offered
+   * Bournemouth 2023/24, at 6.09 with 21 record-less players in a 29-man list,
+   * as the one counter-example. Every number in that sentence was wrong —
+   * Bournemouth summed to 8.45 with 5 record-less players in 29, and were 8th
+   * lowest of 20, not the shortest — and the framing was wrong with them,
+   * because established clubs do not sit above the target as a class. With the
+   * mechanism off, 2023/24 reads
+   *
+   *     SHU   4.42     WHU   8.75     CHE   9.65     AVL  10.68
+   *     BUR   5.09     EVE   9.11     BHA   9.81     MUN  10.69
+   *     LUT   5.46     FUL   9.47     BRE  10.02     TOT  11.02
+   *     WOL   7.64     NFO   9.49     MCI  10.44     NEW  11.56
+   *     BOU   8.45     CRY   9.53     LIV  10.64     ARS  13.14
+   *
+   * and the other two seasons have the same shape. Over the three, established
+   * clubs span 7.08 to 13.14 and 27 of the 51 established club-seasons fall
+   * below the target and are lifted by this rule. Wolves are short every
+   * season (7.64, 8.71, 7.08) and Everton came to 7.37 in 2025/26, none of
+   * them anywhere near promotion. The conclusion outlived its example, and on
+   * better evidence than the example gave it: what the correction keys on is
+   * the thing that actually causes the shortfall, which is how much start
+   * probability a club's own squad has failed to account for, and that is a
+   * property of squads and not of promotion.
+   */
+  preseasonClubStartMass: 9.6,
+  // A DISCOUNT ON A PLAYER WHO CHANGED CLUB WAS TESTED HERE AND REJECTED.
+  // The proposal was to scale a mover's `games`, `starts` and `minutes`
+  // together in `preseasonEvidence` — leaving `starts / games` alone and only
+  // weakening how hard his record pulls against the price prior, i.e. "we are
+  // less sure about him" rather than "he will play less". Measured on the three
+  // archive seasons that have a prior season (2023/24-2025/26; 2022/23 has none
+  // and is uninformative) against realised GW1-5 start fraction, residual =
+  // observed minus predicted, launch pool, outfield:
+  //
+  //     all players with a record                906    +0.006
+  //     changed club (previous-season-club proxy) 90    +0.079
+  //     ...of those, last season's starts >= 20   42    -0.006
+  //
+  // The whole-group number has the WRONG SIGN — a mover starts MORE than the
+  // model says — and it is entirely a thin-record effect. Split by last
+  // season's starts, movers run +0.277 (0-4 starts), +0.163 (5-14), +0.061
+  // (15-24), -0.084 (25+) against stayers at +0.058, +0.035, +0.010, -0.069;
+  // at 25+ starts, the only place a trust multiplier moves anything worth
+  // moving, mover and stayer are the same number. Restricted to a real record
+  // the difference is -0.006, 95% CI [-0.109, +0.115] clustered on club-season,
+  // and its leave-one-season-out values change sign (-0.021, -0.008, +0.013).
+  //
+  // The apparent whole-group effect is the proxy, not football: flagging anyone
+  // whose round-1 club differs between seasons sweeps in every JANUARY mover of
+  // the previous season, whose record is split across two clubs and depressed
+  // at both. FPL's `team_join_date` is not the escape — it exists in two of the
+  // archive's seasons and is read from an END-OF-SEASON snapshot, so it flags
+  // Isak (Newcastle, join 2025-09), Wissa (Brentford, 2025-09), Sterling
+  // (Chelsea, 2024-08) and Eze (Palace, 2025-08) as summer arrivals at clubs
+  // they already played for, and those four are exactly the players whose GW1-5
+  // start fraction collapsed because a transfer saga was running. That
+  // manufactures a -0.220 "mover penalty" out of nothing. So: no effect to fit,
+  // and no field on which to fit it.
   /** Weight of a season's evidence per year of age (0.55 = last season counts
    *  roughly twice what the one before it does). */
   preseasonSeasonDecay: 0.55,
@@ -349,6 +747,42 @@ export const XP_CONFIG = {
   // Availability recovery: how fast doubtful/injured players return to
   // fitness in later horizon GWs (geometric decay of the deficit)
   recoveryRate: 0.6,
+  /**
+   * How far an undated injury or doubt recovers within the horizon.
+   *
+   * The decay this multiplies used to run `1 - (1 - a0) * rate^offset`, which
+   * asymptotes to 1: given enough gameweeks, every flagged player is projected
+   * fully fit. That is false, and measurably so. Over 2022-23..2025-26, taking
+   * every run of consecutive blank rounds by an established starter (2,051
+   * runs) and tracking forward, P(play) plateaus well short of the ceiling for
+   * that population. Normalising by a matched never-absent control — necessary
+   * because selecting on a high recent start rate regresses downward on its own
+   * (0.904 -> 0.778 over ten rounds with no absence at all) — the recovered
+   * fraction settles at roughly:
+   *
+   *   offset          1     2     3     4
+   *   measured     0.42  0.51  0.58  0.62   (runs already 3-4 rounds long)
+   *   old code     0.40  0.64  0.78  0.87
+   *   this         0.30  0.48  0.59  0.65
+   *
+   * The old form is close at offset 1 and then diverges badly; a ceiling fixes
+   * the shape rather than the first point. 0.75 is the round number inside the
+   * plateau band — short absences settle near 0.78, absences already six rounds
+   * old near 0.45 — and it is deliberately at the optimistic end of that band,
+   * because this branch also catches players whose blank rounds were rotation
+   * rather than injury.
+   *
+   * Applied as a target the deficit closes toward, not as a clamp: a player
+   * already above it (`chance_of_playing` 80, say) is never dragged DOWN to
+   * 0.75, he simply stops climbing.
+   */
+  recoveryCeiling: 0.75,
+  /**
+   * Availability at horizon offsets 1, 2, 3, 4+ for a player serving a ban
+   * whose end date is not stated in `news`. See `availabilityAt` for the
+   * measurement these come from.
+   */
+  banAvail: [0.62, 0.77, 0.88, 0.95] as number[],
   /** Availability in the first match after a stated return date, and how many
    *  days it takes to climb back to full. A player is named in the squad before
    *  he is trusted with 90 minutes. */
@@ -460,6 +894,26 @@ export interface PlayerXp {
   next: number; // xP next GW
 }
 
+/**
+ * Diagnostic sink for the minutes model, off by default.
+ *
+ * The minutes model is the single largest pre-season signal and NOTHING in
+ * `PlayerXp` exposes it — a study of `pStart` calibration therefore either
+ * reimplements the rule in the measuring script (which is how two rounds of
+ * constants were fitted against a replica that had silently diverged) or it
+ * reads the shipped value out of the shipped call. This is the second option.
+ * Set `.minutes` to a Map before calling `projectAll` and every element's
+ * final `MinutesModel` lands in it, after the keeper depth chart has had its
+ * say and with the flag saying whether the shrinkage branch or the no-record
+ * branch produced it.
+ *
+ * Null in production: one `Map.set` per element per projection is not free and
+ * nothing in the app reads it.
+ */
+export const XP_DEBUG: {
+  minutes: Map<number, MinutesModel & { hasEvidence: boolean; preseason: boolean }> | null;
+} = { minutes: null };
+
 export interface XpContext {
   bootstrap: Bootstrap;
   fixtures: Fixture[];
@@ -536,7 +990,14 @@ const MONTHS = "jan feb mar apr may jun jul aug sep oct nov dec".split(" ");
  * date, in which case the decay curve is still the best guess available.
  */
 export function newsReturnTime(el: Element, seasonStartYear: number): number | null {
-  const m = /expected back[^0-9]*(\d{1,2})\s+([A-Za-z]{3})/i.exec(el.news ?? "");
+  // FPL writes two different phrasings for the same fact. Injuries read
+  // "Knee injury - Expected back 25 Sep"; bans read "Suspended until 17 Jan".
+  // Matching only the first threw away every stated ban end date in the
+  // archive: 11 of the 13 suspended players across 2022-23..2025-26 state one,
+  // and the two that do not are both Mudryk rows reading "Suspended - unknown
+  // return date", which no pattern could have read anyway. (An earlier draft
+  // said 12 of 13.)
+  const m = /(?:expected back|suspended until)[^0-9]*(\d{1,2})\s+([A-Za-z]{3})/i.exec(el.news ?? "");
   if (!m) return null;
   const day = parseInt(m[1], 10);
   const month = MONTHS.indexOf(m[2].toLowerCase().slice(0, 3));
@@ -564,20 +1025,46 @@ export function availabilityAt(el: Element, offset: number, kickoff?: number | n
   }
   // A stated return date beats any decay curve: before it he does not play, and
   // shortly after it he is easing back rather than instantly nailed.
-  if (kickoff != null && (el.status === "i" || el.status === "d")) {
+  if (kickoff != null && (el.status === "i" || el.status === "d" || el.status === "s")) {
     const back = newsReturnTime(el, new Date(kickoff).getUTCMonth() >= 7
       ? new Date(kickoff).getUTCFullYear()
       : new Date(kickoff).getUTCFullYear() - 1);
     if (back != null) {
       const days = (kickoff - back) / 86_400_000;
       if (days < 0) return 0;
+      // A ban is a legal absence, not a fitness one. A suspended player trains
+      // all week and is match-fit the day his ban expires, so the return ramp —
+      // which exists because a body coming back from injury is eased in — must
+      // NOT be applied to him. Before the stated date he is unavailable; after
+      // it he is simply available.
+      if (el.status === "s") return 1;
       return clamp(cfg.returnRampStart + (1 - cfg.returnRampStart) * (days / cfg.returnRampDays), 0, 1);
     }
   }
   if (offset <= 0) return a0;
-  if (el.status === "s") return Math.max(a0, 0.9); // bans are usually one match
-  // injured / doubtful: deficit decays geometrically toward fit
-  return 1 - (1 - a0) * Math.pow(cfg.recoveryRate, offset);
+  if (el.status === "s") {
+    // "Bans are usually one match" was half right and shipped as if it were
+    // certain: 0.9 at every future offset says the ban is over by the next
+    // gameweek with 90% confidence, forever. Measured over 2022-23..2025-26,
+    // among established starters (>=60% of the prior 6 rounds) who were sent
+    // off, the number of subsequent rounds missed is 0: 14.6%, 1: 53.1%,
+    // 2: 12.5%, 3: 9.4%, 4+: 10.4% (n=96; the same population's baseline rate
+    // of missing >1 round for any reason is 4.2%, so this is red-attributable).
+    // Conditioning on the ban costing at least the imminent round — which is
+    // what status "s" plus a zero playing chance asserts — the cumulative
+    // probability he is back by offset k gives the schedule below. Three-match
+    // bans for violent conduct and serious foul play are why the tail is fat.
+    const sched = cfg.banAvail;
+    return Math.max(a0, sched[Math.min(offset, sched.length) - 1]);
+  }
+  // Injured / doubtful: the deficit decays geometrically, but toward
+  // `recoveryCeiling` rather than toward 1. The old form asymptoted to full
+  // fitness, which is why a player flagged injured with no stated return date
+  // reached 0.87 availability four gameweeks out — the exact failure the
+  // `newsReturnTime` docstring says it exists to prevent, still live for the
+  // ~32% of flagged players whose news carries no parseable date at all.
+  const target = Math.max(a0, cfg.recoveryCeiling);
+  return a0 + (target - a0) * (1 - Math.pow(cfg.recoveryRate, offset));
 }
 
 interface StrengthTables {
@@ -837,7 +1324,23 @@ function ownershipPercentiles(elements: Element[]): Map<number, number> {
   for (const pos of [1, 2, 3, 4]) {
     const inPos = elements.filter((e) => e.element_type === pos);
     if (inPos.length < 2) continue;
-    const own = (e: Element) => parseFloat(e.selected_by_percent) || 0;
+    // ABSTAIN, DO NOT DEMOTE. This used to read `parseFloat(...) || 0`, which
+    // turns a missing or malformed field into a real 0.0% and therefore into
+    // the BOTTOM of the position's order — the model would then act on a
+    // confident statement that nobody owns him, sourced from a parse failure.
+    // Ownership is a signal the model can do without, and every consumer of
+    // this map already handles an absent entry, so the honest answer to "we
+    // could not read it" is to say nothing about that position at all.
+    //
+    // Dropping the whole position rather than the one player is deliberate and
+    // is relied on elsewhere: a percentile is a rank against everyone in the
+    // position, so a partial map would rank the survivors against a silently
+    // smaller field. The goalkeeper depth chart in particular reasons from
+    // "within a club it is all keepers or none" to conclude that a missing
+    // percentile cannot advantage one keeper over his club rival by accident.
+    const raw = (e: Element) => parseFloat(e.selected_by_percent);
+    if (inPos.some((e) => !Number.isFinite(raw(e)))) continue;
+    const own = (e: Element) => raw(e);
     const sorted = [...inPos].sort((a, b) => own(a) - own(b));
     const n = sorted.length;
     if (own(sorted[0]) === own(sorted[n - 1])) continue;
@@ -1091,6 +1594,37 @@ function preseasonMinutes(
     return { pStart, minsPerStart: mps, share: clamp((pStart * mps) / 90, 0, 1) };
   }
   const k = cfg.preseasonPriorGames;
+  // A CONVEX COMBINATION, and it has to stay one. Writing it out:
+  //
+  //     (ev.starts + prior * k) / (ev.games + k)
+  //   = w * (ev.starts / ev.games) + (1 - w) * prior,   w = ev.games / (ev.games + k)
+  //
+  // so the answer always lies BETWEEN the observed rate and the prior, and
+  // which side it moves toward is decided by how much evidence there is, not
+  // by which number happens to be bigger.
+  //
+  // A ONE-SIDED FLOOR WAS PROPOSED TWICE AND IS REJECTED. Both forms —
+  // replacing the blend with `max(rate, prior)`, and keeping the blend but
+  // flooring it at the observed rate — delete the downward half of the
+  // shrinkage, on the intuition that a player's own record should never be
+  // used against him. The intuition is wrong, and it is wrong in exactly the
+  // place that costs points. Shrinkage is not a penalty; it is the correction
+  // for the fact that an observed rate estimated on 38 games overshoots, and
+  // last season's ever-presents are the group it overshoots hardest for,
+  // because being an ever-present is partly luck with injuries and rotation
+  // and luck does not repeat. A GBP 4.5m midfielder who started all 38 comes
+  // out of the blend at 0.8745 and out of a one-sided floor at 0.970, the cap
+  // — the model would be asserting he starts 37 of 38 again. He does not, and
+  // the difference is not free: `clubStartMass` below allocates one club's ten
+  // shirts in proportion to these numbers, so inflating the men who already
+  // have the most takes the correction away from precisely the squad players
+  // it exists to find. See the regression test "shrinks an ever-present
+  // downward, not just a fringe player upward"; the narrow form of the mutation
+  // is the one to try first, since the wide form fails half the file and can
+  // be waved away as obviously broken.
+  //
+  // `floor` below is a genuine one-sided term and does not contradict this.
+  // Set-piece duty is EXTERNAL evidence, not the same record read twice.
   const pStart = clamp(
     Math.max((ev.starts + prior * k) / (ev.games + k), floor),
     0,
@@ -1105,6 +1639,100 @@ function preseasonMinutes(
   const observedShare = ev.minutes / (ev.games * 90);
   const share = clamp(Math.max((pStart * minsPerStart) / 90, observedShare), 0, 1);
   return { pStart, minsPerStart, share };
+}
+
+/**
+ * Redistributes a club's missing pre-season start probability onto the players
+ * whose absence from the record is what created the gap. See
+ * `preseasonClubStartMass` for the measurement that motivates it.
+ *
+ * Ten outfielders start every match. `priorPStart` cannot know that, because it
+ * scores each player against the LEAGUE's price and ownership order rather than
+ * against his own club's, so a club made of players the league has priced
+ * cheaply comes out with six starters and a club of expensive ones with
+ * thirteen. This puts the missing mass back.
+ *
+ * Three choices in here are load-bearing, and each was measured against the
+ * alternative on the pool, 2023/24-2025/26 (Brier on "started", lower better):
+ *
+ *  - UP ONLY. A club over the target is left alone. An earlier version of this
+ *    comment justified that by saying downward normalisation costs the players
+ *    with a record, moving them from .1945 to .1965 because a proven starter at
+ *    a deep squad would be told he is less nailed on the strength of who else
+ *    the club signed. That cannot happen and never did: `movable` excludes
+ *    anyone with a record, so no proven starter is reachable in either
+ *    direction, and with down-normalisation switched on the has-record group is
+ *    unchanged to six decimals at .194480. What down-normalisation actually
+ *    costs is the record-less group, .2174 to .2312, and the pool overall,
+ *    .1989 to .2016. So the choice is still right and the stated reason for it
+ *    was not. The over-allocated tail is real (Arsenal 2023/24 summed to 13.14)
+ *    but the model is not wrong about those individuals, only about the sum,
+ *    and there is no evidence here for which of them to demote.
+ *
+ *  - RECORD-LESS PLAYERS ONLY absorb the deficit, and this is the one choice of
+ *    the three that the measurement does not support. The claim used to be that
+ *    absorbing it into the record-less players lands at .1953 against .1967 for
+ *    spreading it over everyone. The sign is the other way round: record-less
+ *    only lands at .1989 and spreading over everyone at .1971. Half the
+ *    reasoning does hold — spreading the deficit over everyone degrades the
+ *    players who already have a record, .1945 to .1969 — but it improves the
+ *    record-less group by far more, .2174 to .1978, and the net favours the
+ *    rejected alternative by .0018. Record-less-only is what ships because a
+ *    club is short precisely where its squad has no record, and because
+ *    confining the correction to the players the model already admits it cannot
+ *    score keeps it from reaching players it scores well. That is an argument
+ *    about where the error comes from, not a Brier result, and the Brier result
+ *    does not agree with it. Anyone revisiting this should start here.
+ *
+ *  - PROPORTIONAL, not flat. The deficit is shared in ratio to each player's
+ *    existing `pStart`, so the price-and-ownership ordering `priorPStart`
+ *    established inside the club is preserved and only the level moves. A flat
+ *    share would tell a promoted club's £4.0m fifth-choice striker and its
+ *    £5.5m captain that they are equally likely to play.
+ *
+ * The cap is redistributive rather than destructive, for the same reason the
+ * keeper depth chart's is: probability taken off a player who has hit
+ * `preseasonMaxPStart` belongs to someone, and the someone is whoever still
+ * has room. Returns only the players whose `pStart` changes.
+ */
+function clubStartMass(
+  players: { id: number; pStart: number; hasEvidence: boolean }[],
+  target: number,
+  maxPStart: number
+): Map<number, number> {
+  const out = new Map<number, number>();
+  // "This club will field ten outfielders" says nothing about a set that does
+  // not contain ten candidates. A real bootstrap never trips this — the archive
+  // seasons list 27-50 outfielders per club — but a partial squad does, and
+  // there the rule stops being an accounting identity and becomes an
+  // extrapolation: told to find ten starts among two men it multiplies both by
+  // twelve and pins them at the ceiling, which erases the very ordering the
+  // rest of the model spent its evidence establishing.
+  if (players.length < target) return out;
+  const total = players.reduce((s, p) => s + p.pStart, 0);
+  let want = target - total;
+  if (!(want > 0)) return out;
+  let movable = players.filter((p) => !p.hasEvidence && p.pStart > 0);
+  if (movable.length === 0) return out;
+  want += movable.reduce((s, p) => s + p.pStart, 0);
+  // At most one pass per player: each pass either finishes or caps somebody,
+  // and a capped player never becomes movable again.
+  for (let pass = 0; pass <= players.length; pass++) {
+    const base = movable.reduce((s, p) => s + p.pStart, 0);
+    if (base <= 0 || want <= 0) break;
+    const k = want / base;
+    const capped = movable.filter((p) => p.pStart * k > maxPStart);
+    if (capped.length === 0) {
+      for (const p of movable) out.set(p.id, p.pStart * k);
+      break;
+    }
+    for (const p of capped) {
+      out.set(p.id, maxPStart);
+      want -= maxPStart;
+    }
+    movable = movable.filter((p) => p.pStart * k <= maxPStart);
+  }
+  return out;
 }
 
 /** Starts-based minutes model with a pre-season prior fallback. */
@@ -1450,10 +2078,26 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
       // chart flattened into a coin toss. Dividing by `ev.games` restores the
       // units, which is what every other caller of this function already does
       // (`ev.starts / ev.games`, `ev.minutes / (ev.games * 90)`).
+      //
+      // ALL OF WHICH IS CURRENTLY INERT, and the comment above would read as
+      // load-bearing without this line. `gkPreseason.minutesWeight` is 0, so
+      // `mins` is multiplied by zero three lines down and nothing in this
+      // paragraph reaches a projection; the 1.92x/1.015x figures were measured
+      // at the old nonzero weight. It is kept computed and kept documented
+      // because the weight is the thing under review, not the units bug — see
+      // `minutesWeight` for the seven-way refutation of the record term, and
+      // note that if the weight ever returns this bug returns with it.
       const ev = preseasonEvidence(el, ctx.pastSeason?.get(el.id), seasonStartYear);
       const mins = ev && ev.games > 0 ? (ev.minutes / ev.games) * cfg.preseasonSeasonGames : 0;
+      // Absent for a whole position at once — `ownershipPercentiles` drops a
+      // position, never a player — so within a club it is all keepers or none,
+      // and a zero here cannot advantage one man over his rival by accident.
+      const q = ownPct.get(el.id);
+      const crowd = q == null ? 0 : Math.pow(q, cfg.priorPStartOwnGamma) * g.ownWeight;
       const score =
-        el.now_cost / 10 + (Math.min(mins, g.minutesCap) / g.minutesCap) * g.minutesWeight;
+        el.now_cost / 10 +
+        (Math.min(mins, g.minutesCap) / g.minutesCap) * g.minutesWeight +
+        crowd;
       const list = byClub.get(el.team) ?? [];
       list.push({ id: el.id, el, score });
       byClub.set(el.team, list);
@@ -1464,16 +2108,83 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
         const gw = ctx.nextEvent + off;
         const kickoff = kickoffTime(fxIndex.get(gw)?.get(teamId)?.[0]);
         const raw = list.map((k) => Math.exp(g.beta * k.score));
-        const sum = list.reduce(
-          (acc, k, i) => acc + availabilityAt(k.el, off, kickoff) * raw[i],
-          0
-        );
+        const av = list.map((k) => availabilityAt(k.el, off, kickoff));
+        const sum = list.reduce((acc, _, i) => acc + av[i] * raw[i], 0);
         if (!Number.isFinite(sum) || sum <= 0) continue;
+        // The club's start mass, divided up. This sums to `slotMass` exactly,
+        // by construction, and it is the only quantity here that is a
+        // probability in its own right.
+        const p = list.map((_, i) => ((av[i] * raw[i]) / sum) * g.slotMass);
+        // What gets STORED is conditional on the keeper being fit, because
+        // `fixtureXp` multiplies availability back in for every player alike.
+        // Dividing it out is what makes the cap below dangerous rather than
+        // decorative: a doubtful number one's conditional share legitimately
+        // exceeds 1 — at availability 0.5 against a clear deputy it is 1.632,
+        // which multiplies back to a perfectly sensible 0.816 — and clamping it
+        // to 0.97 deleted a third of a start probability that belonged to
+        // somebody. The club's keepers then covered 0.60 of a shirt between
+        // them instead of 0.95, and the man who lost most by it was the DEPUTY,
+        // whose whole reason for being in the pool is that the incumbent is
+        // doubtful. That directly undid what the availability-weighted
+        // denominator above is for.
+        //
+        // So the cap still applies — nobody is more than `preseasonMaxPStart`
+        // certain to start a game he is fit for — but the probability it takes
+        // off is real and is pushed onto the keepers who have room for it,
+        // in proportion to their own weight, rather than thrown away. Repeated
+        // because a redistribution can push the next man over the cap in turn;
+        // it converges in at most one pass per keeper.
+        const cond = list.map((_, i) => (av[i] > 0 ? p[i] / av[i] : 0));
+        for (let pass = 0; pass < list.length; pass++) {
+          let spare = 0;
+          const room: number[] = [];
+          for (let i = 0; i < cond.length; i++) {
+            if (cond[i] > cfg.preseasonMaxPStart) {
+              spare += (cond[i] - cfg.preseasonMaxPStart) * av[i];
+              cond[i] = cfg.preseasonMaxPStart;
+            } else if (av[i] > 0) room.push(i);
+          }
+          const wsum = room.reduce((s, i) => s + av[i] * raw[i], 0);
+          if (spare <= 0 || wsum <= 0) break;
+          for (const i of room) cond[i] += (spare * raw[i]) / wsum;
+        }
         list.forEach((_, i) => {
-          shares[i][off] = clamp((raw[i] / sum) * g.slotMass, 0, cfg.preseasonMaxPStart);
+          shares[i][off] = clamp(cond[i], 0, cfg.preseasonMaxPStart);
         });
       }
       list.forEach((k, i) => gkPStart.set(k.id, shares[i]));
+    }
+  }
+
+  // The outfield equivalent of the keeper depth chart above: a club hands out
+  // ten outfield starts a match and `priorPStart` has no way to know it, so a
+  // club whose squad the league has priced cheaply is left several starters
+  // short. See `preseasonClubStartMass` and `clubStartMass`.
+  //
+  // Keepers are excluded because the block above has already allocated their
+  // one shirt by club, and running both would count the same normalisation
+  // twice.
+  const liftedPStart = new Map<number, number>();
+  if (cfg.preseasonClubStartMass > 0) {
+    const byClub = new Map<number, { id: number; pStart: number; hasEvidence: boolean }[]>();
+    for (const el of ctx.bootstrap.elements) {
+      if (el.element_type < 2 || el.element_type > 4) continue;
+      // Pre-season only, per club, on the same test the keeper block uses.
+      // Once a club has kicked off, who it actually picked is an observation
+      // and no club-level accounting improves on watching.
+      if ((st.gamesByTeam.get(el.team) ?? st.playedGws) > 0) continue;
+      const p = ctx.pastSeason?.get(el.id);
+      const list = byClub.get(el.team) ?? [];
+      list.push({
+        id: el.id,
+        pStart: preseasonMinutes(el, p, seasonStartYear, ownPct.get(el.id)).pStart,
+        hasEvidence: preseasonEvidence(el, p, seasonStartYear) != null,
+      });
+      byClub.set(el.team, list);
+    }
+    for (const list of byClub.values()) {
+      const adj = clubStartMass(list, cfg.preseasonClubStartMass, cfg.preseasonMaxPStart);
+      for (const [id, p] of adj) liftedPStart.set(id, p);
     }
   }
 
@@ -1503,6 +2214,18 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
       seasonStartYear,
       ownPct.get(el.id)
     );
+    // Only ever set for a record-less outfielder pre-season, whose `share` is
+    // exactly `pStart * minsPerStart / 90` — so recomputing it here reproduces
+    // the branch that produced it rather than patching one field of a struct
+    // and leaving the other two disagreeing with it.
+    const lifted = liftedPStart.get(el.id);
+    if (lifted != null) {
+      mm = {
+        pStart: lifted,
+        minsPerStart: mm.minsPerStart,
+        share: clamp((lifted * mm.minsPerStart) / 90, 0, 1),
+      };
+    }
     // Replaces rather than adjusts the generic minutes model: for a keeper
     // pre-season the club's pecking order IS the minutes model. A keeper who
     // starts finishes the match, barring a red card, so minutes follow starts
@@ -1516,6 +2239,13 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
       return { pStart: p, minsPerStart: 90, share: p };
     };
     mm = gkMm(0) ?? mm;
+    if (XP_DEBUG.minutes) {
+      XP_DEBUG.minutes.set(el.id, {
+        ...mm,
+        preseason,
+        hasEvidence: preseasonEvidence(el, past, seasonStartYear) != null,
+      });
+    }
     // Real-world anchors used while our own current-season data is thin:
     //  (a) FPL's own expected points (ep_next) — an independent projection.
     //  (b) Last season's per-game output — who actually played and delivered.

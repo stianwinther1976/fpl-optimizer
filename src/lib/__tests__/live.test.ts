@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { projectAutoSubs, provisionalBonus } from "../live";
-import { availabilityAt } from "../xp";
+import { availabilityAt, XP_CONFIG } from "../xp";
 import { makeElement } from "./mockdata";
 import type { Bootstrap, Element, EventLive, Fixture, Pick } from "../types";
 
@@ -207,10 +207,91 @@ describe("provisionalBonus", () => {
 });
 
 describe("availabilityAt", () => {
-  it("suspension zeroes only the next GW, not the horizon", () => {
+  it("suspension zeroes the next GW and recovers over the horizon", () => {
     const el = makeElement({ id: 1, status: "s", chance_of_playing_next_round: 0 });
     expect(availabilityAt(el, 0)).toBe(0);
-    expect(availabilityAt(el, 1)).toBeGreaterThanOrEqual(0.9);
+    // Rises, but not to near-certainty in one gameweek: ~1 ban in 3 among
+    // established starters runs beyond a single match.
+    const a1 = availabilityAt(el, 1);
+    expect(a1).toBeGreaterThan(0.4);
+    expect(a1).toBeLessThan(0.8);
+    expect(availabilityAt(el, 3)).toBeGreaterThan(a1);
+  });
+
+  it("does not treat a multi-match ban as if it were over next week", () => {
+    // The shipped rule was `Math.max(a0, 0.9)` for every offset > 0, which
+    // asserts a one-match ban with 90% confidence at every horizon. Measured
+    // over 2022-23..2025-26 (n=96 established starters sent off), 32% miss
+    // more than one round, so offset 1 must be well below 0.9.
+    const el = makeElement({ id: 1, status: "s", chance_of_playing_next_round: 0 });
+    expect(availabilityAt(el, 1)).toBeLessThan(0.8);
+  });
+
+  it("reads a stated ban end date out of the news", () => {
+    // FPL writes "Suspended until 17 Jan", not "Expected back 17 Jan", so a
+    // regex anchored only on the injury phrasing sees no date at all.
+    const el = makeElement({
+      id: 1, status: "s", chance_of_playing_next_round: 0,
+      news: "Suspended until 17 Jan",
+    });
+    const before = Date.UTC(2023, 0, 10);
+    const after = Date.UTC(2023, 0, 24);
+    expect(availabilityAt(el, 1, before)).toBe(0);
+    // A ban is a legal absence, not a fitness one: once it expires he is
+    // match-fit immediately and must NOT be put on the injury return ramp.
+    expect(availabilityAt(el, 1, after)).toBe(1);
+  });
+
+  it("does not project an undated injury back to near-full fitness", () => {
+    // "Knee injury - Unknown return date" carries no date, so the decay curve
+    // is all that runs. Asymptoting to 1 put such a player at 0.87 four
+    // gameweeks out — the exact failure newsReturnTime exists to prevent.
+    const el = makeElement({
+      id: 1, status: "i", chance_of_playing_next_round: 0,
+      news: "Knee injury - Unknown return date",
+    });
+    const t = Date.UTC(2024, 9, 5);
+    expect(availabilityAt(el, 4, t)).toBeLessThan(0.7);
+    // The second bar here used to read `< 0.8`, which asserted nothing at all:
+    // this path asymptotes to `recoveryCeiling`, and that is 0.75, so no offset
+    // can ever reach 0.8 whatever the decay does. Deleting the entire ramp and
+    // returning the ceiling flat would have passed it. What is worth pinning is
+    // the SHAPE — a curve that climbs monotonically and is still short of the
+    // ceiling eight gameweeks out — so the numbers are pinned directly.
+    expect(availabilityAt(el, 4, t)).toBeCloseTo(0.6528, 4);
+    expect(availabilityAt(el, 8, t)).toBeCloseTo(0.7374, 4);
+    expect(availabilityAt(el, 8, t)).toBeLessThan(XP_CONFIG.recoveryCeiling);
+    expect(availabilityAt(el, 8, t)).toBeGreaterThan(availabilityAt(el, 4, t));
+  });
+
+  it("brings a dated returnee back on a ramp, not a switch", () => {
+    // `returnRampStart` and `returnRampDays` were entirely unpinned: every test
+    // that touched this path asserted an inequality both settings satisfied, so
+    // 0.35/21 could have been 0.9/3 — a switch — and the suite stayed green.
+    // The claim they encode is that a player named in the squad for the first
+    // match after an injury is not yet trusted with 90 minutes, and that the
+    // trust returns over about three weeks. Both halves are asserted here.
+    const el = makeElement({
+      id: 1, status: "i", chance_of_playing_next_round: 0,
+      news: "Hamstring injury - Expected back 17 Jan",
+    });
+    const on = (d: number) => availabilityAt(el, 1, Date.UTC(2023, 0, d));
+    expect(on(10)).toBe(0);
+    // The day he is due back is the START of the ramp, not the end of it.
+    expect(on(17)).toBeCloseTo(XP_CONFIG.returnRampStart, 10);
+    expect(on(17)).toBeCloseTo(0.35, 10);
+    // Linear from there. A third of the way through: 0.35 + 0.65 * 7/21.
+    expect(on(24)).toBeCloseTo(0.5667, 4);
+    expect(on(31)).toBeCloseTo(0.7833, 4);
+    // And full only once the whole ramp has run — 17 Jan + 21 days.
+    expect(on(37)).toBeLessThan(1);
+    expect(on(38)).toBe(1);
+  });
+
+  it("never drags a mildly doubtful player down to the recovery ceiling", () => {
+    // The ceiling is a target the deficit closes toward, not a clamp.
+    const el = makeElement({ id: 1, status: "d", chance_of_playing_next_round: 90 });
+    expect(availabilityAt(el, 3)).toBeGreaterThanOrEqual(0.9);
   });
   it("injured players recover gradually", () => {
     const el = makeElement({ id: 1, status: "i", chance_of_playing_next_round: 0 });

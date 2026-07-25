@@ -236,6 +236,17 @@ function buildStateAt(
       status: "a", // historical availability unknown — the model flies blind here
       news: "",
       chance_of_playing_next_round: null,
+      // FLAT FOR EVERY PLAYER, WHICH MAKES THIS HARNESS BLIND TO THE OWNERSHIP
+      // FAMILY. `ownershipPercentiles` drops a position whose column carries no
+      // order, so `priorPStartOwnWeight`, `priorPStartOwnGamma`,
+      // `priorPStartOwnRange` and `gkPreseason.ownWeight` are all inert in
+      // every `backtest-report-*.json` ever produced. A sweep of any of them
+      // run through this file will report "no effect" and mean "not measured".
+      // The archive does carry per-round `selected` (see `gws/gw*.csv`, which
+      // the simulator reads), so this is a gap in the harness rather than in
+      // the data; it has not been filled because the in-season backtest is not
+      // where those weights were fitted. Fix it before quoting this report on
+      // anything ownership-related.
       selected_by_percent: "0.0",
       minutes: cum.minutes,
       starts: cum.starts,
@@ -324,9 +335,11 @@ function spearman(pairs: [number, number][]): number {
 interface GwEval {
   gw: number;
   n: number;
+  nAll: number;
   mae: number;
   bias: number;
   rho: number;
+  rhoAll: number;
   top10Actual: number;
   top10Form: number;
   top10Ppg: number;
@@ -360,12 +373,38 @@ describe(`${SEASON} season backtest`, () => {
           recentStarts: useRecentStarts ? st.recentStarts : undefined,
         });
 
-        // Grade the same set the live app grades: predictions >= 1.0 pts.
+        // Two populations, and the difference between them is the whole reason
+        // `rhoAll` exists.
+        //
+        // `graded` is the set the live app grades: predictions >= 1.0 pts. That
+        // is the right population for mae, bias, calibration and the top-10
+        // baselines, because it is the set a manager actually reads.
+        //
+        // It is the WRONG population for comparing one version of the model
+        // against another, because the threshold is applied to the model's own
+        // output, so improving the model changes who is in the sample. Measured
+        // on 2022-23: the pre-`dfa053e` model put 331.8 players per gameweek
+        // over 1.0 xP and scored rho 0.4346; the model that fixed the cameo bug
+        // puts 261.7 over the line and scores 0.2784. That reads as a 0.15
+        // regression and is the opposite of one. On the FIXED population below
+        // — every player with a fixture row, 677.3 per gameweek, chosen without
+        // consulting the model — the same two versions score 0.1597 and 0.6244.
+        // The old model was handing >= 1.0 xP to a crowd of cameo players it had
+        // no business rating, and those wrong-but-low predictions sat at the
+        // bottom of both rank vectors and manufactured agreement. Removing them
+        // removed the free correlation along with the error.
+        //
+        // So: `rho` is reported, and is honest about the set the app shows, but
+        // it is NOT comparable across model versions and must never be used as
+        // a regression bar. `rhoAll` is.
         const graded: { id: number; pred: number; act: number; pos: number }[] = [];
+        const all: [number, number][] = [];
         for (const [id, p] of xp) {
-          if (!Number.isFinite(p.next) || p.next < 1.0) continue;
+          if (!Number.isFinite(p.next)) continue;
           if (season.meta.get(id)!.element_type > 4) continue; // skip managers
           if (!st.actual.has(id)) continue; // no fixture rows that GW
+          all.push([p.next, st.actual.get(id)!]);
+          if (p.next < 1.0) continue;
           graded.push({
             id,
             pred: p.next,
@@ -386,6 +425,7 @@ describe(`${SEASON} season backtest`, () => {
             ? playedSet.reduce((s, e) => s + e.pred, 0) / playedSet.reduce((s, e) => s + e.act, 0) - 1
             : 0;
         const rho = spearman(graded.map((e) => [e.pred, e.act]));
+        const rhoAll = spearman(all);
 
         const topByMap = (m: Map<number, number>) =>
           graded
@@ -412,9 +452,11 @@ describe(`${SEASON} season backtest`, () => {
         evals.push({
           gw: g,
           n: graded.length,
+          nAll: all.length,
           mae,
           bias: sumA > 0 ? sumP / sumA - 1 : 0,
           rho,
+          rhoAll,
           top10Actual,
           top10Form: topByMap(st.form),
           top10Ppg: topByMap(st.ppg),
@@ -447,6 +489,8 @@ describe(`${SEASON} season backtest`, () => {
       return {
         label,
         gws: evals.length,
+        n: avg(evals.map((e) => e.n)),
+        nAll: avg(evals.map((e) => e.nAll)),
         mae: avg(evals.map((e) => e.mae)),
         maeEarly: early.length ? avg(early.map((e) => e.mae)) : NaN,
         maeLate: avg(late.map((e) => e.mae)),
@@ -454,6 +498,7 @@ describe(`${SEASON} season backtest`, () => {
         biasLate: avg(late.map((e) => e.bias)),
         fitBias: avg(evals.map((e) => e.fitBias)),
         rho: avg(evals.map((e) => e.rho)),
+        rhoAll: avg(evals.map((e) => e.rhoAll)),
         top10: avg(evals.map((e) => e.top10Actual)),
         top10Form: avg(evals.map((e) => e.top10Form)),
         top10Ppg: avg(evals.map((e) => e.top10Ppg)),
@@ -478,9 +523,11 @@ describe(`${SEASON} season backtest`, () => {
       perGw: full.evals.map((e) => ({
         gw: e.gw,
         n: e.n,
+        nAll: e.nAll,
         mae: +e.mae.toFixed(3),
         bias: +e.bias.toFixed(3),
         rho: +e.rho.toFixed(3),
+        rhoAll: +e.rhoAll.toFixed(3),
       })),
     };
     fs.writeFileSync(
@@ -494,7 +541,32 @@ describe(`${SEASON} season backtest`, () => {
     expect(report.full.top10).toBeGreaterThan(report.full.top10Form);
     expect(report.full.top10).toBeGreaterThan(report.full.top10Ppg);
     expect(report.full.cap).toBeGreaterThan(report.full.capForm);
-    expect(report.full.rho).toBeGreaterThan(0.4);
+    // The ranking bar is on `rhoAll`, NOT on `rho`. `rho` is measured on the
+    // set the model itself selected (pred >= 1.0), so it is not comparable
+    // between two versions of the model and it moved the WRONG WAY when the
+    // cameo bug was fixed. Measured, current model against the model at
+    // `228626e`, on all four archived seasons:
+    //
+    //            rho (self-selected)      rhoAll (fixed population)
+    //   2022-23  0.4346 -> 0.2784         0.1597 -> 0.6244
+    //   2023-24  0.5396 -> 0.4132         0.5421 -> 0.6522
+    //   2024-25  0.5669 -> 0.4193         0.5711 -> 0.6711
+    //   2025-26  0.5633 -> 0.3944         0.5822 -> 0.6870
+    //
+    // `rho` says the model got worse in all four seasons. `rhoAll` says it got
+    // better in all four. `rhoAll` is the one ranking a population that was
+    // chosen without asking the model, so `rhoAll` is the one that means
+    // something. The old 0.4 bar was set against `rho` values produced before
+    // the cameo fix, and it was a bar that a genuine improvement could not
+    // clear.
+    //
+    // 0.55 sits below the worst of the four (0.6244) with room for ordinary
+    // season-to-season movement, and above every number the pre-fix model
+    // managed.
+    expect(report.full.rhoAll).toBeGreaterThan(0.55);
+    // Kept as a floor only, and deliberately loose: a large drop here still
+    // means something changed in what the app shows, but a small one does not.
+    expect(report.full.rho).toBeGreaterThan(0.25);
     expect(Math.abs(report.full.biasLate)).toBeLessThan(0.2);
   });
 });
