@@ -480,4 +480,42 @@ describe("buildLaunchSquad (pre-season)", () => {
     const leagueAvg = b.elements.reduce((s, e) => s + e.now_cost, 0) / b.elements.length;
     expect(avgPrice).toBeGreaterThan(leagueAvg);
   });
+
+  it("spends the budget instead of banking it", () => {
+    // The downgrade loop in `buildSquadWithinBudget` stops the moment the squad
+    // is affordable, so before the reinvestment pass was added it handed back
+    // launch squads with money idle — £4.0m in the 2023-24 archive, £1.0m in
+    // 2024-25. At a launch deadline that money buys nothing: there is no later
+    // gameweek to save it for, so it is points thrown away.
+    //
+    // The bar is £1.0m rather than £0.0m because a squad genuinely can be
+    // unable to spend the last few hundred thousand — every upgrade inside the
+    // remaining bank may be blocked by the three-per-club cap or simply not
+    // exist in the price grid. Measured by deleting the reinvestment pass and
+    // re-running: £97.3m without it, comfortably under the bar, so this is a
+    // mutation-tested assertion rather than one that happens to pass.
+    const b = makeMockBootstrap();
+    b.events.forEach((e) => { e.finished = false; e.is_current = false; e.is_next = e.id === 1; });
+    b.elements.forEach((e) => {
+      e.minutes = 0; e.starts = 0; e.total_points = 0;
+      e.form = "0.0"; e.points_per_game = "0.0";
+      e.expected_goals = "0.0"; e.expected_assists = "0.0";
+    });
+    const fx = makeMockFixtures().map((f) => ({ ...f, event: (f.event ?? 11) - 10, finished: false }));
+    const launch = buildLaunchSquad(b, fx, 1, 5);
+    expect(launch.cost).toBeLessThanOrEqual(1000);
+    expect(launch.cost).toBeGreaterThanOrEqual(990);
+    // And it is still legal after the reinvestment pass — that loop mutates the
+    // squad and the club counter together, which is exactly where an off-by-one
+    // would let a fourth player from one club in.
+    //
+    // Honesty about what this line does and does not do: relaxing the club test
+    // in that loop from `<` to `<=` does NOT fail here, because this mock's
+    // prices never make a fourth player from one club the best upgrade. It does
+    // fail "dream team is legal and at least as good as current squad" further
+    // up, so the mutant is caught by the suite — just not by this assertion.
+    expect(
+      validateSquad(launch.squad.map((e) => ({ id: e.id, elementType: e.element_type, teamId: e.team })))
+    ).toEqual([]);
+  });
 });

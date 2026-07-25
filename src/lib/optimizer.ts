@@ -396,6 +396,63 @@ function totalValue(owned: OwnedPlayer[], bank: number): number {
   return owned.reduce((s, o) => s + o.sellPrice, 0) + bank;
 }
 
+/*
+ * REJECTED, and recorded here because it is the first idea anyone has about
+ * this function and it is measurably wrong.
+ *
+ * An FPL squad is scored by its starting eleven. The other four play only
+ * through autosubs. So the downgrade loop below, which judges every swap by
+ * `scoreOf(out) - scoreOf(in)`, is valuing the fifteenth man exactly as highly
+ * as the first, and ought to be judging swaps by the change in BEST-XI score
+ * instead — with the bench discounted by roughly its autosub value.
+ *
+ * That was implemented and measured. Under PERFECT FORESIGHT it is strictly
+ * better, which is what settles the question of whether it is a better
+ * optimiser: feeding actual end-of-season points in as the score and comparing
+ * the resulting squads' real season totals,
+ *
+ *              2022-23  2023-24  2024-25  2025-26   total
+ *   sum-of-15     3098     3122     3106     3089   12415
+ *   best-XI       3166     3136     3123     3089   12514
+ *
+ * better or equal in all four, +99 overall, and spending the whole £100.0m
+ * every season where the old one left up to £4.0m idle.
+ *
+ * And it loses points on the live model. Managed 38-gameweek totals over the
+ * same four seasons fall 8729 -> 8516, set-and-forget 6483 -> 6373, and no
+ * value of the bench discount rescues it:
+ *
+ *   bench weight   0.15   0.30   0.50   0.70   0.85    (sum-of-15 = 8729)
+ *   managed        8516   8601   8441   8634   8514
+ *   set-and-forget 6373   6088   6100   6205   6268
+ *
+ * The two facts together say something worth knowing about this whole app. The
+ * optimiser is not the binding constraint; the projections are. A sharper
+ * optimiser concentrates the budget on the players the model rates highest,
+ * and pre-season those are exactly the players whose ratings carry the most
+ * estimation error — a high projection is high partly because it is wrong.
+ * Sharpening the search without sharpening the estimate just exploits the
+ * model's own mistakes more efficiently. The old loop's habit of protecting
+ * bench quality and leaving money unspent was acting as accidental
+ * regularisation.
+ *
+ * So this is worth revisiting only after the projections improve, and the
+ * oracle table above is the check that will say whether it has become worth it.
+ * What was kept from the attempt is the reinvestment pass at the end, which is
+ * unambiguous — leaving £4.0m in the bank at a launch deadline buys nothing —
+ * and which measured +76 managed and +13 set-and-forget, worse in no season.
+ *
+ * The oracle row is a constant, not a metric that needs a permanent harness:
+ * it depends only on the archived prices and the archived actual points, so no
+ * model change can move it. That is why the probe that produced it is not
+ * checked in. To regenerate it, temporarily export this function, build an xP
+ * map whose `next`/`total`/`totalDiscounted` are each player's real end-of-
+ * season total, call it with `budget = 1000`, and score the resulting fifteen
+ * through `actualGwPoints` for all 38 gameweeks. It also doubles as the
+ * denominator for "fraction of achievable optimum": the live managed total of
+ * 8805 against a 12415 ceiling is 71%, and the gap is projection error, not
+ * search error.
+ */
 /** Greedy + repair: best 15-man squad within a budget.
  * `scoreOf` ranks players — defaults to discounted horizon xP (permanent moves
  * like Wildcard); pass a single-GW scorer for Free Hit. */
@@ -479,6 +536,40 @@ function buildSquadWithinBudget(
     clubCount.set(out.team, (clubCount.get(out.team) ?? 1) - 1);
     clubCount.set(bestSwap.inEl.team, (clubCount.get(bestSwap.inEl.team) ?? 0) + 1);
     squad[bestSwap.outIdx] = bestSwap.inEl;
+    cost = squad.reduce((s, e) => s + e.now_cost, 0);
+  }
+
+  // Spend what is left.
+  //
+  // The loop above stops the instant the squad is affordable. It has a reason
+  // to stop overspending and no reason at all to spend, so it routinely handed
+  // back a squad with several million sitting in the bank: £4.0m unspent in
+  // 2023-24, £1.0m in 2024-25, £0.5m in 2022-23. In a launch squad that money
+  // buys nothing later — there is no later, the season starts — so it is simply
+  // thrown away. This walks back up, taking the single best affordable upgrade
+  // each time until none is left.
+  guard = 60;
+  for (;;) {
+    if (guard-- <= 0) break;
+    let bestUp: { outIdx: number; inEl: Element; gain: number } | null = null;
+    for (let i = 0; i < squad.length; i++) {
+      const out = squad[i];
+      if (locked.has(out.id)) continue;
+      for (const inEl of pools.get(out.element_type)!) {
+        if (squad.some((s) => s.id === inEl.id)) continue;
+        if (cost - out.now_cost + inEl.now_cost > budget) continue;
+        const clubOk =
+          (clubCount.get(inEl.team) ?? 0) + (inEl.team === out.team ? -1 : 0) < MAX_PER_CLUB;
+        if (!clubOk) continue;
+        const gain = scoreOf(inEl.id) - scoreOf(out.id);
+        if (gain > 1e-9 && (!bestUp || gain > bestUp.gain)) bestUp = { outIdx: i, inEl, gain };
+      }
+    }
+    if (!bestUp) break;
+    const out = squad[bestUp.outIdx];
+    clubCount.set(out.team, (clubCount.get(out.team) ?? 1) - 1);
+    clubCount.set(bestUp.inEl.team, (clubCount.get(bestUp.inEl.team) ?? 0) + 1);
+    squad[bestUp.outIdx] = bestUp.inEl;
     cost = squad.reduce((s, e) => s + e.now_cost, 0);
   }
   return { squad, cost };
