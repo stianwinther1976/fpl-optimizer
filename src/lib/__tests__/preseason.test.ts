@@ -345,3 +345,89 @@ describe("price/model blend is continuous in the size of the record", () => {
     expect(xp.get(1)!.next).toBeGreaterThan(xp.get(2)!.next * 1.01);
   });
 });
+
+describe("pre-season goalkeeper depth chart", () => {
+  // The keeper allocator is the one place the model assigns a shirt rather than
+  // scoring a player, and it runs ONLY pre-season, so nothing in the season-long
+  // harness exercises it against a multi-season record. That is not incidental:
+  // the archive gives every player exactly one previous season, so `minutes`,
+  // `lastSeason.minutes` and the age-weighted total are all the same number
+  // there, and the whole class of bug below is invisible to it. These tests are
+  // the only cover it has.
+
+  function keepers(past: Map<number, PastSeasonStats>) {
+    // Two keepers at the same club, so the allocator has a choice to make.
+    const a = el({ id: 1, web_name: "GK A", team: 1, element_type: 1, now_cost: 50, ep_next: "3.0" });
+    const b = el({ id: 2, web_name: "GK B", team: 1, element_type: 1, now_cost: 50, ep_next: "3.0" });
+    const xp = project([a, b], past);
+    return [xp.get(1)!.next, xp.get(2)!.next] as const;
+  }
+
+  it("gives the shirt to last season's keeper, not one deposed two years ago", () => {
+    // `PastSeasonStats.minutes` is the most recent season the player ACTUALLY
+    // PLAYED, because the per-90 rates need a season with pitch time in it. For
+    // a deposed keeper that is two years old, and reading it here handed him the
+    // gloves over the man who kept goal all last season.
+    const past = new Map<number, PastSeasonStats>([
+      // Deposed: first choice in 2024/25, did not play in 2025/26.
+      [1, { points: 130, minutes: 3060, starts: 34, seasonName: "2024/25", plSeasons: 2,
+            lastSeason: { seasonName: "2025/26", minutes: 0, starts: 0 },
+            seasons: [
+              { seasonName: "2024/25", minutes: 3060, starts: 34 },
+              { seasonName: "2025/26", minutes: 0, starts: 0 },
+            ] }],
+      // Incumbent: took the shirt last season and kept it.
+      [2, { points: 140, minutes: 3420, starts: 38, seasonName: "2025/26", plSeasons: 2,
+            lastSeason: { seasonName: "2025/26", minutes: 3420, starts: 38 },
+            seasons: [
+              { seasonName: "2024/25", minutes: 360, starts: 4 },
+              { seasonName: "2025/26", minutes: 3420, starts: 38 },
+            ] }],
+    ]);
+    const [deposed, incumbent] = keepers(past);
+    // 1.243x measured. Modest, because `gkPreseason` deliberately leans on
+    // price and both keepers here cost £5.0m — the record only has
+    // `minutesWeight: 0.6` to move with. The bar is what matters: before the
+    // fix the ratio was 0.993, i.e. the deposed keeper was very slightly
+    // AHEAD.
+    expect(incumbent).toBeGreaterThan(deposed * 1.15);
+  });
+
+  it("does not throw away an established keeper who missed one season injured", () => {
+    // The reason this reads age-weighted evidence rather than simply
+    // `lastSeason.minutes`: a keeper with three seasons as a number one who lost
+    // the most recent to injury is not the same as a career deputy, and a
+    // last-season-only rule cannot tell them apart.
+    const past = new Map<number, PastSeasonStats>([
+      // Three seasons nailed, then a blank year.
+      [1, { points: 140, minutes: 3420, starts: 38, seasonName: "2024/25", plSeasons: 4,
+            lastSeason: { seasonName: "2025/26", minutes: 0, starts: 0 },
+            seasons: [
+              { seasonName: "2022/23", minutes: 3420, starts: 38 },
+              { seasonName: "2023/24", minutes: 3420, starts: 38 },
+              { seasonName: "2024/25", minutes: 3420, starts: 38 },
+              { seasonName: "2025/26", minutes: 0, starts: 0 },
+            ] }],
+      // Career deputy who covered those same blank weeks and nothing else.
+      [2, { points: 30, minutes: 540, starts: 6, seasonName: "2025/26", plSeasons: 4,
+            lastSeason: { seasonName: "2025/26", minutes: 540, starts: 6 },
+            seasons: [
+              { seasonName: "2022/23", minutes: 0, starts: 0 },
+              { seasonName: "2023/24", minutes: 0, starts: 0 },
+              { seasonName: "2024/25", minutes: 0, starts: 0 },
+              { seasonName: "2025/26", minutes: 540, starts: 6 },
+            ] }],
+    ]);
+    const [established, deputy] = keepers(past);
+    // The three candidate sources, measured on this pair and on the deposed
+    // pair above (incumbent-over-deposed / established-over-deputy):
+    //
+    //   PastSeasonStats.minutes   0.993   2.456    <- the bug: deposed wins
+    //   lastSeason.minutes        3.987   0.652    <- fixes one, breaks this
+    //   age-weighted evidence     1.243   2.456    <- both right
+    //
+    // The middle row is why this reads `preseasonEvidence` rather than the
+    // obvious one-token change.
+    expect(established).toBeGreaterThan(deputy * 2);
+  });
+});

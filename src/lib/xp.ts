@@ -119,7 +119,43 @@ export const XP_CONFIG = {
   priorSaves90: 3.0,
   typicalPriceM: { 1: 4.8, 2: 5.0, 3: 6.5, 4: 6.5 } as Record<number, number>,
   // Minutes model
-  subProb: 0.15, // chance a non-starter comes off the bench
+  /**
+   * Chance a non-starter appears anyway.
+   *
+   * Applies to goalkeepers too, and a change to stop that was MEASURED AND
+   * REJECTED — worth recording, because the argument for it is a good one and
+   * somebody will make it again. It goes: an outfield substitution is routine,
+   * whereas a substitute keeper comes on only if the starter is hurt mid-match
+   * or sent off, which is on the order of 1-2% of fixtures rather than 15%, so
+   * a flat 0.15 overstates a third-choice keeper's appearance odds by about
+   * 8.5x. Every clause of that is true.
+   *
+   * It is nonetheless the wrong change, because the number is not doing the job
+   * its name says. Sweeping a keeper-specific value against keeper Spearman on
+   * the three archived seasons that have prior history:
+   *
+   *   gkSubProb  0.015  0.05   0.08   0.10   0.15   0.20   0.25
+   *   2023-24    0.505  0.506  0.507  0.510  0.512  0.513  0.515
+   *   2024-25    0.668  0.668  0.670  0.672  0.671  0.671  0.672
+   *   2025-26    0.622  0.624  0.624  0.625  0.626  0.631  0.632
+   *
+   * Monotonically the wrong way. The reason is that a deputy keeper really does
+   * play several league games in a normal season — the number one picks up a
+   * knock in November and misses six weeks — and `pStart` cannot express that,
+   * because it is computed once from the pre-season depth chart and does not
+   * move. So `subProb` has been quietly carrying the probability of a
+   * mid-season role change, which is a real effect of roughly the right size,
+   * and removing it removes the only representation of that effect the model
+   * has.
+   *
+   * The right fix is therefore not to this constant. It is a mid-season
+   * role-change term for keepers, at which point this can drop to 0.015 and
+   * mean what it says. Until that exists, 0.15 is load-bearing. Note also that
+   * the sweep keeps improving above 0.15 and it is NOT being raised: the metric
+   * is a ranking correlation and cannot see that inflating every backup
+   * keeper's xP pushes the drafter toward paying for a bench keeper.
+   */
+  subProb: 0.15,
   recentStartsWeight: 0.65, // last ~5 games vs season starts share
   // --- Pre-season minutes (no game has been played yet) ---
   // Last season's STARTS out of 38, shrunk toward a price/position prior worth
@@ -1117,7 +1153,24 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
       // Pre-season only. Once real games exist, who the club actually picked is
       // a direct observation, and no inference from price beats watching.
       if (teamGames > 0) continue;
-      const mins = ctx.pastSeason?.get(el.id)?.minutes ?? 0;
+      // `PastSeasonStats.minutes` is NOT last season's minutes. It is built
+      // from "the most recent season with actual pitch time", because the
+      // per-90 RATES need a season the player actually played — a year lost to
+      // injury should not erase what a striker can do. That is right for rates
+      // and exactly wrong here. A keeper who was first choice in 2023/24 and
+      // did not play a minute in 2024/25 carries `minutes: 3060` from two years
+      // ago, so this handed him the shirt over the man who actually kept goal
+      // all last season: the deposed keeper scored 2.0x too high and the
+      // incumbent 0.71x too low, which is the whole allocation inverted.
+      //
+      // `preseasonEvidence` is the function that already answers this question
+      // correctly everywhere else in the file — it walks every season on record
+      // and weights them by `preseasonSeasonDecay ^ age`, so last season
+      // dominates without a keeper's three seasons as an established number one
+      // being thrown away because he missed the most recent one to injury. A
+      // straight `lastSeason?.minutes` would fix the inversion but introduce
+      // that second error in its place.
+      const mins = preseasonEvidence(el, ctx.pastSeason?.get(el.id), seasonStartYear)?.minutes ?? 0;
       const score =
         el.now_cost / 10 + (Math.min(mins, g.minutesCap) / g.minutesCap) * g.minutesWeight;
       const list = byClub.get(el.team) ?? [];
