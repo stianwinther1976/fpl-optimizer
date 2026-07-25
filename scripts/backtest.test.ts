@@ -340,6 +340,10 @@ interface GwEval {
   bias: number;
   rho: number;
   rhoAll: number;
+  rhoPlayed: number;
+  rhoAllForm: number;
+  rhoPlayedForm: number;
+  nPlayed: number;
   top10Actual: number;
   top10Form: number;
   top10Ppg: number;
@@ -390,20 +394,40 @@ describe(`${SEASON} season backtest`, () => {
         // — every player with a fixture row, 677.3 per gameweek, chosen without
         // consulting the model — the same two versions score 0.1597 and 0.6244.
         // The old model was handing >= 1.0 xP to a crowd of cameo players it had
-        // no business rating, and those wrong-but-low predictions sat at the
-        // bottom of both rank vectors and manufactured agreement. Removing them
-        // removed the free correlation along with the error.
+        // no business rating: 124-149 extra players per gameweek, mean
+        // cumulative minutes 23-36 against a population mean of 455-501, 82-86%
+        // of them on zero minutes that week. Those wrong-but-low predictions sat
+        // at percentile 18-32 by prediction and 27-35 by actual — bottom of both
+        // rank vectors — and manufactured agreement. Removing them removed the
+        // free correlation along with the error.
+        //
+        // One correction to that story, because an earlier version of this
+        // comment applied it to the 0.1597 too and it does not fit there. 0.1597
+        // is not a level, it is a mean over a bimodal series: twelve of the
+        // thirty-seven 2022-23 gameweeks are NEGATIVE for the old model, and the
+        // mean over the other twenty-five is 0.4250, in line with the other
+        // seasons. Across GW5-17 the old model's correlation against cumulative
+        // minutes runs -0.41 to -0.66 — at GW12 its mean prediction for players
+        // with 700+ minutes was 0.193 and for players with ZERO minutes 0.861,
+        // a four-and-a-half-fold inversion — and its count over 1.0 xP collapses
+        // 509 -> 31 and snaps back to 573 by GW19. That is a severe localised
+        // defect in the one season with no prior season in the archive, not the
+        // same phenomenon as the threshold drift. The threshold argument stands
+        // on the other three seasons and on the fixed-population table at the
+        // assertions.
         //
         // So: `rho` is reported, and is honest about the set the app shows, but
         // it is NOT comparable across model versions and must never be used as
         // a regression bar. `rhoAll` is.
         const graded: { id: number; pred: number; act: number; pos: number }[] = [];
         const all: [number, number][] = [];
+        const allIds: number[] = [];
         for (const [id, p] of xp) {
           if (!Number.isFinite(p.next)) continue;
           if (season.meta.get(id)!.element_type > 4) continue; // skip managers
           if (!st.actual.has(id)) continue; // no fixture rows that GW
           all.push([p.next, st.actual.get(id)!]);
+          allIds.push(id);
           if (p.next < 1.0) continue;
           graded.push({
             id,
@@ -426,6 +450,24 @@ describe(`${SEASON} season backtest`, () => {
             : 0;
         const rho = spearman(graded.map((e) => [e.pred, e.act]));
         const rhoAll = spearman(all);
+        // Same fixed population, but only the players who were on the pitch.
+        // See the long note at the assertions: `rhoAll` turns out to be very
+        // close to a did-he-appear detector, so this is the version that asks
+        // whether the model can rank POINTS among players it already knows are
+        // playing.
+        const playedIdx = allIds
+          .map((id, i) => i)
+          .filter((i) => (st.minutesAt.get(allIds[i]) ?? 0) > 0);
+        const rhoPlayed = playedIdx.length >= 30 ? spearman(playedIdx.map((i) => all[i])) : NaN;
+        // Two baselines on those same two populations. A projection that cannot
+        // out-rank the mean of a player's last four scores is not adding
+        // anything, and the harness has to be able to see that.
+        const fm = (i: number) => st.form.get(allIds[i]) ?? 0;
+        const rhoAllForm = spearman(all.map((pair, i) => [fm(i), pair[1]]));
+        const rhoPlayedForm =
+          playedIdx.length >= 30
+            ? spearman(playedIdx.map((i) => [fm(i), all[i][1]] as [number, number]))
+            : NaN;
 
         const topByMap = (m: Map<number, number>) =>
           graded
@@ -457,6 +499,10 @@ describe(`${SEASON} season backtest`, () => {
           bias: sumA > 0 ? sumP / sumA - 1 : 0,
           rho,
           rhoAll,
+          rhoPlayed,
+          rhoAllForm,
+          rhoPlayedForm,
+          nPlayed: playedIdx.length,
           top10Actual,
           top10Form: topByMap(st.form),
           top10Ppg: topByMap(st.ppg),
@@ -499,6 +545,10 @@ describe(`${SEASON} season backtest`, () => {
         fitBias: avg(evals.map((e) => e.fitBias)),
         rho: avg(evals.map((e) => e.rho)),
         rhoAll: avg(evals.map((e) => e.rhoAll)),
+        rhoPlayed: avg(evals.map((e) => e.rhoPlayed)),
+        rhoAllForm: avg(evals.map((e) => e.rhoAllForm)),
+        rhoPlayedForm: avg(evals.map((e) => e.rhoPlayedForm)),
+        nPlayed: avg(evals.map((e) => e.nPlayed)),
         top10: avg(evals.map((e) => e.top10Actual)),
         top10Form: avg(evals.map((e) => e.top10Form)),
         top10Ppg: avg(evals.map((e) => e.top10Ppg)),
@@ -528,6 +578,7 @@ describe(`${SEASON} season backtest`, () => {
         bias: +e.bias.toFixed(3),
         rho: +e.rho.toFixed(3),
         rhoAll: +e.rhoAll.toFixed(3),
+        rhoPlayed: +e.rhoPlayed.toFixed(3),
       })),
     };
     fs.writeFileSync(
@@ -563,9 +614,59 @@ describe(`${SEASON} season backtest`, () => {
     // 0.55 sits below the worst of the four (0.6244) with room for ordinary
     // season-to-season movement, and above every number the pre-fix model
     // managed.
+    //
+    // But `rhoAll` is a WEAK bar and this comment exists so nobody mistakes it
+    // for a strong one. An adversarial review measured what it is actually
+    // sensitive to, and the answer is mostly "did this player appear at all":
+    // replacing the actual points vector with a binary played/did-not-play flag
+    // — deleting every scrap of information about who SCORED — raises the
+    // coefficient in all four seasons (+0.018 to +0.030). Ranking players by
+    // cumulative minutes played so far this season, with `src/lib/xp.ts`
+    // deleted entirely, scores 0.6464/0.6376/0.6495/0.6880 and clears 0.55 in
+    // every season. Turning the minutes model off completely — every player
+    // treated as certain to play ninety minutes — still leaves 0.65-0.67. The
+    // bar catches gross vandalism only; the sweep says roughly 35-40% of the
+    // ranking has to be replaced with noise before it fires.
     expect(report.full.rhoAll).toBeGreaterThan(0.55);
-    // Kept as a floor only, and deliberately loose: a large drop here still
-    // means something changed in what the app shows, but a small one does not.
+
+    // These are the bars that bite.
+    //
+    // `rhoPlayed` is the same model-independent population restricted to the
+    // players who were on the pitch, so it asks the question the app is
+    // actually for: among people who are playing, can the model rank points?
+    // And it is graded against a baseline rather than a constant, because a
+    // constant cannot tell "the model is good" from "the season was easy".
+    // The baseline is the mean of a player's last four scores, which is one
+    // line of code and is available to the harness at prediction time.
+    //
+    //            model rhoPlayed   form baseline    model rhoAll   form rhoAll
+    //   2022-23      0.3018           0.2892           0.6244        0.6902
+    //   2023-24      0.3603           0.2848           0.6522        0.6880
+    //   2024-25      0.3765           0.3012           0.6711        0.7000
+    //   2025-26      0.3432           0.2710           0.6870        0.7255
+    //
+    // Read that honestly: the model beats naive form at ranking points among
+    // players who play, in all four seasons, and it LOSES to naive form on the
+    // full population in all four seasons. Both are true and they are not in
+    // tension — form is an excellent did-he-appear detector, because a player
+    // with four recent scores is a player who has been playing, and that is the
+    // axis `rhoAll` mostly measures. The appearance side is where this model is
+    // weakest, and that is written here rather than hidden because the number
+    // above it looks reassuring and is not.
+    //
+    // What `rhoPlayed` deliberately CANNOT see: anything about who plays. It
+    // conditions on the pitch, so the minutes model is graded out of it. Two
+    // mutations raise it — subProb 0.15 -> 0.9 in all four seasons, and
+    // swapping modelWeight/formWeight from 0.8/0.2 to 0.2/0.8 in 2022-23 — and
+    // neither is an improvement to the app. Do not read a rise here as a reason
+    // to change a minutes constant; that is what the simulator and the
+    // `top10`/`cap` baselines above are for.
+    expect(report.full.rhoPlayed).toBeGreaterThan(report.full.rhoPlayedForm);
+    expect(report.full.rhoPlayed).toBeGreaterThan(0.28);
+    // `rho` is the self-selected set, kept as a loose floor. It cannot compare
+    // versions, but it does move when something breaks: reverting the
+    // recent-starts term to weight 0 puts it at 0.2464 and reddens this line,
+    // which is more than `rhoAll` managed.
     expect(report.full.rho).toBeGreaterThan(0.25);
     expect(Math.abs(report.full.biasLate)).toBeLessThan(0.2);
   });
