@@ -260,6 +260,39 @@ describe("survives FPL's summer reset of the bootstrap", () => {
     // lower than a proven scorer but nowhere near zero.
     expect(xp.get(2)!.next).toBeGreaterThan(xp.get(1)!.next * 0.5);
   });
+
+  it("keeps reading `form`, even though the reset makes it useless", () => {
+    // This one pins a decision rather than a property, so it needs its reason
+    // written down. `form` is a thirty-day rolling average, so pre-season it is
+    // "0.0" for all 700-odd players, and averaging that placeholder in with
+    // points-per-game halves the form term for everyone with a record. That
+    // looks exactly like the placeholder-as-measurement bug this file fixes
+    // twice elsewhere, and it does not cancel out — the price prior it is
+    // blended against is not halved.
+    //
+    // Both principled repairs were implemented and measured over four archived
+    // seasons and both cost points; the table is in `xp.ts` above `formScore`.
+    // The short version is that pre-season `points_per_game` is "0.0" as well,
+    // so the term falls through to last season's rate, which `xp` has already
+    // used — there is no independent signal to weight, only a duplicate that
+    // regresses harder, and the accidental halving shrinks it usefully.
+    //
+    // So the assertion is deliberately the awkward one: `form` must still reach
+    // the model. Special-casing pre-season by either route makes these two
+    // players identical and this fails.
+    const rec = (): PastSeasonStats => ({
+      points: 190, minutes: 3100, starts: 35, goals: 12, assists: 9, xg: 10.5,
+      xa: 8.1, bonus: 22, ict: 320, seasonName: "2025/26", plSeasons: 1,
+      seasons: [{ seasonName: "2025/26", minutes: 3100, starts: 35 }],
+    });
+    // Same club, so identical fixture; identical record; only `form` differs.
+    const carried = el({ id: 1, web_name: "Carried", team: 12, element_type: 3, now_cost: 70, ep_next: "3.0", form: "5.0" });
+    const wiped = el({ id: 2, web_name: "Wiped", team: 12, element_type: 3, now_cost: 70, ep_next: "3.0", form: "0.0" });
+    const past = new Map<number, PastSeasonStats>([[1, rec()], [2, rec()]]);
+    const xp = project([carried, wiped], past);
+    // Measured 1.0396. Either repair pins it at exactly 1.0000.
+    expect(xp.get(1)!.next / xp.get(2)!.next).toBeGreaterThan(1.02);
+  });
 });
 
 describe("price/model blend is continuous in the size of the record", () => {

@@ -1048,6 +1048,39 @@ function fixtureXp(
 
   // Form component: recency-weighted, fixture-adjusted (venue is already part
   // of attackMult — do not apply it twice).
+  //
+  // REJECTED, and recorded here because the objection is a good one and will be
+  // raised again. Pre-season `el.form` is "0.0" for all 700-odd players — form
+  // is a thirty-day rolling average and nothing has been played — and this file
+  // twice elsewhere documents the sin of reading a placeholder zero as a
+  // measurement. So the zero halves `formScore` for every player with a record,
+  // and it does not cancel out: `model` is blended against a price prior that
+  // is NOT halved, so the depression quietly hands the prior more weight than
+  // it was tuned to have, hardest on the players whose form term is largest.
+  //
+  // That reasoning is correct and the conclusion drawn from it was still wrong.
+  // Two corrections were implemented and measured over all four archived
+  // seasons. B used `seasonPpg` alone when no team has kicked off; C dropped
+  // the form term entirely pre-season (`model = xp`) on the grounds that there
+  // is no form signal to weight.
+  //
+  //            managed   set&forget   launch-squad pts   all    cheapR   topR
+  //   shipped    8805        6496            6315        .623    .577    .409
+  //   B          8637        6351            6226        .623    .578    .410
+  //   C          8783        6341            6171        .622    .576    .412
+  //
+  // Every ranking metric is flat to within 0.001 in both directions, which is
+  // the finding: pre-season `points_per_game` is also "0.0", so `seasonPpg`
+  // falls through to `rates.samplePpg` — last season's rate, which is already
+  // inside `xp`. The form term carries no independent information in August at
+  // any weight, and re-weighting a duplicate of a signal the model has already
+  // used cannot sharpen a ranking. What the weight does change is how far the
+  // blend leans on raw points-per-game versus the xG-driven rates, and raw
+  // points regress harder; both departures from the accidental 0.5 cost points
+  // on all three outcome measures. The halving is not a measurement error being
+  // propagated, it is shrinkage of a redundant and more-regressive term, and it
+  // happens to sit better than either principled alternative. Leaving it is the
+  // measured choice, not an oversight.
   const recent = parseFloat(el.form) || 0;
   const seasonPpg = parseFloat(el.points_per_game) || rates.samplePpg;
   const formScore = cfg.recentFormShare * recent + (1 - cfg.recentFormShare) * seasonPpg;
