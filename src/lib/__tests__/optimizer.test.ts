@@ -7,7 +7,7 @@ import {
   buildLaunchVariants,
   planHorizon,
 } from "../optimizer";
-import { MAX_FREE_TRANSFERS, validateSquad } from "../rules";
+import { MAX_FREE_TRANSFERS, VALID_FORMATIONS, validateSquad } from "../rules";
 import { projectAll } from "../xp";
 
 const bootstrap = makeMockBootstrap();
@@ -615,5 +615,89 @@ describe("buildLaunchSquad (pre-season)", () => {
       }
     }
     expect(missed).toEqual([]);
+  });
+});
+
+describe("pickBestXi picks the formation that maximises XI + captain", () => {
+  // `pickBestXi` selects the formation on the eleven's xp and only then adds the
+  // captain's doubled xp. An audit read that as an off-by-one in the objective:
+  // the number it reports is XI + captain, so a formation that scores lower on
+  // the eleven but hands the armband to a bigger player could in principle win.
+  //
+  // It cannot, because every legal formation starts the top player of every
+  // position, so the captain is formation-invariant. That is an argument about
+  // VALID_FORMATIONS, not about this function, which is exactly why it needs a
+  // test: change the formation table and the argument silently stops holding.
+  // So this pins the shipped result against a brute force over the quantity that
+  // is actually reported, on random squads rather than one hand-built case.
+  // The production table, not a copy of it. A local transcription would only
+  // ever detect that the two lists had diverged, which is a weaker and more
+  // confusing signal than checking the real thing.
+  const VALID = VALID_FORMATIONS;
+
+  /** Deterministic LCG — a seeded generator, so a failure is reproducible. */
+  const rng = (seed: number) => () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+
+  it("matches a brute-force argmax over XI+captain on 400 random squads", () => {
+    const rand = rng(20260722);
+    let checked = 0;
+    for (let trial = 0; trial < 400; trial++) {
+      // A legal 15: 2 GK, 5 DEF, 5 MID, 3 FWD, with arbitrary xp.
+      const squad: { id: number; element_type: number }[] = [];
+      const xpOfMap = new Map<number, number>();
+      let id = 1;
+      for (const [type, n] of [
+        [1, 2],
+        [2, 5],
+        [3, 5],
+        [4, 3],
+      ] as const) {
+        for (let i = 0; i < n; i++) {
+          squad.push({ id, element_type: type });
+          // Occasionally give a defender or keeper a huge score, so the top
+          // player of the squad is not always a forward or midfielder.
+          xpOfMap.set(id, rand() < 0.15 ? rand() * 20 : rand() * 6);
+          id++;
+        }
+      }
+      const xpOf = (pid: number) => xpOfMap.get(pid) ?? 0;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const got = pickBestXi(squad as any, xpOf);
+
+      // Brute force: for every formation take the top d/m/f by xp, and score
+      // the eleven PLUS its best starter again (the captain).
+      const byType = (t: number) =>
+        squad
+          .filter((p) => p.element_type === t)
+          .map((p) => xpOf(p.id))
+          .sort((a, b) => b - a);
+      const gk = byType(1);
+      const df = byType(2);
+      const md = byType(3);
+      const fw = byType(4);
+      let bruteBest = -Infinity;
+      for (const [d, m, f] of VALID) {
+        const starters = [gk[0], ...df.slice(0, d), ...md.slice(0, m), ...fw.slice(0, f)];
+        const total = starters.reduce((a, x) => a + x, 0) + Math.max(...starters);
+        if (total > bruteBest) bruteBest = total;
+      }
+      expect(got.totalXp).toBeCloseTo(bruteBest, 10);
+      checked++;
+    }
+    expect(checked).toBe(400);
+  });
+
+  it("the invariant it relies on actually holds: every formation fields each position's best", () => {
+    // The comment in pickBestXi argues the captain is formation-invariant BECAUSE
+    // every legal formation starts at least one of each position. That argument
+    // lives in VALID_FORMATIONS, so this is the assertion that owns it: legalise
+    // a shape with no forward (or no midfielder, or no defender) and this fails
+    // loudly instead of the formation choice quietly becoming a non-argmax.
+    expect(VALID_FORMATIONS.length).toBeGreaterThan(0);
+    for (const [d, m, f] of VALID_FORMATIONS) {
+      expect(d, `formation ${d}-${m}-${f} fields no defender`).toBeGreaterThanOrEqual(1);
+      expect(m, `formation ${d}-${m}-${f} fields no midfielder`).toBeGreaterThanOrEqual(1);
+      expect(f, `formation ${d}-${m}-${f} fields no forward`).toBeGreaterThanOrEqual(1);
+    }
   });
 });

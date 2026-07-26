@@ -71,6 +71,20 @@ export function pickBestXi(
   const mids = squad.filter((e) => e.element_type === 3).map(slot).sort((a, b) => b.xp - a.xp);
   const fwds = squad.filter((e) => e.element_type === 4).map(slot).sort((a, b) => b.xp - a.xp);
 
+  // The formation is chosen on the ELEVEN's xp, and the captain's doubled xp is
+  // added afterwards. That looks like it could pick the wrong formation — the
+  // reported quantity is XI + captain, so the argmax ought to be taken over
+  // XI + captain — but it cannot, and the reason is worth writing down because
+  // an audit flagged it as a bug and the "fix" would have been a no-op.
+  //
+  // Every legal formation contains at least 1 GK, 3 DEF, 2 MID and 1 FWD
+  // (see VALID_FORMATIONS). The pools below are sorted by xp descending, so the
+  // single highest-xp player of EVERY position starts in EVERY formation. The
+  // captain is therefore the same player, with the same xp, whichever formation
+  // wins — a constant added to all eight candidates, which cannot reorder them.
+  // `optimizer.test.ts` pins this against a brute-force argmax over XI+captain,
+  // so if FPL ever legalises a formation with zero forwards the guard fails
+  // rather than silently degrading.
   let best: BestXi | null = null;
   for (const [d, m, f] of VALID_FORMATIONS) {
     if (defs.length < d || mids.length < m || fwds.length < f || gks.length < 1) continue;
@@ -463,7 +477,7 @@ function totalValue(owned: OwnedPlayer[], bank: number): number {
 /** Greedy + repair: best 15-man squad within a budget.
  * `scoreOf` ranks players — defaults to discounted horizon xP (permanent moves
  * like Wildcard); pass a single-GW scorer for Free Hit. */
-function buildSquadWithinBudget(
+export function buildSquadWithinBudget(
   elements: Element[],
   xp: Map<number, PlayerXp>,
   budget: number,
