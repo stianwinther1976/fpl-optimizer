@@ -48,7 +48,24 @@ jobs:
           git checkout --orphan fpl-snapshot-out
           git rm -r --cached . >/dev/null
           git add -f snapshot/
-          # [skip ci] keeps Vercel from building a preview deployment of a branch
-          # that contains nothing but data.
+          # Vercel deploys every push by default and does NOT honour [skip ci] in
+          # the commit message — an earlier version of this file claimed it did,
+          # and the result was a failed preview build on every snapshot run
+          # ("Couldn't find any `pages` or `app` directory", because this tree is
+          # data only). `git.deploymentEnabled` is the switch that actually works.
+          # It is written here rather than inherited, because the orphan tree is
+          # built from scratch and must carry its own copy.
+          cat > vercel.json <<'JSON'
+          {
+            "git": {
+              "deploymentEnabled": {
+                "data-snapshot": false,
+                "fpl-snapshot-out": false
+              }
+            }
+          }
+          JSON
+          git add -f vercel.json
+          # [skip ci] is kept for GitHub Actions' own skip convention, not Vercel's.
           git commit -m "FPL snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ) [skip ci]"
           git push --force origin fpl-snapshot-out
