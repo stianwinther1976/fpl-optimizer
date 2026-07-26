@@ -22,7 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { projectAll, XP_CONFIG } from "../src/lib/xp";
 import { pickBestXi, optimize, buildLaunchSquad } from "../src/lib/optimizer";
-import { isValidFormation } from "../src/lib/rules";
+import { isValidFormation, MAX_PER_CLUB, SQUAD_COMPOSITION, VALID_FORMATIONS } from "../src/lib/rules";
 import { launchPool, LAUNCH_QUOTA } from "../src/lib/pool";
 
 /**
@@ -560,7 +560,11 @@ function actualGwPoints(
   elById: Map<number, Element>,
   xpNext: (id: number) => number,
   actual: Map<number, number>,
-  minutes: Map<number, number>
+  minutes: Map<number, number>,
+  /** Optional accumulator: how often the bench was actually needed, and what it
+   * contributed. Only read by the bench experiment below; the season sim itself
+   * passes nothing and is unaffected. */
+  out?: { subs: number; subPoints: number; blanks: number }
 ): number {
   const squad = squadIds.map((id) => elById.get(id)!).filter(Boolean);
   const xi = pickBestXi(squad, xpNext);
@@ -576,6 +580,7 @@ function actualGwPoints(
   for (let i = 0; i < effective.length; i++) {
     const sid = effective[i];
     if (mins(sid) > 0) continue;
+    if (out) out.blanks++;
     const sType = typeOf(sid);
     for (const b of benchIds) {
       if (usedBench.has(b) || mins(b) === 0) continue;
@@ -588,6 +593,10 @@ function actualGwPoints(
       if (counts[1] !== 1 || !isValidFormation(counts[2], counts[3], counts[4])) continue;
       effective[i] = b;
       usedBench.add(b);
+      if (out) {
+        out.subs++;
+        out.subPoints += pts(b);
+      }
       break;
     }
   }
@@ -980,4 +989,476 @@ describe(`${SEASON} full-season simulation`, () => {
     expect(report.modelManagerPoints).toBeGreaterThan(report.setAndForgetPoints * 0.8);
     expect(report.modelManagerPoints).toBeGreaterThan(1500);
   });
+
+  // -------------------------------------------------------------------------
+  // "Best possible eleven, cheapest possible bench" — measured, not argued.
+  //
+  // The rejected-experiment note above `buildSquadWithinBudget` already shows
+  // that judging swaps by best-XI score rather than sum-of-15 loses points on
+  // the live model. But that experiment changed the OBJECTIVE OF A GREEDY
+  // DOWNGRADE LOOP at bench weights of 0.15-0.85; it never built the extreme
+  // squad — a genuine argmax over XI-only, where the bench is worth literally
+  // nothing and the search is free to fill it with £4.0m players who will never
+  // start a match. That squad is what people mean by "stack the eleven, punt
+  // the bench", and it had never been played out over a real season.
+  //
+  // Both builders here see the SAME candidate pool (top 40 per position by
+  // totalDiscounted, exactly what `buildSquadWithinBudget` uses) and the SAME
+  // per-player values. The only thing that differs is what is being maximised,
+  // which is the whole point: any gap is the objective, not the search.
+  //
+  // THE RESULT — and the first version of this comment got it badly wrong,
+  // which is worth leaving in because the mistake is the instructive part.
+  //
+  // That version climbed from 3 seeds per objective and reported the single
+  // squad that came back: 6673 -> 6296, "worse in three seasons of four". An
+  // audit killed it. The XI-only climb had not converged (0.88/1.81/7.80 xP
+  // short of what restarts reach, worst in exactly the season with the biggest
+  // reported loss), and the squad it named was one arbitrary draw from a
+  // distribution hundreds of points wide — in 2024-25, the 2nd worst of 30
+  // equally valid XI-only optima. Both the magnitude AND the 3-of-4 count were
+  // artefacts of where a 3-seed climb happened to land.
+  //
+  // Properly sampled — 240 jittered restarts, equal effort on both objectives,
+  // every distinct optimum played out — the medians are:
+  //
+  //                          2022-23  2023-24  2024-25  2025-26   total
+  //   sum-of-15    median       1806     1840     1474     1292    6412
+  //   XI+captain   median       1812     1762     1393     1387    6354
+  //   delta                       +6      -78      -81      +95     -58
+  //   (family size)             5/9    12/26     4/45     7/21
+  //
+  // -58 points over four seasons, worse in two of four. The effect this
+  // experiment was built to find is not there. Punting the bench is not
+  // measurably wrong.
+  //
+  // What IS there, and is robust, is the size of everything else. Within a
+  // single objective's family — squads that score the SAME on the thing they
+  // were built to maximise — set-and-forget totals span:
+  //
+  //   sum-of-15    1683-1969   1351-1977   1379-1636   1206-1502
+  //   XI+captain   1738-1968   1614-1843   1252-1751   1208-1578
+  //
+  // 230 to 626 points of spread, against a 6-to-95 point gap between the
+  // objectives. WHICH players you buy outweighs WHAT RULE you bought them by,
+  // by roughly an order of magnitude. Any conclusion drawn from one squad per
+  // objective — which is what the first version of this comment was, and what
+  // most published squad comparisons are — is reading noise.
+  //
+  // The bench mechanism is real even though the bottom line is not. Points
+  // entering the total THROUGH an auto-sub, median per family:
+  //
+  //   sum-of-15     179      111       45       96     = 431
+  //   XI+captain    131       52        9       71     = 263
+  //
+  // A punted bench really does forfeit ~40% of the auto-sub route, and at the
+  // £17.5m floor the reserves are not merely cheap but non-playing (2024-25:
+  // 9 points from the bench across an entire season). It is just that the money
+  // saved buys a better eleven, and the two effects very nearly cancel. The
+  // actionable version is therefore neither extreme: buy a bench that PLAYS,
+  // not a bench that SCORES — cheap nailed-on starters, not third-choice
+  // £4.0m reserves. That is roughly where the shipped builder already sits.
+  //
+  // `objVsRealSpearman` is the finding that limits all of this. Within a family,
+  // ranking by the objective against ranking by real points scored comes out
+  // -0.60/+0.43/-0.40/+0.64 for sum-of-15 and -0.17/-0.18/-0.02/+0.15 for
+  // XI+captain: at or below zero in six of eight. Among squads the model
+  // considers near-equivalent, a HIGHER projection does not buy more real
+  // points. Both objectives are estimating through the same noise, which is why
+  // choosing between them changes so little.
+  //
+  // Consistent with that: the shipped GREEDY builder scores 1806/1853/1445/1574
+  // = 6678, ahead of both hill-climbed families' medians. A sharper search on a
+  // noisy estimate concentrates the budget on whichever players the model is
+  // most wrong about — the same conclusion the note above
+  // `buildSquadWithinBudget` reached from the opposite direction.
+  //
+  // Caveats that stay: n=4 seasons; set-and-forget only, which is the harshest
+  // regime for a punted bench because it cannot transfer away from a dead one
+  // (the managed run for a MILDER version of this objective was measured
+  // separately at 8729 -> 8516, and carries the same one-draw caveat this
+  // rewrite was needed to fix). `benchFloorTrue` is 165 against the 175 this
+  // experiment can reach, so a real punt is cheaper than anything built here —
+  // which flatters the punt, and points the residual the same way.
+  //
+  // Run: SEASON=2024-25 BENCH=1 npx vitest run --config vitest.sim.config.ts \
+  //        -t "cheapest bench" --disable-console-intercept
+  // -------------------------------------------------------------------------
+  it.runIf(!!process.env.BENCH)(
+    "cheapest bench vs sum-of-15, played out over the real season",
+    { timeout: 900_000 },
+    () => {
+      setActiveCalibration(IDENTITY_FACTORS);
+      const season = loadSeason();
+      const LAST = Math.min(season.lastRound, 38);
+      const s1 = buildStateAt(1, season);
+      const previous = process.env.NO_PAST ? undefined : loadPreviousSeason(season);
+
+      const launch = buildLaunchSquad(s1.bootstrap, s1.fixtures, 1, 5, previous);
+      const xp = launch.xp;
+      const value = (id: number) => xp.get(id)?.totalDiscounted ?? 0;
+
+      const pool: Record<number, Element[]> = { 1: [], 2: [], 3: [], 4: [] };
+      for (const e of s1.bootstrap.elements) {
+        if (e.status === "u") continue;
+        if ((xp.get(e.id)?.total ?? 0) <= 0) continue;
+        pool[e.element_type].push(e);
+      }
+      for (const p of [1, 2, 3, 4])
+        pool[p] = pool[p].sort((a, b) => value(b.id) - value(a.id)).slice(0, 40);
+      const MIN_PRICE: Record<number, number> = {};
+      for (const p of [1, 2, 3, 4]) MIN_PRICE[p] = Math.min(...pool[p].map((e) => e.now_cost));
+      const ALL = [pool[1], pool[2], pool[3], pool[4]].flat();
+
+      const costOf = (squad: Element[]) => squad.reduce((a, e) => a + e.now_cost, 0);
+      const isLegal = (squad: Element[]) => {
+        if (squad.length !== 15) return false;
+        const cnt: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
+        const club = new Map<number, number>();
+        for (const e of squad) {
+          cnt[e.element_type]++;
+          club.set(e.team, (club.get(e.team) ?? 0) + 1);
+        }
+        if (costOf(squad) > 1000) return false;
+        for (const t of [1, 2, 3, 4] as ElementType[])
+          if (cnt[t] !== SQUAD_COMPOSITION[t]) return false;
+        return ![...club.values()].some((n) => n > MAX_PER_CLUB);
+      };
+
+      /** Legal 15 by an arbitrary ranking, with a reserve guard so the greedy
+       * run cannot paint itself into a corner it can no longer afford to fill. */
+      const greedy = (rank: (e: Element) => number, seed: Element[] = []) => {
+        const squad = [...seed];
+        const used = new Set(seed.map((e) => e.id));
+        const need: Record<number, number> = { 1: 2, 2: 5, 3: 5, 4: 3 };
+        const club = new Map<number, number>();
+        let cost = 0;
+        for (const e of seed) {
+          need[e.element_type]--;
+          club.set(e.team, (club.get(e.team) ?? 0) + 1);
+          cost += e.now_cost;
+        }
+        if (Object.values(need).some((n) => n < 0)) return null;
+        const reserveAfter = (pos: number) => {
+          let r = 0;
+          for (const p of [1, 2, 3, 4]) r += (need[p] - (p === pos ? 1 : 0)) * MIN_PRICE[p];
+          return r;
+        };
+        for (const e of [...ALL].sort((a, b) => rank(b) - rank(a))) {
+          if (Object.values(need).every((n) => n === 0)) break;
+          if (used.has(e.id)) continue;
+          const pos = e.element_type;
+          if (need[pos] <= 0) continue;
+          if ((club.get(e.team) ?? 0) >= MAX_PER_CLUB) continue;
+          if (cost + e.now_cost + reserveAfter(pos) > 1000) continue;
+          squad.push(e);
+          used.add(e.id);
+          need[pos]--;
+          club.set(e.team, (club.get(e.team) ?? 0) + 1);
+          cost += e.now_cost;
+        }
+        return Object.values(need).every((n) => n === 0) ? squad : null;
+      };
+
+      const canSwap = (squad: Element[], i: number, inEl: Element, cost: number) => {
+        const out = squad[i];
+        if (inEl.id === out.id) return false;
+        if (inEl.element_type !== out.element_type) return false;
+        if (squad.some((s, j) => j !== i && s.id === inEl.id)) return false;
+        if (cost - out.now_cost + inEl.now_cost > 1000) return false;
+        let n = 0;
+        for (let j = 0; j < squad.length; j++) if (j !== i && squad[j].team === inEl.team) n++;
+        return n < MAX_PER_CLUB;
+      };
+
+      /** Hill climb with paired swaps. The paired neighbourhood is not optional:
+       * at exactly £100.0m every single upgrade is unaffordable and every single
+       * downgrade loses points, so a budget-tight local optimum looks global. An
+       * earlier version of this same climb in `ytcompare.test.ts` without it
+       * under-reported the reachable optimum by 2.55 xP. */
+      const climb = (objective: (squad: Element[]) => number, seeds: Element[][]) => {
+        let bestSquad: Element[] | null = null;
+        let bestScore = -Infinity;
+        for (const start of seeds) {
+          let squad = [...start];
+          let cost = costOf(squad);
+          if (!isLegal(squad)) continue;
+          let cur = objective(squad);
+          for (let iter = 0; iter < 300; iter++) {
+            let improved = false;
+            for (let i = 0; i < squad.length && !improved; i++) {
+              for (const inEl of pool[squad[i].element_type]) {
+                if (!canSwap(squad, i, inEl, cost)) continue;
+                const trial = [...squad];
+                trial[i] = inEl;
+                const s = objective(trial);
+                if (s > cur + 1e-9) {
+                  cost = cost - squad[i].now_cost + inEl.now_cost;
+                  squad = trial;
+                  cur = s;
+                  improved = true;
+                  break;
+                }
+              }
+            }
+            if (improved) continue;
+            for (let i = 0; i < squad.length && !improved; i++) {
+              for (const cheap of pool[squad[i].element_type]) {
+                if (cheap.now_cost >= squad[i].now_cost) continue;
+                if (!canSwap(squad, i, cheap, cost)) continue;
+                const mid = [...squad];
+                mid[i] = cheap;
+                const midCost = cost - squad[i].now_cost + cheap.now_cost;
+                for (let j = 0; j < mid.length && !improved; j++) {
+                  if (j === i) continue;
+                  for (const up of pool[mid[j].element_type]) {
+                    if (up.now_cost <= mid[j].now_cost) continue;
+                    if (!canSwap(mid, j, up, midCost)) continue;
+                    const trial = [...mid];
+                    trial[j] = up;
+                    const s = objective(trial);
+                    if (s > cur + 1e-9) {
+                      squad = trial;
+                      cost = midCost - mid[j].now_cost + up.now_cost;
+                      cur = s;
+                      improved = true;
+                      break;
+                    }
+                  }
+                }
+                if (improved) break;
+              }
+            }
+            if (!improved) break;
+          }
+          if (cur > bestScore) {
+            bestScore = cur;
+            bestSquad = squad;
+          }
+        }
+        return bestSquad;
+      };
+
+      const sum15 = (squad: Element[]) => squad.reduce((a, e) => a + value(e.id), 0);
+      /** Named for what it IS. `pickBestXi().totalXp` adds the captain's xp a
+       * second time, so this is XI + captain, not the bare eleven — the earlier
+       * name `xiOnly` hid that the builder double-weights its single best
+       * player. Kept as the objective anyway, because the captain's double score
+       * is a real part of what an eleven returns; only the label was wrong. */
+      const xiPlusCaptain = (squad: Element[]) => pickBestXi(squad, value).totalXp;
+
+      // A deliberately bench-punting seed, so the XI-only climb starts from the
+      // structure it is supposed to find rather than having to walk there.
+      const cheapBenchSeed = (() => {
+        // 3-4-3 benches 1 GK + 2 DEF + 1 MID: buy those four at the floor first.
+        const cheapest = (pos: number, n: number, taken: Set<number>) =>
+          [...pool[pos]]
+            .sort((a, b) => a.now_cost - b.now_cost)
+            .filter((e) => !taken.has(e.id))
+            .slice(0, n);
+        const taken = new Set<number>();
+        const seed: Element[] = [];
+        for (const [pos, n] of [
+          [1, 1],
+          [2, 2],
+          [3, 1],
+        ] as const)
+          for (const e of cheapest(pos, n, taken)) {
+            seed.push(e);
+            taken.add(e.id);
+          }
+        return greedy((e) => value(e.id), seed);
+      })();
+
+      // ----------------------------------------------------------------
+      // A FAMILY of local optima per objective, not one draw.
+      //
+      // The first version of this experiment climbed from 3 seeds per
+      // objective and reported the single resulting squad. An audit showed
+      // that was measuring the wrong thing twice over. The XI-only climb had
+      // not converged (it was 0.88/0.00/1.81/7.80 xP short of what restarts
+      // reach, worst in exactly the season with the largest reported loss),
+      // and the squad it returned was one arbitrary draw from a distribution
+      // ~300 real points wide — in 2024-25 the 2nd-worst of 30 equally-valid
+      // XI-only optima. Both the headline magnitude and the "worse in 3 of 4
+      // seasons" count were artefacts of where a 3-seed climb happened to land.
+      //
+      // So: jittered restarts, EQUAL effort on both objectives, every distinct
+      // optimum played out, and the summary reported over the family. The
+      // comparison is now median-to-median, which is what "should you build
+      // this kind of squad" actually asks — not "is this one squad good".
+      // ----------------------------------------------------------------
+      let rngState = 20260726;
+      const rand = () => (rngState = (rngState * 1103515245 + 12345) % 2147483648) / 2147483648;
+      // 60 restarts with a +/-40% jitter left 2022-23 with a single sum-of-15
+      // optimum and two XI-only ones, which the family-size guard below caught:
+      // a median over n=1 is the one-draw reporting this rewrite exists to kill.
+      // Wider jitter and more restarts, because the whole finding turns on the
+      // WIDTH of these families and an under-sampled family looks narrow.
+      const RESTARTS = Number(process.env.RESTARTS ?? 240);
+
+      const family = (objective: (squad: Element[]) => number) => {
+        const found = new Map<string, { squad: Element[]; obj: number }>();
+        const add = (s: Element[] | null) => {
+          if (!s) return;
+          const climbed = climb(objective, [s]);
+          if (!climbed) return;
+          const key = climbed
+            .map((e) => e.id)
+            .sort((a, b) => a - b)
+            .join(",");
+          if (!found.has(key)) found.set(key, { squad: climbed, obj: objective(climbed) });
+        };
+        add(launch.squad);
+        add(greedy((e) => value(e.id)));
+        add(cheapBenchSeed);
+        for (let r = 0; r < RESTARTS; r++) add(greedy((e) => value(e.id) * (0.3 + 1.4 * rand())));
+        return [...found.values()].sort((a, b) => b.obj - a.obj);
+      };
+
+      const sum15Family = family(sum15);
+      const xiFamily = family(xiPlusCaptain);
+      expect(sum15Family.length, "sum-of-15 family is empty").toBeGreaterThan(0);
+      expect(xiFamily.length, "XI-only family is empty").toBeGreaterThan(0);
+      for (const f of [...sum15Family, ...xiFamily])
+        expect(isLegal(f.squad), "a family member is not a legal squad").toBe(true);
+
+      // The true bench floor, over ALL elements rather than the top-40 pool.
+      // Taking it from the pool reported 175 and was simply wrong: the pool's
+      // cheapest DEF is £4.5m against a true £4.0m, so a real punt is cheaper
+      // than anything this experiment can build. That direction matters — it
+      // means the punted squad measured here has a BETTER bench than an actual
+      // punt, so any loss it records is an under-estimate.
+      const trueMin: Record<number, number> = {};
+      for (const p of [1, 2, 3, 4]) {
+        const c = s1.bootstrap.elements.filter((e) => e.element_type === p).map((e) => e.now_cost);
+        trueMin[p] = c.length ? Math.min(...c) : 0;
+      }
+      const floorBench = (mp: Record<number, number>) =>
+        Math.min(
+          ...VALID_FORMATIONS.map(
+            ([d, m, f]) => mp[1] + (5 - d) * mp[2] + (5 - m) * mp[3] + (3 - f) * mp[4]
+          )
+        );
+
+      interface Played {
+        squad: Element[];
+        obj: number;
+        cost: number;
+        benchCost: number;
+        total: number;
+        acc: { subs: number; subPoints: number; blanks: number };
+        ids: number[];
+      }
+      const prep = (f: { squad: Element[]; obj: number }): Played => {
+        const xi = pickBestXi(f.squad, value);
+        return {
+          ...f,
+          cost: costOf(f.squad),
+          benchCost: xi.bench.reduce((a, b) => a + b.element.now_cost, 0),
+          total: 0,
+          acc: { subs: 0, subPoints: 0, blanks: 0 },
+          ids: f.squad.map((e) => e.id),
+        };
+      };
+      // The app's actual squad, scored as its own row. It is NOT reliably a
+      // member of the sum-of-15 family: the climb improves on it in two of the
+      // four seasons, so looking it up by id inside the family returned null
+      // there and the reference point silently vanished from the report.
+      const shippedRow = prep({ squad: launch.squad, obj: sum15(launch.squad) });
+      const played = { sum15: sum15Family.map(prep), xi: xiFamily.map(prep) };
+      const everyone = [...played.sum15, ...played.xi, shippedRow];
+
+      // Play every family member through the real season, set-and-forget.
+      //
+      // The weekly XI is picked by season points-per-game — except in GW1,
+      // where `points_per_game` is 0 for EVERY player because no match has been
+      // played. That left GW1's formation, XI and captain decided purely by
+      // squad-array order through stable-sort tie-breaks, and it was not
+      // symmetric: the bench-punt seed pushes £4.0m players into the low array
+      // slots, so the punted squad captained its own reserve goalkeeper. It was
+      // worth -35 points to the punt across the four seasons, none of it the
+      // effect under study. GW1 now falls back to the model's own valuation,
+      // which is what a manager actually has in front of them in GW1 anyway.
+      for (let gw = 1; gw <= LAST; gw++) {
+        const st = buildStateAt(gw, season);
+        const elById = new Map(st.bootstrap.elements.map((e) => [e.id, e]));
+        const rawPpg = (id: number) => parseFloat(elById.get(id)?.points_per_game ?? "0") || 0;
+        const anyPpg = [...elById.keys()].some((id) => rawPpg(id) > 0);
+        const rank = anyPpg ? rawPpg : value;
+        for (const e of everyone)
+          e.total += actualGwPoints(e.ids, elById, rank, st.actual, st.minutesAt, e.acc);
+      }
+
+      const stat = (rows: Played[], pick: (r: Played) => number) => {
+        const v = rows.map(pick).sort((a, b) => a - b);
+        const mid = Math.floor(v.length / 2);
+        return {
+          n: v.length,
+          min: Math.round(v[0]),
+          median: Math.round(v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2),
+          mean: Math.round(v.reduce((a, b) => a + b, 0) / v.length),
+          max: Math.round(v[v.length - 1]),
+        };
+      };
+      /** Does a higher score on the objective buy more real points WITHIN a
+       * family? If this is negative the objective is not merely a worse target,
+       * it is anti-correlated with the thing it is a proxy for. */
+      const objVsReal = (rows: Played[]) => {
+        if (rows.length < 3) return null;
+        const rk = (xs: number[]) => {
+          const idx = xs.map((v, i) => [v, i] as const).sort((a, b) => a[0] - b[0]);
+          const r = new Array(xs.length).fill(0);
+          idx.forEach(([, i], k) => (r[i] = k));
+          return r;
+        };
+        const a = rk(rows.map((r) => r.obj));
+        const b = rk(rows.map((r) => r.total));
+        const n = rows.length;
+        const d2 = a.reduce((s, v, i) => s + (v - b[i]) ** 2, 0);
+        return +(1 - (6 * d2) / (n * (n * n - 1))).toFixed(3);
+      };
+
+      const summary = (label: string, rows: Played[]) => ({
+        objective: label,
+        objectiveScore: stat(rows, (r) => r.obj * 100),
+        setAndForget: stat(rows, (r) => r.total),
+        benchCost: stat(rows, (r) => r.benchCost),
+        benchRoutePoints: stat(rows, (r) => r.acc.subPoints),
+        objVsRealSpearman: objVsReal(rows),
+      });
+
+      console.log(
+        JSON.stringify(
+          {
+            season: SEASON,
+            gameweeks: LAST,
+            restarts: RESTARTS,
+            shippedGreedy: {
+              setAndForget: Math.round(shippedRow.total),
+              sum15: +sum15(launch.squad).toFixed(2),
+              benchCost: shippedRow.benchCost,
+              benchRoutePoints: shippedRow.acc.subPoints,
+            },
+            benchFloorPool: floorBench(MIN_PRICE),
+            benchFloorTrue: floorBench(trueMin),
+            families: [summary("sum-of-15", played.sum15), summary("XI+captain only", played.xi)],
+          },
+          null,
+          1
+        )
+      );
+
+      // Guards that keep the run meaningful rather than merely green.
+      // The XI-only family must actually have punted the bench relative to the
+      // sum-of-15 family, or the two labels name the same squads and the
+      // comparison is vacuous.
+      const medBench = (rows: Played[]) => stat(rows, (r) => r.benchCost).median;
+      expect(medBench(played.xi)).toBeLessThan(medBench(played.sum15));
+      // And each family must be a family, not one point: a single optimum means
+      // the restarts did nothing and we are back to reporting one draw.
+      expect(played.xi.length, "XI-only search found a single optimum").toBeGreaterThan(2);
+      expect(played.sum15.length, "sum-of-15 search found a single optimum").toBeGreaterThan(2);
+    }
+  );
 });
