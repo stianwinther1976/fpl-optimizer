@@ -70,6 +70,84 @@ const numEnv = (name: string): number | null => {
   if (!Number.isFinite(v)) throw new Error(`${name}=${raw} is not a number`);
   return v;
 };
+// Same generic override the backtest has. It is here mainly so the simulator's
+// own NOISE can be measured: nudging a constant that should barely matter and
+// watching the season total is the only way to know whether a +80 is a result
+// or a different butterfly. Without it, a sweep run against this harness is
+// silently a no-op, which is a worse failure than not having it at all.
+//
+// WHAT THAT MEASUREMENT SAYS, so nobody re-derives it from a single run.
+//
+// This harness replays a season one transfer decision at a time, and a single
+// changed decision in October propagates to every squad thereafter. The season
+// total is therefore a STEP FUNCTION of any input, with wide flat plateaus and
+// occasional large jumps — not a smooth response you can read a gradient from.
+//
+// Sweeping `subProb`, which has nothing to do with anything else being tested,
+// over 2024-25:
+//
+//   0.05  0.08  0.10  0.12  0.15  0.17  0.20  0.25  0.30
+//   2200  2356  2345  2210  2148  2116  2121  2121  2123
+//
+// A 240-point range, non-monotone, from one irrelevant constant. Inside a
+// plateau it is dead flat: 0.1500 through 0.1540 in steps of 0.0001 all return
+// exactly 2148. So a null result here means nothing, and so does a +80.
+//
+// The corollary, learned the hard way: a placebo arm does not rescue this. Two
+// were tried against the suspension term — the same discount applied to the
+// wrong players, at matched prevalence, six seeds each. Both under-perturbed;
+// most seeds returned the untouched season total to the point, because a random
+// player is rarely near a decision boundary while a real one-booking-away
+// player usually is. The real term then "beat" the placebos in three seasons of
+// four — which is roughly a 1-in-9 event under the null anyway, not the 1-in-100
+// an earlier draft of this comment claimed, and in any case an artefact of a
+// null that perturbs less than the thing it is standing in for. Both the
+// dramatic number and the inference were wrong; the conclusion below survives
+// them because it never depended on either.
+//
+// Treat the season total as evidence only when it moves by several hundred
+// across all four seasons in the same direction. Anything smaller belongs in
+// the backtest's rank metrics or in a direct measurement against the archive.
+//
+// What the suspension term actually did to these totals, stated because the
+// tempting summary — "sim totals unchanged" — is true only relative to the
+// previous review round and invites the wrong reading:
+//
+//                2022-23  2023-24  2024-25  2025-26
+//   before          2142     2361     2312     2106
+//   after           2222     2447     2148     2150
+//   delta            +80      +86     -164      +44
+//
+// Net +46 over four seasons, and one season worse by 7%. Nobody should read
+// that as the term earning its place, and nobody should read the -164 as it
+// failing either: both sit comfortably inside the 240-point range that
+// `subProb` produces on its own in that very season. The case for the term is
+// the direct archive measurement at the top of `suspensionMissProbs`, not this
+// table. The table is here so that the -164 is on the record rather than
+// discovered later by someone diffing the reports.
+//
+// Two limits of the sweep hook below, so a future sweep does not silently do
+// nothing. It is placed BEFORE the dedicated OWNW/OHI/OGAMMA/GKOWNW/GKSLOT
+// overrides, so those win on a key collision. And it only reaches top-level
+// NUMERIC config keys, which means `bookingRate` and `banThresholds` — arrays —
+// cannot be swept with it at all.
+if (process.env.XPSET) {
+  for (const kv of process.env.XPSET.split(",")) {
+    const [k, v] = kv.split("=");
+    const cfg = XP_CONFIG as unknown as Record<string, number>;
+    if (!(k in cfg) || typeof cfg[k] !== "number") throw new Error(`XPSET: no numeric XP_CONFIG key "${k}"`);
+    // Loud, not silent. `XPSET=gwDecay` or `XPSET=gwDecay=abc` used to write NaN
+    // straight into the config, and a NaN there does not crash — it quietly
+    // turns every projection into NaN and reports a season total built from
+    // nothing. A sweep that fails has to fail visibly.
+    const n = Number(v);
+    if (v == null || v === "" || !Number.isFinite(n)) {
+      throw new Error(`XPSET: "${k}" needs a finite numeric value, got "${v ?? ""}"`);
+    }
+    cfg[k] = n;
+    console.log(`XPSET ${k}=${n}`);
+  }
+}
 const ownW = numEnv("OWNW");
 if (ownW != null) XP_CONFIG.priorPStartOwnWeight = ownW;
 const ownHi = numEnv("OHI");
@@ -153,6 +231,7 @@ interface Row {
   goals: number;
   assists: number;
   bonus: number;
+  yellows: number;
   saves: number;
   ict: number;
   xg: number;
@@ -238,6 +317,7 @@ function loadSeason() {
       goals: +r.goals_scored,
       assists: +r.assists,
       bonus: +r.bonus,
+      yellows: +(r.yellow_cards || 0),
       saves: +r.saves,
       ict: +r.ict_index,
       xp: +r.xP || 0,
@@ -343,12 +423,13 @@ function buildStateAt(g: number, season: Season) {
         goals: s.goals + r.goals,
         assists: s.assists + r.assists,
         bonus: s.bonus + r.bonus,
+        yellows: s.yellows + r.yellows,
         saves: s.saves + r.saves,
         ict: s.ict + r.ict,
         xg: s.xg + r.xg,
         xa: s.xa + r.xa,
       }),
-      { minutes: 0, starts: 0, points: 0, goals: 0, assists: 0, bonus: 0, saves: 0, ict: 0, xg: 0, xa: 0 }
+      { minutes: 0, starts: 0, points: 0, goals: 0, assists: 0, bonus: 0, yellows: 0, saves: 0, ict: 0, xg: 0, xa: 0 }
     );
     const price = atG[0]?.value ?? past[past.length - 1]?.value ?? 50;
     // Ownership as of the round being projected, on the same footing as price.
@@ -412,6 +493,7 @@ function buildStateAt(g: number, season: Season) {
       clean_sheets: 0,
       goals_conceded: 0,
       bonus: cum.bonus,
+      yellow_cards: cum.yellows,
       ict_index: cum.ict.toFixed(1),
       expected_goals: cum.xg.toFixed(2),
       expected_assists: cum.xa.toFixed(2),

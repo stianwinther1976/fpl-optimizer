@@ -28,6 +28,13 @@ export interface Element {
   clean_sheets: number;
   goals_conceded: number;
   bonus: number;
+  /**
+   * Season total of yellow cards. Read for one purpose: a player sitting on
+   * four of them is one booking from an automatic ban, and until he actually
+   * gets it his `status` is a perfectly innocent "a". The function that reads it
+   * is `suspensionMissProbs` in xp.ts; `suspensionAvail` is its summary.
+   */
+  yellow_cards?: number;
   ict_index: string;
   expected_goals: string;
   expected_assists: string;

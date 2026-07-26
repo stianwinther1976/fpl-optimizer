@@ -215,6 +215,53 @@ export const XP_CONFIG = {
    * most expensive. The fit is left conservative there.
    */
   p60Curve: { intercept: -2.441, slope: 0.061 },
+  /**
+   * P(booked | he starts the match), by position. Not fitted — these are the
+   * raw rates over every start in the four archived seasons, and they are the
+   * only free quantity in the suspension term.
+   *
+   *          pooled    22-23   23-24   24-25   25-26      n
+   *   GK     0.0762    0.076   0.078   0.079   0.072    2768
+   *   DEF    0.1684    0.165   0.175   0.171   0.162   11412
+   *   MID    0.1651    0.149   0.180   0.170   0.155   13246
+   *   FWD    0.1118    0.117   0.117   0.111   0.104    3024
+   *
+   * Indexed by `element_type`, so the leading 0 is a placeholder.
+   *
+   * Deliberately NOT per-player. A dedicated hatchet man is booked far more
+   * often than the positional average, but a player's own card count over a
+   * partial season is a handful of events, and the shrinkage machinery that
+   * would be needed to use it safely is a much larger change than the effect
+   * being chased. The positional rate holds its shape across four seasons —
+   * always GK lowest, FWD next, DEF and MID clear at the top — which is the
+   * argument for using it. Its LEVEL is less settled than that ordering: GK and
+   * FWD move by under a point season to season, DEF by 1.3 and MID by 3.1
+   * (0.149 to 0.180, about +/-9% of the pooled figure). An earlier version of
+   * this comment said "stable to about a point" for all four, which the table
+   * directly above it contradicts for MID.
+   */
+  bookingRate: [0, 0.0762, 0.1684, 0.1651, 0.1118],
+  /**
+   * The Premier League's accumulation thresholds: `[cards, byTeamMatch]`.
+   * Five bookings in the side's first 19 matches is a one-match ban; ten by
+   * their 32nd is two matches; fifteen by the end of the season is three.
+   * Verified against premierleague.com rather than taken from memory, and
+   * re-checked for a fourth tier: there is no 20-card threshold in the Premier
+   * League's own schedule, so this list is complete rather than truncated.
+   *
+   * All three are read, but each is priced as a ONE-match ban, so the deeper
+   * two are deliberately understated. Measured over the four archived seasons,
+   * three players a season reach ten inside the window and none has ever
+   * reached fifteen, which is too thin to calibrate a longer ban against; see
+   * `suspensionMissProbs`. The [15, 38] row is in fact inert as a window check —
+   * the ban is served in match j+1, which must exist, so the trigger match is at
+   * most 37 — and is kept for the shape of the rule rather than its effect.
+   */
+  banThresholds: [
+    [5, 19],
+    [10, 32],
+    [15, 38],
+  ] as [number, number][],
   // --- Pre-season minutes (no game has been played yet) ---
   // Last season's STARTS out of 38, shrunk toward a price/position prior worth
   // `preseasonPriorGames` games of evidence. Shrinkage matters in both
@@ -1012,6 +1059,42 @@ export function makeFixtureIndex(fixtures: Fixture[]): Map<number, Map<number, F
       const arr = byTeam.get(t);
       if (arr) arr.push(f);
       else byTeam.set(t, [f]);
+    }
+  }
+  // Chronological order within an event. This used to be whatever order the
+  // fixture list happened to arrive in, which was fine while the only consumers
+  // counted the legs or summed them. It stopped being fine when the suspension
+  // term started pricing the legs of a double ASYMMETRICALLY: a booking in the
+  // first leg can cost the second, but not the reverse, so "first" has to mean
+  // first in time and not first in the array.
+  //
+  // This is NOT order-immaterial for the pre-existing consumers, and an earlier
+  // version of this comment claimed it was. Two of them — the keeper depth chart
+  // and the anchor blend's `avail` — take `[0]` as a representative kickoff and
+  // hand it to `availabilityAt`, which branches on that timestamp against
+  // `newsReturnTime` for statuses "i", "d" and "s". For a flagged player in a
+  // double, which leg is `[0]` really can change the answer. The justification
+  // is therefore empirical rather than structural: with the suspension term
+  // neutralised and this sort left live, all four `backtest-report-*.json`
+  // reproduce the pre-sort files byte for byte, as do the sim reports. Inert on
+  // the evidence base, not inert by construction.
+  for (const byTeam of idx.values()) {
+    for (const arr of byTeam.values()) {
+      // An unknown kickoff sorts last rather than throwing the order away: a
+      // fixture with no time is usually one that has not been scheduled yet,
+      // which really is the later of the two. The explicit equality branch is
+      // load-bearing, not noise: two untimed legs would otherwise compare
+      // `Infinity - Infinity` = NaN, and arrival order would survive only
+      // because the spec coerces a NaN comparator result to +0. Sorting is
+      // stable by ECMA-262 since ES2019 — a language guarantee, not a V8 one,
+      // as this comment previously implied — so equal keys keep their order.
+      if (arr.length > 1) {
+        arr.sort((a, b) => {
+          const ka = kickoffTime(a) ?? Infinity;
+          const kb = kickoffTime(b) ?? Infinity;
+          return ka === kb ? 0 : ka - kb;
+        });
+      }
     }
   }
   return idx;
@@ -1875,6 +1958,220 @@ export function p60GivenStart(minsPerStart: number): number {
   return 1 / (1 + Math.exp(-(c.intercept + c.slope * minsPerStart)));
 }
 
+/**
+ * Availability multiplier for a yellow-card ban the player has NOT yet earned.
+ *
+ * A man on four bookings is one tackle away from missing a match, and until
+ * that tackle happens his `status` is a blameless "a" and the model treats him
+ * as certain to play for the whole horizon. Measured over the four archived
+ * seasons, among established starters (>=4 starts in their last 5) who played
+ * the current round and were not sent off in it:
+ *
+ *                                          n    missed NEXT round      se
+ *   not one booking from a ban         16012          0.0837        0.0022
+ *   one from 5, but past match 19       1565          0.0799        0.0069
+ *   one from 10, but past match 32       126          0.0635        0.0217
+ *   one from 5, inside the window        465          0.2301        0.0195
+ *   one from 10, inside the window        52          0.1538        0.0500
+ *
+ * The two middle rows are most of the reason to believe the rest. They are the
+ * placebo arm: players carrying the same card count, whose threshold window has
+ * closed so that count cannot ban them. They sit on the baseline, which is what
+ * you would expect if the top rows are the RULE biting and not a confound about
+ * the sort of player who collects bookings. An earlier version of this table
+ * pooled the in-window and out-of-window cases and reported 0.2362 and 0.1370;
+ * that was diluted by the placebo group and is superseded by the split above.
+ *
+ * The placebo is good but it is not a clean experiment, and an earlier draft of
+ * this comment claimed it was. Membership is not random in two ways. A player
+ * needs MORE than 19 matches to reach four cards to land in the placebo group,
+ * so by construction it holds the slower card-collectors — the lower-q half of
+ * the same population. And the split is collinear with the calendar: every
+ * placebo observation is late-season, where rotation and dead rubbers move the
+ * baseline, while the 0.0837 row pools the whole year. Both push the placebo
+ * rate DOWN relative to a perfectly matched control, so the 0.146 gap is an
+ * upper bound on the effect rather than an unbiased estimate of it. It is a
+ * large gap and the mechanism is a written rule, so the direction is not in
+ * doubt; the magnitude carries more uncertainty than the standard errors say.
+ *
+ * A related caution about the arithmetic below. It is the law of total
+ * probability applied to a partition of the same sample, so it CANNOT fail —
+ * for a real effect or a spurious one — and a previous version of this comment
+ * presented it as "predicted against observed" corroboration, which it is not.
+ * What it does show is the composition: nearly all of the excess is carried by
+ * the players who actually got booked, at a conditional miss rate near 1. That
+ * rules out the alternative story in which one-from-a-ban players are simply
+ * rested, which would spread the excess across booked and unbooked alike:
+ *
+ *   one from 5:   P(card)=0.1591, miss|card=0.9865, miss|none=0.0870
+ *   one from 10:  P(card)=0.1538, miss|card=0.8750, miss|none=0.0227
+ *
+ * A booked player on the line misses the next round essentially always, and an
+ * unbooked one reverts to roughly the baseline. That is a ban, not a rotation
+ * policy, and it is the shape this function encodes.
+ *
+ * Two places where the pricing is knowingly off its own measurement, both
+ * recorded rather than tuned away. At five cards the term charges the full
+ * q = 0.1684 while the measured excess is 0.2301 - 0.0837 = 0.1464, so it runs
+ * about 15% hot — within a standard error, and in the direction the placebo
+ * bias above says the measurement is understated, but hot. At ten the row is
+ * thin (52 observations, 8 of them bookings) and its excess of 0.070 +/- 0.050
+ * sits below the 0.165 charged. Neither gap justifies a separate fitted rate on
+ * samples this size; both are the weakest part of the term.
+ *
+ * What is modelled is only the FORWARD risk. State that precisely, because the
+ * loose version of it is wrong: when the imminent event is a SINGLE fixture the
+ * multiplier is exactly 1, bit for bit, so this week's eleven and captain cannot
+ * move. When the imminent event is a DOUBLE, the second leg is discounted — he
+ * can be booked in the first leg and banned for the second, and pretending
+ * otherwise would be a modelling error rather than a safety guarantee.
+ *
+ * That boundary was found by measurement, not by reading the code. Neutralising
+ * the term entirely reproduces the PRE-CHANGE backtest reports byte for byte;
+ * neutralising it for singles only leaves the post-change ones unchanged. Read
+ * that as ONE experiment and its complement rather than as three independent
+ * measurements — an earlier draft of this comment presented it as a triple, and
+ * the second half is forced once the first holds. The backtest grades offset 0
+ * and nothing else, so it puts every single offset-0 difference in doubles.
+ *
+ * Three of the four season reports move and 2023-24 does not, but the reason is
+ * not the one first written here. It is NOT that 2023-24's doubles fall after
+ * the five-card window has shut: two of its 23 team-doubles sit at team match 7,
+ * squarely inside [5, 19], and six more at matches 25-28 sit inside the open
+ * [10, 32]. Meanwhile the 2024-25 and 2025-26 reports both moved with ZERO
+ * doubles inside the five-card window, entirely through the ten-card threshold.
+ * The actual discriminator is player-level: no player at a 2023-24 doubling club
+ * happened to be one card short of an open threshold. Which also sets the honest
+ * scale of "three of four seasons move" — it rests on ten player-double-events
+ * across four seasons (7, 0, 1, 2), so it is a demonstration that the channel is
+ * live, not a measurement of how much it is worth.
+ *
+ * The corollary for the backtest is worth stating where someone will trip over
+ * it: a green accuracy report there is NOT silence about this term. Doubles are
+ * the one channel by which it can reach that harness, so the report is weak
+ * evidence about exactly that channel and nothing about the rest.
+ *
+ * A ban that has already been incurred is FPL's own business: it sets `status` to
+ * "s", `availabilityAt` handles it, and it knows whether the ban has been
+ * served. Inferring a live ban from the card count instead would mean tracking
+ * service state from match history, and getting that wrong benches a player who
+ * is available. The count is trusted for what it unambiguously says — how far
+ * he is from the line — and nothing more.
+ *
+ * The arithmetic is a negative binomial, counted in the club's MATCHES rather
+ * than in gameweeks. Writing q for his per-match booking probability and `need`
+ * for the cards still required, the need-th booking arrives in match j with
+ * probability C(j-1, need-1) q^need (1-q)^(j-need), and the ban is then served
+ * in match j+1. This function returns one probability PER LEG, and counting in
+ * matches rather than events is what makes a double gameweek come out right in
+ * both directions: two matches are two chances to be booked, and a one-match ban
+ * costs one leg rather than both. Which leg matters, so the legs are not
+ * interchangeable and `projectAll` weights each by what that fixture is worth;
+ * `suspensionAvail` is the equal-weight summary and is exact only when the legs
+ * are.
+ *
+ * One ban per threshold: reaching the NEXT one inside a planning horizon needs
+ * five more cards and is not modelled. Nor is the fact that the ten-card
+ * threshold carries two matches and the fifteen-card one three — all three are
+ * priced as one match, which understates the two deeper ones.
+ *
+ * How rare, measured rather than guessed, over the four archived seasons: three
+ * players a season reach ten cards inside the window, and NOBODY reached fifteen
+ * in any of the four — the highest season totals are 14, 13, 12 and 12. So the
+ * [15, 38] row has never once fired against the evidence base, and the [10, 32]
+ * row fires for about three players a year. An earlier version of this comment
+ * said "thirteen times a season" at ten and "about one player a season" at
+ * fifteen; the first was the count of one-from-ten player-ROUNDS divided by four
+ * (a man sitting on nine for six weeks is six rows, not six players) and the
+ * second was simply wrong. Corrected here because it argues the same conclusion
+ * more strongly: modelling two- and three-match bans properly would be fitting
+ * machinery to events that have not happened.
+ *
+ * Three known conservatisms, all deliberate. Bookings are charged only to
+ * starts, so a rotation player's risk is understated by roughly the substitute
+ * half of his appearances (a substitute is booked at 0.0725 against a starter's
+ * 0.1547). The two deeper thresholds are priced as one-match bans. And the ban
+ * is always charged against the next Premier League fixture, when from January
+ * it may instead be served in a cup tie that costs no FPL points at all — that
+ * one runs the other way, and is an over-charge.
+ *
+ * A note for whoever tidies this later: the `j < 1` and `j < need` guards are
+ * each redundant GIVEN the other, and mutation testing duly found both
+ * survivable one at a time. They are not redundant together, and deleting both
+ * is caught. With neither, an imminent single fixture evaluates the binomial at
+ * C(-1, 0) = 1 and (1-q)^(-1), i.e. q/(1-q) — a positive suspension risk
+ * charged to the one gameweek this function must leave alone. Keep both.
+ *
+ * @param matchesBefore   club matches between now and this event, exclusive.
+ *                        0 for the imminent event, which is what makes this
+ *                        function a no-op there when that event is a single.
+ * @param matchesThis     club matches IN this event: 1 normally, 2 in a double,
+ *                        0 in a blank.
+ * @param teamGamesPlayed matches his club has already completed
+ * @param pStart          P(he starts) — already multiplied by his declared
+ *                        availability, so a man FPL has ruled out collects no
+ *                        cards in the matches he is going to miss.
+ */
+export function suspensionMissProbs(
+  el: Element,
+  matchesBefore: number,
+  matchesThis: number,
+  teamGamesPlayed: number,
+  pStart: number
+): number[] {
+  if (matchesThis <= 0) return [];
+  const out = new Array<number>(matchesThis).fill(0);
+  const yellows = el.yellow_cards ?? 0;
+  const q = clamp((XP_CONFIG.bookingRate[el.element_type] ?? 0) * clamp(pStart, 0, 1), 0, 1);
+  if (q <= 0) return out;
+
+  // The first threshold he has not already passed. Passing one does not clear
+  // the count — five cards then puts him on the road to ten — so this is a
+  // strict "which line is next", not a reset.
+  const t = XP_CONFIG.banThresholds.find(([cards]) => yellows < cards);
+  if (!t) return out;
+  const [cards, byMatch] = t;
+  const need = cards - yellows;
+
+  for (let p = 0; p < matchesThis; p++) {
+    // `j` indexes the match whose booking triggers the ban; the ban is served in
+    // match `j + 1`, which is leg `p` of this event.
+    const j = matchesBefore + p;
+    if (j < 1) continue; // the trigger would have to be a match already played
+    if (j < need) continue; // too few matches so far to have collected the cards
+    if (teamGamesPlayed + j > byMatch) continue; // outside the threshold's window
+    // C(j - 1, need - 1) q^need (1-q)^(j - need)
+    let coeff = 1;
+    for (let i = 0; i < need - 1; i++) coeff = (coeff * (j - 1 - i)) / (i + 1);
+    out[p] = coeff * Math.pow(q, need) * Math.pow(1 - q, j - need);
+  }
+  return out;
+}
+
+/**
+ * The same risk collapsed to a single multiplier, weighting every leg of the
+ * event equally. Exact for a single fixture and for a double whose two legs are
+ * worth the same; `projectAll` does not use it, because a double's legs are
+ * generally NOT worth the same and the leg at risk is specifically the later
+ * one. Kept because it is the honest one-number summary of the term, and most
+ * of the arithmetic unit tests are written against it — but not all of them, as
+ * this comment used to claim: the per-leg allocation is asserted directly
+ * against `suspensionMissProbs`, which is the only way to see it at all.
+ */
+export function suspensionAvail(
+  el: Element,
+  matchesBefore: number,
+  matchesThis: number,
+  teamGamesPlayed: number,
+  pStart: number
+): number {
+  if (matchesThis <= 0) return 1;
+  const probs = suspensionMissProbs(el, matchesBefore, matchesThis, teamGamesPlayed, pStart);
+  let missed = 0;
+  for (const p of probs) missed += p;
+  return clamp(1 - missed / matchesThis, 0, 1);
+}
+
 function kickoffTime(f: Fixture | undefined): number | null {
   if (!f?.kickoff_time) return null;
   const t = Date.parse(f.kickoff_time);
@@ -1892,6 +2189,11 @@ function fixtureXp(
   mm: MinutesModel
 ): number {
   const cfg = XP_CONFIG;
+  // Only what FPL has ALREADY declared — injured, doubtful, banned. Risk of a
+  // ban he has not yet earned is priced once per EVENT rather than here; see
+  // `suspensionMissProbs` and its call site in `projectAll` — `suspensionAvail`
+  // is only the equal-weight summary and is not what `projectAll` calls. Doing
+  // it per fixture charged a one-match ban against both legs of a double.
   const avail = availabilityAt(el, gwOffset, kickoffTime(fixture));
   if (avail === 0) return 0;
   const p60 = avail * mm.pStart * p60GivenStart(mm.minsPerStart);
@@ -2449,18 +2751,29 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
     const pastPerGameFor = (m: MinutesModel) => per90 * clamp(m.share, 0, 1);
     const pastUsable = Number.isFinite(per90) && per90 >= 0;
     const perGw = new Map<number, number>();
+    // Club matches between now and the event being projected. Not the same as
+    // the gameweek offset once a blank or a double is in the horizon, and it is
+    // the match count that the suspension term needs: two legs of a double are
+    // two chances to be booked, a blank is none.
+    let matchesBefore = 0;
     for (let gw = ctx.nextEvent; gw < ctx.nextEvent + horizon && gw <= lastEvent; gw++) {
       const fx = fxIndex.get(gw)?.get(el.team) ?? [];
-      let gwXp = 0;
       const off = gw - ctx.nextEvent;
       const mmGw = gkMm(off) ?? mm;
-      for (const f of fx) {
-        const isHome = f.team_h === el.team;
-        gwXp += fixtureXp(el, f, isHome, off, st, rates, mmGw);
-      }
+      // Kept per leg, not just summed, because the suspension term below has to
+      // charge a ban against the specific match it is served in. `fx` is in
+      // kickoff order (see `makeFixtureIndex`), so `legXp[0]` really is first.
+      const legXp = fx.map((f) => fixtureXp(el, f, f.team_h === el.team, off, st, rates, mmGw));
+      let gwXp = legXp.reduce((a, b) => a + b, 0);
       // Blend the real-world anchors — fixture-count aware (scale for DGWs,
       // skip on blanks). Build a combined target from ep_next and last season,
       // then pull the model toward it in proportion to how thin our data is.
+      // Hoisted out of the blend so the suspension term can reconstruct what
+      // each leg of a double is worth AFTER blending. The anchor target is a
+      // per-game figure multiplied by the fixture count, so it splits evenly
+      // across the legs; the model part does not.
+      let blendW = 0;
+      let blendLegTarget = 0;
       if ((epUsable || pastUsable) && fx.length > 0) {
         let tSum = 0;
         let tW = 0;
@@ -2503,8 +2816,70 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
         const w = isNext
           ? Math.max(cfg.epNextWeight, thin * cfg.epThinMaxWeight)
           : thin * cfg.epThinMaxWeight;
-        if (w > 0) gwXp = (1 - w) * gwXp + w * target;
+        // Assigned inside the guard, not beside it. With `w === 0` the two are
+        // multiplied by zero downstream and the value of `blendLegTarget` is
+        // arithmetically irrelevant — but only while `target` is finite, and it
+        // is finite only because `epUsable` and `pastUsable` each gate on
+        // `Number.isFinite`. If either guard ever loosens, a stray `0 * NaN`
+        // would poison the suspension term's `lost` and turn the whole
+        // projection into NaN. Keeping them unset in the common case removes
+        // that coupling rather than documenting it.
+        if (w > 0) {
+          gwXp = (1 - w) * gwXp + w * target;
+          blendW = w;
+          blendLegTarget = target / fx.length;
+        }
       }
+      // Yellow-card accumulation risk, applied AFTER the anchor blend and once
+      // per event rather than per fixture.
+      //
+      // After the blend, because the anchors are as blind to a future ban as
+      // they are to a current injury — `ep_next` and last season's per-game
+      // output know nothing about a man on four bookings — so discounting
+      // before the blend would let `target` put the points straight back.
+      //
+      // Per event, because a one-match ban costs one match. `pStart` is scaled
+      // by declared availability first, so an already-injured or already-banned
+      // player is not also charged for collecting cards in matches the model
+      // has him missing.
+      //
+      // Subtracted per LEG rather than applied as one multiplier over the event.
+      // For a single fixture the two are identical, and for a double with two
+      // equal legs they are too — but a double's legs are rarely equal, and the
+      // leg at risk is specifically the later one, since only a booking already
+      // collected can ban him. Averaging over the two charges a cheap away trip
+      // at the price of a home banker, or the reverse. Off a 6.0 and a 2.0 leg
+      // with q = 0.17 the uniform version is out by a factor of two — that is
+      // the WORST case for those two numbers, not the generic one: with the
+      // cheap leg first and the banker second it is out by 1.5x instead.
+      if (fx.length > 0) {
+        const availGw = availabilityAt(el, off, kickoffTime(fx[0]));
+        const probs = suspensionMissProbs(
+          el,
+          matchesBefore,
+          fx.length,
+          st.gamesByTeam.get(el.team) ?? st.playedGws,
+          mmGw.pStart * availGw
+        );
+        let lost = 0;
+        for (let p = 0; p < probs.length; p++) {
+          // The blended value of leg p. These sum back to `gwXp` in real
+          // arithmetic, so this cannot lose or invent points; in floating point
+          // the two sides disagree by up to ~1e-14 absolute, which is why the
+          // claim below is a bound and not an identity.
+          lost += probs[p] * ((1 - blendW) * legXp[p] + blendW * blendLegTarget);
+        }
+        // `lost <= gwXp` holds without the clamp — every `probs[p]` is a
+        // negative-binomial pmf term so they sum to at most 1, and both
+        // `legXp[p]` and `target` are non-negative because `fixtureXp` ends in
+        // its own `Math.max(0, ...)`. The clamp is belt and braces, and it is
+        // also the reason the offset-0 single-fixture case stays bit-exact: with
+        // `lost === 0` and `gwXp >= 0` it is the identity. If `fixtureXp` ever
+        // stopped clamping, this line would quietly move every projection and
+        // the `toBe` assertion in suspension.test.ts would be the only guard.
+        gwXp = Math.max(0, gwXp - lost);
+      }
+      matchesBefore += fx.length;
       // Calibration: multiply by the correction learned from grading our own
       // past predictions against what actually happened.
       gwXp *= calibrationMultiplier(cal, el.element_type);

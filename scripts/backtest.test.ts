@@ -80,6 +80,7 @@ interface GwRow {
   goals: number;
   assists: number;
   bonus: number;
+  yellows: number;
   saves: number;
   ict: number;
   xg: number;
@@ -144,6 +145,7 @@ function loadSeason() {
     goals: +r.goals_scored,
     assists: +r.assists,
     bonus: +r.bonus,
+    yellows: +(r.yellow_cards || 0),
     saves: +r.saves,
     ict: +r.ict_index,
     xg: +(r.expected_goals || 0),
@@ -214,13 +216,14 @@ function buildStateAt(
         goals: s.goals + r.goals,
         assists: s.assists + r.assists,
         bonus: s.bonus + r.bonus,
+        yellows: s.yellows + r.yellows,
         saves: s.saves + r.saves,
         ict: s.ict + r.ict,
         xg: s.xg + r.xg,
         xa: s.xa + r.xa,
         dc: s.dc + r.dc,
       }),
-      { minutes: 0, starts: 0, points: 0, goals: 0, assists: 0, bonus: 0, saves: 0, ict: 0, xg: 0, xa: 0, dc: 0 }
+      { minutes: 0, starts: 0, points: 0, goals: 0, assists: 0, bonus: 0, yellows: 0, saves: 0, ict: 0, xg: 0, xa: 0, dc: 0 }
     );
     const price = atG[0]?.value ?? past[past.length - 1]?.value ?? 50;
     const recent = past.slice(-4);
@@ -282,6 +285,32 @@ function buildStateAt(
       clean_sheets: 0,
       goals_conceded: 0,
       bonus: cum.bonus,
+      // Read the scope of this carefully; an earlier version of this comment got
+      // it wrong. This harness grades `p.next` at `horizon: 1`, so offset 0 is
+      // the ONLY thing it ever sees, and the suspension term is a no-op there
+      // for a SINGLE fixture — not for a double, where a booking in the first
+      // leg can cost the second. The archives hold 42/23/10/10 team-doubles
+      // across 2022-23 to 2025-26, and that is exactly why three of the four
+      // `backtest-report-*.json` files moved when the term went in.
+      //
+      // 2023-24 did not move, and the reason is NOT that its doubles fall after
+      // the five-card window shuts — an earlier version of this comment said so
+      // and the fixture list contradicts it. Two of its 23 doubles are served at
+      // team match 7, inside [5, 19], and six more at matches 25-28 are inside
+      // the open [10, 32]; meanwhile 2024-25 and 2025-26 both moved with zero
+      // doubles inside the five-card window at all. The discriminator is at
+      // player level: nobody at a 2023-24 doubling club happened to be sitting
+      // one card short of an open threshold. Which also sizes the claim
+      // honestly — "three of four seasons move" rests on ten player-double
+      // events in four seasons, so it shows the channel is live and nothing
+      // more.
+      //
+      // So a green report here is weak evidence about one narrow channel —
+      // suspension risk inside imminent double gameweeks — and says nothing
+      // about the rest of the term. The simulator plans over five weeks and is
+      // where the term can actually bite, though see the note there about what
+      // that harness can and cannot resolve.
+      yellow_cards: cum.yellows,
       ict_index: cum.ict.toFixed(1),
       expected_goals: cum.xg.toFixed(2),
       expected_assists: cum.xa.toFixed(2),
@@ -388,8 +417,16 @@ if (process.env.XPSET) {
     const [k, v] = kv.split("=");
     const cfg = XP_CONFIG as unknown as Record<string, number>;
     if (!(k in cfg) || typeof cfg[k] !== "number") throw new Error(`XPSET: no numeric XP_CONFIG key "${k}"`);
-    cfg[k] = +v;
-    console.log(`XPSET ${k}=${v}`);
+    // Loud, not silent. `XPSET=gwDecay` or `XPSET=gwDecay=abc` used to write NaN
+    // straight into the config, and a NaN there does not crash — it quietly
+    // turns every projection into NaN and reports a season total built from
+    // nothing. A sweep that fails has to fail visibly.
+    const n = Number(v);
+    if (v == null || v === "" || !Number.isFinite(n)) {
+      throw new Error(`XPSET: "${k}" needs a finite numeric value, got "${v ?? ""}"`);
+    }
+    cfg[k] = n;
+    console.log(`XPSET ${k}=${n}`);
   }
 }
 /**
