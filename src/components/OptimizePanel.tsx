@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { fetchRecentStarts, type TeamData } from "@/lib/fpl";
+import { fetchRecentForm, type TeamData } from "@/lib/fpl";
+import type { RecentForm } from "@/lib/types";
 import { loadPastSeason } from "@/lib/pastSeasonStore";
 import { launchPool } from "@/lib/pool";
 import {
@@ -64,7 +65,7 @@ export default function OptimizePanel({
   const [launchPick, setLaunchPick] = useState(0);
   const [launchRunning, setLaunchRunning] = useState(false);
   const [phase, setPhase] = useState<string | null>(null);
-  const [recentStarts, setRecentStarts] = useState<Map<number, number> | null>(null);
+  const [recentForm, setRecentForm] = useState<Map<number, RecentForm> | null>(null);
   const [plan, setPlan] = useState<SeasonPlan | null>(null);
   const [planning, setPlanning] = useState(false);
   const [chipView, setChipView] = useState<ChipScenario | null>(null);
@@ -281,8 +282,8 @@ export default function OptimizePanel({
 
   // Recent line-up data (element-summary) for owned players + the optimizer's
   // realistic candidate pool. Fetched once and reused by both engines.
-  async function loadRecentStarts(): Promise<Map<number, number>> {
-    if (recentStarts) return recentStarts;
+  async function loadRecentForm(): Promise<Map<number, RecentForm>> {
+    if (recentForm) return recentForm;
     const prelim = projectAll({
       bootstrap: data.bootstrap,
       fixtures: data.fixtures,
@@ -299,10 +300,10 @@ export default function OptimizePanel({
         .slice(0, 15)
         .forEach((e) => ids.add(e.id));
     }
-    const map = await fetchRecentStarts([...ids], 5, 8, (done, total) =>
+    const map = await fetchRecentForm([...ids], 5, 8, (done, total) =>
       setPhase(`Checking recent line-ups… ${done}/${total}`)
     );
-    setRecentStarts(map);
+    setRecentForm(map);
     return map;
   }
 
@@ -310,7 +311,7 @@ export default function OptimizePanel({
     setRunning(true);
     setPhase("Checking recent line-ups…");
     try {
-      const recent = await loadRecentStarts();
+      const recent = await loadRecentForm();
       setPhase("Simulating thousands of squad combinations…");
       // Let the progress text paint before the (CPU-bound) search starts.
       await new Promise((r) => setTimeout(r, 30));
@@ -322,7 +323,7 @@ export default function OptimizePanel({
         freeTransfers: squad!.freeTransfers,
         nextEvent: squad!.nextEvent!,
         horizon,
-        recentStarts: recent,
+        recentForm: recent,
       });
       setResult(res);
     } finally {
@@ -335,7 +336,7 @@ export default function OptimizePanel({
     setPlanning(true);
     setPhase("Checking recent line-ups…");
     try {
-      const recent = await loadRecentStarts();
+      const recent = await loadRecentForm();
       setPhase("Planning six gameweeks ahead…");
       await new Promise((r) => setTimeout(r, 30));
       setPlan(
@@ -347,7 +348,7 @@ export default function OptimizePanel({
           freeTransfers: squad!.freeTransfers,
           nextEvent: squad!.nextEvent!,
           horizon: 6,
-          recentStarts: recent,
+          recentForm: recent,
         })
       );
     } finally {
@@ -371,7 +372,7 @@ export default function OptimizePanel({
           nextEvent: squad!.nextEvent!,
           horizon,
           precomputedXp: result?.xp,
-          recentStarts: recentStarts ?? undefined,
+          recentForm: recentForm ?? undefined,
         },
         chip
       );

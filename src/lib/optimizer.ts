@@ -9,6 +9,7 @@ import type {
   Fixture,
   OwnedPlayer,
   PastSeasonStats,
+  RecentForm,
 } from "./types";
 import { MAX_FREE_TRANSFERS, MAX_PER_CLUB, TRANSFER_HIT, VALID_FORMATIONS } from "./rules";
 import { makeFixtureIndex, projectAll, XP_CONFIG, type PlayerXp, type XpContext } from "./xp";
@@ -156,8 +157,8 @@ export interface OptimizerInput {
   beamWidth?: number; // default 8
   /** Reuse an already-computed projection (must match nextEvent/horizon). */
   precomputedXp?: Map<number, PlayerXp>;
-  /** Recent start share per element (see XpContext.recentStarts). */
-  recentStarts?: Map<number, number>;
+  /** Recent line-up form per element (see XpContext.recentForm). */
+  recentForm?: Map<number, RecentForm>;
 }
 
 export interface OptimizerResult {
@@ -185,7 +186,13 @@ export function optimize(input: OptimizerInput): OptimizerResult {
   const candN = input.candidatesPerPosition ?? 22;
   const beamWidth = input.beamWidth ?? 8;
 
-  const ctx: XpContext = { bootstrap, fixtures, nextEvent, horizon, recentStarts: input.recentStarts };
+  const ctx: XpContext = {
+    bootstrap,
+    fixtures,
+    nextEvent,
+    horizon,
+    recentForm: input.recentForm,
+  };
   const xp = input.precomputedXp ?? projectAll(ctx);
   const lastEvent = bootstrap.events.length > 0 ? bootstrap.events[bootstrap.events.length - 1].id : 38;
   const gws: number[] = [];
@@ -743,7 +750,7 @@ export interface PlannerInput {
   beamWidth?: number; // default 6
   singlesPerState?: number; // default 8
   precomputedXp?: Map<number, PlayerXp>;
-  recentStarts?: Map<number, number>;
+  recentForm?: Map<number, RecentForm>;
 }
 
 export function planHorizon(input: PlannerInput): SeasonPlan {
@@ -755,7 +762,13 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
 
   const xp =
     input.precomputedXp ??
-    projectAll({ bootstrap, fixtures, nextEvent, horizon, recentStarts: input.recentStarts });
+    projectAll({
+      bootstrap,
+      fixtures,
+      nextEvent,
+      horizon,
+      recentForm: input.recentForm,
+    });
   const lastEvent =
     bootstrap.events.length > 0 ? bootstrap.events[bootstrap.events.length - 1].id : 38;
   const gws: number[] = [];
@@ -983,7 +996,13 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
   const horizon = input.horizon ?? 5;
   const xp =
     input.precomputedXp ??
-    projectAll({ bootstrap, fixtures, nextEvent, horizon, recentStarts: input.recentStarts });
+    projectAll({
+      bootstrap,
+      fixtures,
+      nextEvent,
+      horizon,
+      recentForm: input.recentForm,
+    });
   const lastEvent =
     bootstrap.events.length > 0 ? bootstrap.events[bootstrap.events.length - 1].id : 38;
   const gws: number[] = [];

@@ -280,6 +280,65 @@ describe("planHorizon (multi-GW sequenced planner)", () => {
   });
 });
 
+// The recency data is fetched by the panel and has to travel through the
+// optimizer to reach the projection. Every hop is a plain optional field being
+// copied into an object literal, which typechecks and lints identically whether
+// it is there or not — so deleting all three forwards used to leave the whole
+// suite green while the deployed app quietly stopped using the best minutes
+// signal it has. These tests watch the wire, not the model.
+describe("the optimizer forwards recent form to the projection", () => {
+  const benchedEverywhere = (b: ReturnType<typeof makeMockBootstrap>) =>
+    new Map(
+      b.elements.map((e) => [
+        e.id,
+        { startShare: 0, minsPerGame: 0, minsPerStart: null as number | null },
+      ])
+    );
+
+  it("optimize() reaches projectAll", () => {
+    const b = makeMockBootstrap();
+    const own = makeMockOwned(b);
+    const base = optimize({
+      bootstrap: b,
+      fixtures,
+      owned: own,
+      bank: 0,
+      freeTransfers: 1,
+      nextEvent: 11,
+      horizon: 3,
+    });
+    const benched = optimize({
+      bootstrap: b,
+      fixtures,
+      owned: own,
+      bank: 0,
+      freeTransfers: 1,
+      nextEvent: 11,
+      horizon: 3,
+      recentForm: benchedEverywhere(b),
+    });
+    // Nobody has started in five games: every projection must come down.
+    expect(benched.keepHorizonXp).toBeLessThan(base.keepHorizonXp * 0.9);
+  });
+
+  it("planHorizon() reaches projectAll", () => {
+    const b = makeMockBootstrap();
+    const own = makeMockOwned(b);
+    const args = {
+      bootstrap: b,
+      fixtures,
+      owned: own,
+      bank: 0,
+      freeTransfers: 1,
+      nextEvent: 11,
+      horizon: 3,
+    };
+    const base = planHorizon(args);
+    const benched = planHorizon({ ...args, recentForm: benchedEverywhere(b) });
+    expect(benched.keepXp).toBeLessThan(base.keepXp * 0.9);
+  });
+});
+
 describe("xp model — recent starts", () => {
   it("a player who lost his place projects lower; a new starter higher", () => {
     const b = makeMockBootstrap();
@@ -290,14 +349,16 @@ describe("xp model — recent starts", () => {
       fixtures,
       nextEvent: 11,
       horizon: 3,
-      recentStarts: new Map([[el.id, 0]]), // started 0 of last 5
+      // started 0 of last 5
+      recentForm: new Map([[el.id, { startShare: 0, minsPerGame: 0, minsPerStart: null }]]),
     });
     const nailed = projectAll({
       bootstrap: b,
       fixtures,
       nextEvent: 11,
       horizon: 3,
-      recentStarts: new Map([[el.id, 1]]), // started 5 of 5
+      // started 5 of 5, full matches
+      recentForm: new Map([[el.id, { startShare: 1, minsPerGame: 90, minsPerStart: 90 }]]),
     });
     expect(benched.get(el.id)!.total).toBeLessThan(base.get(el.id)!.total);
     expect(nailed.get(el.id)!.total).toBeGreaterThanOrEqual(base.get(el.id)!.total);

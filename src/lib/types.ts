@@ -168,6 +168,42 @@ export interface SeasonWorkload {
   starts?: number;
 }
 
+/**
+ * What a player has actually been doing in the last ~5 team games, read from
+ * the element-summary rows.
+ *
+ * These three numbers are ONE observation of one player and are kept in one
+ * record on purpose. They were previously two parallel `Map<number, number>`
+ * threaded side by side through the context, the optimizer and the panel — two
+ * structurally identical maps, so swapping them at any call site typechecked,
+ * linted and silently modelled every player's start share as his minutes.
+ *
+ * They answer three different questions and the model consumes them on
+ * different axes: `startShare` says how often he is in the eleven (drives
+ * `pStart`), `minsPerStart` says how long he stays on once he is (drives
+ * `minsPerStart`), and `minsPerGame` is the unconditional figure that carries a
+ * pure substitute's real playing time (drives the `share` floor).
+ */
+export interface RecentForm {
+  /** Fraction of the last ~5 recorded rounds the player STARTED. */
+  startShare: number;
+  /** Mean minutes per recorded round — starts, cameos and unused benchings. */
+  minsPerGame: number;
+  /**
+   * Mean minutes in the rounds he STARTED, measured directly; `null` when he
+   * started none of them.
+   *
+   * This is the quantity the minutes model wants, and it was previously
+   * RECONSTRUCTED as `minsPerGame / startShare`, which charges every bench
+   * minute to the starts: a defender hooked at 50' who also plays two cameos
+   * comes out at 87.5 implied minutes per start instead of his real 50, which
+   * is the difference between a 0.458 and a 1.000 chance of the sixty-minute
+   * point. The joint distribution was in the rows all along and the two
+   * marginals threw it away.
+   */
+  minsPerStart: number | null;
+}
+
 export interface EntryLeague {
   id: number;
   name: string;

@@ -9,7 +9,8 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { projectAll } from "../src/lib/xp";
+import { projectAll, XP_CONFIG, XP_DEBUG } from "../src/lib/xp";
+import { repairStartsColumn } from "./archiveRepair";
 import {
   applyGwOutcome,
   setActiveCalibration,
@@ -17,7 +18,14 @@ import {
   type CalibrationState,
   type GradedPlayer,
 } from "../src/lib/calibration";
-import type { Bootstrap, Element, ElementType, Fixture, Team } from "../src/lib/types";
+import type {
+  Bootstrap,
+  Element,
+  ElementType,
+  Fixture,
+  RecentForm,
+  Team,
+} from "../src/lib/types";
 
 // Season under test — override with SEASON=2024-25 to backtest a different year.
 const SEASON = process.env.SEASON ?? "2025-26";
@@ -145,6 +153,17 @@ function loadSeason() {
     vaastavXp: +(r.xP || 0),
   }));
 
+  // See scripts/archiveRepair.ts — the 2022-23 dump's `starts` column is zero
+  // for every player in gameweeks 1-15 while ~300 played, which silently voided
+  // the model's best in-season minutes signal for that whole stretch. Unit
+  // tested in src/lib/__tests__/archiveRepair.test.ts.
+  const brokenRounds = repairStartsColumn(rows);
+  if (brokenRounds.length) {
+    console.log(
+      `STARTS-COLUMN REPAIRED for ${SEASON}: rounds ${brokenRounds.join(",")} had zero starts and non-zero minutes; substituted minutes >= 45.`
+    );
+  }
+
   // rows indexed by element, sorted by round
   const byElement = new Map<number, GwRow[]>();
   for (const r of rows) {
@@ -164,7 +183,7 @@ function buildStateAt(
 ): {
   bootstrap: Bootstrap;
   fixtures: Fixture[];
-  recentStarts: Map<number, number>;
+  recentForm: Map<number, RecentForm>;
   actual: Map<number, number>;
   minutesAt: Map<number, number>;
   vaastav: Map<number, number>;
@@ -173,7 +192,7 @@ function buildStateAt(
 } {
   const { teams, meta, byElement } = season;
   const elements: Element[] = [];
-  const recentStarts = new Map<number, number>();
+  const recentForm = new Map<number, RecentForm>();
   const actual = new Map<number, number>();
   const minutesAt = new Map<number, number>();
   const vaastav = new Map<number, number>();
@@ -210,7 +229,15 @@ function buildStateAt(
     const ppg = played > 0 ? cum.points / played : 0;
     const last5 = past.slice(-5);
     if (last5.length > 0) {
-      recentStarts.set(id, last5.filter((r) => r.starts > 0).length / last5.length);
+      const started = last5.filter((r) => r.starts > 0);
+      recentForm.set(id, {
+        startShare: started.length / last5.length,
+        minsPerGame: last5.reduce((s, r) => s + r.minutes, 0) / last5.length,
+        minsPerStart:
+          started.length > 0
+            ? started.reduce((s, r) => s + r.minutes, 0) / started.length
+            : null,
+      });
     }
     if (atG.length > 0) {
       actual.set(id, atG.reduce((s, r) => s + r.totalPoints, 0));
@@ -291,7 +318,7 @@ function buildStateAt(
     team_h_score: null,
     team_a_score: null,
   }));
-  return { bootstrap, fixtures, recentStarts, actual, minutesAt, vaastav, form: formMap, ppg: ppgMap };
+  return { bootstrap, fixtures, recentForm, actual, minutesAt, vaastav, form: formMap, ppg: ppgMap };
 }
 
 // ---------- metrics ---------------------------------------------------------
@@ -356,13 +383,101 @@ interface GwEval {
   fitBias: number;
 }
 
+if (process.env.XPSET) {
+  for (const kv of process.env.XPSET.split(",")) {
+    const [k, v] = kv.split("=");
+    const cfg = XP_CONFIG as unknown as Record<string, number>;
+    if (!(k in cfg) || typeof cfg[k] !== "number") throw new Error(`XPSET: no numeric XP_CONFIG key "${k}"`);
+    cfg[k] = +v;
+    console.log(`XPSET ${k}=${v}`);
+  }
+}
+/**
+ * The instrument that produced `XP_CONFIG.p60Curve`.
+ *
+ * It is kept rather than deleted because the two constants in that config entry
+ * are a measurement, and a measurement with no reproducible apparatus is just an
+ * assertion. Re-run it per season with:
+ *
+ *   P60PROBE=1 SEASON=2024-25 npx vitest run -c vitest.backtest.config.ts \
+ *     --disable-console-intercept -t "dumps"
+ *
+ * It writes `/tmp/p60-<SEASON>.csv` with one row per player-gameweek: the
+ * model's OWN `pStart` and `minsPerStart` at prediction time (read out of
+ * `XP_DEBUG.minutes`, i.e. through the real `projectAll` path rather than a
+ * replica of it) beside what the player actually did that round. Fitting the
+ * logistic on the rows where `started === 1` reproduces the curve.
+ *
+ * Reading the model's own state is the point. A table built from the season's
+ * final minutes-per-start would condition on the outcome and leak, and would
+ * flatter any curve fitted to it.
+ *
+ * Off by default — it costs ~37 full `buildStateAt` passes and writes to /tmp.
+ */
+describe(`${SEASON} p60 probe`, () => {
+  it.runIf(process.env.P60PROBE)("dumps the model's own minsPerStart against outcomes", { timeout: 600_000 }, () => {
+    const season = loadSeason();
+    const out: string[] = [];
+    for (let g = 2; g <= 38; g++) {
+      const st = buildStateAt(g, season);
+      XP_DEBUG.minutes = new Map();
+      projectAll({
+        bootstrap: st.bootstrap,
+        fixtures: st.fixtures,
+        nextEvent: g,
+        horizon: 1,
+        recentForm: st.recentForm,
+      });
+      const mmAll = XP_DEBUG.minutes!;
+      XP_DEBUG.minutes = null;
+      for (const [id, rows] of season.byElement) {
+        const row = rows.find((r) => r.round === g);
+        if (!row) continue;
+        const mm = mmAll.get(id);
+        if (!mm) continue;
+        out.push(
+          [id, g, mm.pStart.toFixed(4), mm.minsPerStart.toFixed(2), row.starts > 0 ? 1 : 0, row.minutes].join(",")
+        );
+      }
+    }
+    fs.writeFileSync(`/tmp/p60-${SEASON}.csv`, "element,round,pStart,minsPerStart,started,minutes\n" + out.join("\n"));
+    console.log(`wrote /tmp/p60-${SEASON}.csv (${out.length} rows)`);
+  });
+});
+
 describe(`${SEASON} season backtest`, () => {
   it("replays the season blind and grades the model", { timeout: 600_000 }, () => {
     const season = loadSeason();
     const START = 2;
     const END = 38;
 
-    const run = (useCalibration: boolean, useRecentStarts: boolean) => {
+    /**
+     * How much of the last-five record the arm is allowed to see.
+     *
+     * `recentForm` carries three numbers on two independent axes — how OFTEN he
+     * starts (`startShare`, plus `minsPerGame` for the substitute floor) and how
+     * LONG he lasts once he does (`minsPerStart`). One boolean used to gate all
+     * three, so the ablation could only say "the block helps" and the report
+     * line called the whole thing "recent-starts", which was the name of only
+     * one of the axes.
+     *
+     * `starts` supplies the record with `minsPerStart` nulled, which is exactly
+     * the state the live fetch produces for a player who started none of his
+     * last five: the minutes model then falls back to the season figure. So the
+     * gap between `full` and `starts` is the measured-minutes term alone, and
+     * the gap between `starts` and `none` is the start-share term alone.
+     */
+    type RecentMode = "full" | "starts" | "none";
+
+    const recentFor = (st: ReturnType<typeof buildStateAt>, mode: RecentMode) => {
+      if (mode === "none") return undefined;
+      if (mode === "full") return st.recentForm;
+      const stripped = new Map<number, RecentForm>();
+      for (const [id, f] of st.recentForm) stripped.set(id, { ...f, minsPerStart: null });
+      return stripped;
+    };
+
+    const run = (useCalibration: boolean, recentMode: RecentMode) => {
       let cal: CalibrationState = { factors: IDENTITY_FACTORS, log: [], reconciled: [] };
       setActiveCalibration(IDENTITY_FACTORS);
       const evals: GwEval[] = [];
@@ -374,7 +489,7 @@ describe(`${SEASON} season backtest`, () => {
           fixtures: st.fixtures,
           nextEvent: g,
           horizon: 1,
-          recentStarts: useRecentStarts ? st.recentStarts : undefined,
+          recentForm: recentFor(st, recentMode),
         });
 
         // Two populations, and the difference between them is the whole reason
@@ -561,14 +676,41 @@ describe(`${SEASON} season backtest`, () => {
       };
     };
 
-    const full = run(true, true);
-    const noCal = run(false, true);
-    const noRecent = run(false, false);
+    // The two ablation arms are only worth reporting if they differ in the way
+    // they claim to. Checked structurally rather than through the metrics,
+    // because the measured-minutes term turns out to be a wash — so a "starts"
+    // arm silently identical to the full one would move the numbers by less
+    // than the noise and no metric assertion could tell.
+    {
+      const probe = buildStateAt(START, season);
+      const stripped = recentFor(probe, "starts")!;
+      const whole = recentFor(probe, "full")!;
+      const withMins = [...whole.values()].filter((f) => f.minsPerStart != null);
+      expect(withMins.length).toBeGreaterThan(50);
+      expect(stripped.size).toBe(whole.size);
+      expect([...stripped.values()].every((f) => f.minsPerStart === null)).toBe(true);
+      // and nothing else about the record was touched
+      for (const [id, f] of whole) {
+        expect(stripped.get(id)!.startShare).toBe(f.startShare);
+        expect(stripped.get(id)!.minsPerGame).toBe(f.minsPerGame);
+      }
+      expect(recentFor(probe, "none")).toBeUndefined();
+    }
+
+    const full = run(true, "full");
+    const noCal = run(false, "full");
+    const noRecentMins = run(false, "starts");
+    const noRecent = run(false, "none");
 
     const report = {
       full: summarize(full.evals, "full model + self-calibration"),
       noCal: summarize(noCal.evals, "model without calibration"),
-      noRecent: summarize(noRecent.evals, "without recent-starts"),
+      // Both ablations run WITHOUT calibration, so they are comparable to
+      // `noCal` and to each other — not to `full`. Calibration is a feedback
+      // loop that partly absorbs whatever the ablated term was contributing,
+      // which would flatter every ablation against the calibrated arm.
+      noRecentMins: summarize(noRecentMins.evals, "recent start-share only, season minutes-per-start"),
+      noRecent: summarize(noRecent.evals, "no recent form at all"),
       finalFactors: full.cal.factors,
       perGw: full.evals.map((e) => ({
         gw: e.gw,
@@ -585,7 +727,19 @@ describe(`${SEASON} season backtest`, () => {
       path.resolve(__dirname, `../backtest-report-${SEASON}.json`),
       JSON.stringify(report, null, 2)
     );
-    console.log(JSON.stringify({ full: report.full, noCal: report.noCal, noRecent: report.noRecent, finalFactors: report.finalFactors }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          full: report.full,
+          noCal: report.noCal,
+          noRecentMins: report.noRecentMins,
+          noRecent: report.noRecent,
+          finalFactors: report.finalFactors,
+        },
+        null,
+        2
+      )
+    );
 
     // What the optimizer actually uses is the RANKING — it must clearly beat
     // naive baselines, and calibrated bias must be small.
@@ -665,9 +819,34 @@ describe(`${SEASON} season backtest`, () => {
     expect(report.full.rhoPlayed).toBeGreaterThan(0.28);
     // `rho` is the self-selected set, kept as a loose floor. It cannot compare
     // versions, but it does move when something breaks: reverting the
-    // recent-starts term to weight 0 puts it at 0.2464 and reddens this line,
+    // `recentStartsWeight` to 0 puts it at 0.2464 and reddens this line,
     // which is more than `rhoAll` managed.
     expect(report.full.rho).toBeGreaterThan(0.25);
     expect(Math.abs(report.full.biasLate)).toBeLessThan(0.2);
+
+    // The recent-form block has to earn its place. Measured against `noCal`,
+    // which is the same arm with the block switched on:
+    //
+    //             rhoAll: noCal   start-share only   no recent form
+    //   2022-23           0.6761       0.6760            0.6535
+    //   2023-24           0.6565       0.6560            0.6353
+    //   2024-25           0.6744       0.6742            0.6547
+    //   2025-26           0.6903       0.6900            0.6718
+    //
+    // Read the two gaps separately, which is the whole reason the middle arm
+    // exists. The start-share axis is worth +0.018 to +0.023 rhoAll in every
+    // season — the largest single term in the minutes model. The measured
+    // minutes-per-start axis is worth -0.0005 to +0.0003, i.e. nothing
+    // distinguishable from zero, and `top10` agrees (-0.09, -0.07, -0.01,
+    // +0.02). It is kept for the reason it was written — it is the quantity the
+    // model actually asks for, and the reconstruction it replaced could not
+    // represent a hooked starter at all — but no claim of a metric gain is made
+    // for it, and this table is here so nobody makes one later.
+    expect(report.noCal.rhoAll - report.noRecent.rhoAll).toBeGreaterThan(0.01);
+    expect(report.noRecentMins.rhoAll - report.noRecent.rhoAll).toBeGreaterThan(0.01);
+    // The other half of the split, asserted as the null result it is. If the
+    // measured minutes-per-start term ever starts moving this by more than a
+    // hundredth of rhoAll, something has changed and the table above is stale.
+    expect(Math.abs(report.noCal.rhoAll - report.noRecentMins.rhoAll)).toBeLessThan(0.005);
   });
 });

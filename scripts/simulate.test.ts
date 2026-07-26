@@ -47,6 +47,7 @@ import type {
   Fixture,
   OwnedPlayer,
   PastSeasonStats,
+  RecentForm,
   Team,
 } from "../src/lib/types";
 
@@ -325,7 +326,7 @@ function loadPreviousSeason(season: Season): Map<number, PastSeasonStats> | unde
 function buildStateAt(g: number, season: Season) {
   const { teams, meta, fixturesBase, byElement, teamIdByName } = season;
   const elements: Element[] = [];
-  const recentStarts = new Map<number, number>();
+  const recentForm = new Map<number, RecentForm>();
   const actual = new Map<number, number>();
   const minutesAt = new Map<number, number>();
   for (const [id, all] of byElement) {
@@ -372,7 +373,17 @@ function buildStateAt(g: number, season: Season) {
     const played = past.filter((r) => r.minutes > 0).length;
     const ppg = played ? cum.points / played : 0;
     const last5 = past.slice(-5);
-    if (last5.length) recentStarts.set(id, last5.filter((r) => r.starts > 0).length / last5.length);
+    if (last5.length) {
+      const started = last5.filter((r) => r.starts > 0);
+      recentForm.set(id, {
+        startShare: started.length / last5.length,
+        minsPerGame: last5.reduce((s, r) => s + r.minutes, 0) / last5.length,
+        minsPerStart:
+          started.length > 0
+            ? started.reduce((s, r) => s + r.minutes, 0) / started.length
+            : null,
+      });
+    }
     if (atG.length) {
       actual.set(id, atG.reduce((s, r) => s + r.tp, 0));
       minutesAt.set(id, atG.reduce((s, r) => s + r.minutes, 0));
@@ -455,7 +466,7 @@ function buildStateAt(g: number, season: Season) {
     team_h_score: null,
     team_a_score: null,
   }));
-  return { bootstrap, fixtures, recentStarts, actual, minutesAt };
+  return { bootstrap, fixtures, recentForm, actual, minutesAt };
 }
 
 
@@ -804,7 +815,7 @@ describe(`${SEASON} full-season simulation`, () => {
         fixtures: st.fixtures,
         nextEvent: gw,
         horizon: 5,
-        recentStarts: st.recentStarts,
+        recentForm: st.recentForm,
       });
       const xpNext = (id: number) => xp.get(id)?.next ?? 0;
 
@@ -831,7 +842,7 @@ describe(`${SEASON} full-season simulation`, () => {
             nextEvent: gw,
             horizon: 5,
             maxTransfers: Math.min(ft, 2),
-            recentStarts: st.recentStarts,
+            recentForm: st.recentForm,
           });
           const free = res.plans.filter((p) => p.hitCost === 0 && p.gainVsKeep > 0.5);
           const best = free.sort((a, b) => b.gainVsKeep - a.gainVsKeep)[0];

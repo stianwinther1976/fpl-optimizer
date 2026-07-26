@@ -10,6 +10,7 @@ import type {
   LeagueStandings,
   OwnedPlayer,
   PastSeasonStats,
+  RecentForm,
   SquadState,
   Transfer,
 } from "./types";
@@ -113,17 +114,25 @@ export const api = {
 };
 
 /**
- * Recent start share for a set of players: fraction of each player's last
- * `lastN` recorded rounds they STARTED (element-summary endpoint). Fetched
+ * Recent line-up data for a set of players (element-summary endpoint), fetched
  * with limited concurrency; failures are simply left out of the map.
+ *
+ * A player is included only when the `starts` column is actually present — FPL
+ * only began emitting it in 2022/23, and treating an absent column as "started
+ * nothing" would bench every player in the squad.
+ *
+ * `minsPerStart` is measured over the rounds he started rather than derived
+ * from the other two, which is the whole reason the rows are read here instead
+ * of being reduced to marginals: the joint distribution of (started, minutes)
+ * only exists in these rows.
  */
-export async function fetchRecentStarts(
+export async function fetchRecentForm(
   ids: number[],
   lastN = 5,
   concurrency = 8,
   onProgress?: (done: number, total: number) => void
-): Promise<Map<number, number>> {
-  const out = new Map<number, number>();
+): Promise<Map<number, RecentForm>> {
+  const out = new Map<number, RecentForm>();
   const queue = [...new Set(ids)];
   let done = 0;
   const worker = async () => {
@@ -134,8 +143,13 @@ export async function fetchRecentStarts(
         const s = await api.elementSummary(id);
         const rows = s.history.slice(-lastN);
         if (rows.length > 0 && rows.some((r) => r.starts != null)) {
-          const started = rows.filter((r) => (r.starts ?? 0) > 0).length;
-          out.set(id, started / rows.length);
+          const started = rows.filter((r) => (r.starts ?? 0) > 0);
+          const startMins = started.reduce((a, r) => a + (r.minutes ?? 0), 0);
+          out.set(id, {
+            startShare: started.length / rows.length,
+            minsPerGame: rows.reduce((a, r) => a + (r.minutes ?? 0), 0) / rows.length,
+            minsPerStart: started.length > 0 ? startMins / started.length : null,
+          });
         }
       } catch {
         // no data — season model carries on alone

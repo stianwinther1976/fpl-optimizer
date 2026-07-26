@@ -23,6 +23,7 @@ import type {
   Element,
   Fixture,
   PastSeasonStats,
+  RecentForm,
   SeasonWorkload,
   Team,
 } from "./types";
@@ -157,6 +158,63 @@ export const XP_CONFIG = {
    */
   subProb: 0.15,
   recentStartsWeight: 0.65, // last ~5 games vs season starts share
+  /**
+   * The same recency correction, applied to the OTHER axis. `recentStartsWeight`
+   * only ever moved `pStart`; `minsPerStart` stayed at the season-long
+   * `minutes / starts`, so a player who used to finish matches and is now hooked
+   * on the hour was priced on how long he played in August. Measured against
+   * actual minutes on the full population (Spearman, mean over gameweeks):
+   *
+   *              model  recentStarts  form   recentMinutes
+   *   2022-23   0.7428     0.7381    0.7411     0.7789
+   *   2023-24   0.7349     0.7310    0.7457     0.7806
+   *   2024-25   0.7374     0.7350    0.7493     0.7806
+   *   2025-26   0.7561     0.7481    0.7719     0.7946
+   *
+   * Mean minutes over the last five team games is a better minutes predictor
+   * than the whole composite the model was building, in every season, and the
+   * start-share term the model did consume was the WEAKEST of the four.
+   */
+  recentMinutesWeight: 0.65,
+  /**
+   * P(plays 60+ | he started), as a function of the model's own minutes-per-
+   * start. This is the appearance point, and it multiplies the clean sheet and
+   * the keeper's save term as well, so it is one of the most load-bearing
+   * numbers in the projection.
+   *
+   * It used to be a step: 1.0 at 60 minutes or more, and `(mps/60)*0.5` below.
+   * Both halves are wrong, and the step in between is worse than either: 59
+   * minutes scored 0.492 and 60 scored 1.000, so a single minute of drift in
+   * `minsPerStart` — now a fast-moving quantity — doubled a player's appearance
+   * points. The curve was measured through the real projection path, not a
+   * replica: the backtest was instrumented to dump the model's own
+   * `minsPerStart` for every player-gameweek of 2023-24, 2024-25 and 2025-26
+   * alongside what actually happened, and these two constants are the
+   * maximum-likelihood logistic over the 23,158 rows where the player really
+   * did start.
+   *
+   *      mps    n     true    fitted   old step
+   *     60-65   245   0.800   0.798    1.000
+   *     65-70   556   0.824   0.842    1.000
+   *     70-75  1213   0.879   0.879    1.000
+   *     75-80  2268   0.892   0.908    1.000
+   *     80-85  4004   0.924   0.930    1.000
+   *     85-90  7329   0.948   0.948    1.000
+   *     90     7350   0.963   0.961    1.000
+   *
+   * The headline is that certainty was never justified: even a man who averages
+   * a full ninety minutes gets substituted, sent off or injured before the hour
+   * in about one start in twenty-seven. Averaged over all 23,158 starts the old
+   * step overstated this probability by 3.3 percentage points, on a term that
+   * every outfield player's floor is built from.
+   *
+   * Below 60 the fit is deliberately NOT pinned to the measurement. Only 171 of
+   * the 23,158 rows are down there, they read ~0.82 against a fitted 0.61-0.74,
+   * and raising a curve to meet 171 rows would be fitting noise on the exact
+   * population — the hooked-at-halftime rotation player — where being wrong is
+   * most expensive. The fit is left conservative there.
+   */
+  p60Curve: { intercept: -2.441, slope: 0.061 },
   // --- Pre-season minutes (no game has been played yet) ---
   // Last season's STARTS out of 38, shrunk toward a price/position prior worth
   // `preseasonPriorGames` games of evidence. Shrinkage matters in both
@@ -920,12 +978,12 @@ export interface XpContext {
   nextEvent: number;
   horizon?: number;
   /**
-   * elementId -> share of the team's last ~5 games the player STARTED
-   * (from the element-summary endpoint). The best minutes predictor there is:
-   * a player who just became a nailed starter — or just lost his place —
-   * is priced correctly within a week instead of a month.
+   * elementId -> what he has been doing in the team's last ~5 games (from the
+   * element-summary endpoint). The best minutes predictor there is: a player
+   * who just became a nailed starter — or just lost his place, or is being
+   * hooked on the hour — is priced correctly within a week instead of a month.
    */
-  recentStarts?: Map<number, number>;
+  recentForm?: Map<number, RecentForm>;
   /**
    * elementId -> last completed season's stat line (element-summary
    * history_past). The grounded pre-season signal for who actually played and
@@ -1739,7 +1797,7 @@ function clubStartMass(
 function minutesModel(
   el: Element,
   teamGames: number,
-  recentStartShare?: number,
+  recent?: RecentForm,
   past?: PastSeasonStats,
   seasonStartYear = new Date().getUTCFullYear(),
   ownPct?: number
@@ -1762,17 +1820,59 @@ function minutesModel(
   }
   // Recency: what happened in the last ~5 team games outweighs the season
   // average (a new nailed starter, a lost place, a returning injury).
-  if (recentStartShare != null) {
+  if (recent != null) {
     const w = XP_CONFIG.recentStartsWeight;
-    const pStart = clamp(w * recentStartShare + (1 - w) * mm.pStart, 0, 1);
-    const minsPerStart = mm.minsPerStart > 0 ? mm.minsPerStart : recentStartShare > 0 ? 75 : 0;
-    return {
-      pStart,
-      minsPerStart,
-      share: clamp((pStart * minsPerStart) / 90, 0, 1),
-    };
+    const pStart = clamp(w * recent.startShare + (1 - w) * mm.pStart, 0, 1);
+    let minsPerStart = mm.minsPerStart > 0 ? mm.minsPerStart : recent.startShare > 0 ? 75 : 0;
+    // Recent minutes, on the axis the start share does not touch. `minsPerStart`
+    // is MEASURED over the rounds he started, not reconstructed by dividing his
+    // per-game minutes by his start share — that quotient charged every bench
+    // minute to the starts and promoted exactly the substitute the start share
+    // exists to demote. Null when he started none of the last five, in which
+    // case there is nothing to say about how long his starts last and his
+    // minutes are carried by the depressed `pStart` and the floor below.
+    // The second condition enforces the record's invariant rather than the
+    // arithmetic: `minsPerStart` is non-null EXACTLY when `startShare > 0`, and
+    // the line above therefore leaves the running value at 0 only for a player
+    // with no starts anywhere — for whom a minutes-per-start figure is a
+    // contradiction. Three independent places build these records (the live
+    // fetch, the backtest and the simulator), so the invariant is checked here
+    // rather than assumed.
+    const wm = XP_CONFIG.recentMinutesWeight;
+    if (recent.minsPerStart != null && minsPerStart > 0) {
+      // Clamped at a full match because the archive harnesses feed this too and
+      // 90 is the domain boundary. Both sides of the blend are then within
+      // [0, 90], so the result is as well and needs no second clamp.
+      const recentMps = clamp(recent.minsPerStart, 0, 90);
+      minsPerStart = wm * recentMps + (1 - wm) * minsPerStart;
+    }
+    // The same one-sided floor the PRE-SEASON path has carried all along (see
+    // `observedShare` above): a regular substitute plays real minutes that
+    // `pStart * minsPerStart` throws away. In-season that omission was worse
+    // than pre-season, because this branch OVERWRITES the season `share` the
+    // block above computed from actual minutes: a player who has never started
+    // came out at `{0, 0, 0}` and was modelled at the 0.03 floor in `xMins`,
+    // however many minutes he was really playing. A floor can only ever raise a
+    // player, so nobody who does start is demoted by it.
+    const subFloor = mm.pStart === 0 ? recent.minsPerGame / 90 : 0;
+    const share = Math.max((pStart * minsPerStart) / 90, subFloor);
+    return { pStart, minsPerStart, share: clamp(share, 0, 1) };
   }
   return mm;
+}
+
+/**
+ * P(on the pitch at 60 minutes | he started), from `minsPerStart`.
+ *
+ * See `XP_CONFIG.p60Curve` for where the two constants come from. Zero is
+ * returned unchanged rather than fed to the curve: `minsPerStart === 0` is the
+ * model's "he does not start" state, not a claim that his starts last no time,
+ * and it always arrives with `pStart === 0` beside it.
+ */
+export function p60GivenStart(minsPerStart: number): number {
+  if (minsPerStart <= 0) return 0;
+  const c = XP_CONFIG.p60Curve;
+  return 1 / (1 + Math.exp(-(c.intercept + c.slope * minsPerStart)));
 }
 
 function kickoffTime(f: Fixture | undefined): number | null {
@@ -1794,7 +1894,7 @@ function fixtureXp(
   const cfg = XP_CONFIG;
   const avail = availabilityAt(el, gwOffset, kickoffTime(fixture));
   if (avail === 0) return 0;
-  const p60 = avail * mm.pStart * (mm.minsPerStart >= 60 ? 1 : (mm.minsPerStart / 60) * 0.5);
+  const p60 = avail * mm.pStart * p60GivenStart(mm.minsPerStart);
   const pPlay = avail * Math.min(1, mm.pStart + cfg.subProb);
   const xMins = avail * Math.min(1, mm.share + 0.03); // attacking-minutes share
 
@@ -2209,7 +2309,7 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
     let mm = minutesModel(
       el,
       teamGames,
-      ctx.recentStarts?.get(el.id),
+      ctx.recentForm?.get(el.id),
       past,
       seasonStartYear,
       ownPct.get(el.id)
