@@ -1,0 +1,54 @@
+# Take a snapshot of the live FPL API and publish it on a data branch.
+#
+# Triggered by pushing to `data-snapshot` (and by hand via workflow_dispatch).
+# The push trigger is the one that matters: the sandbox this repo is developed
+# from can reach github.com but NOT fantasy.premierleague.com, and it cannot
+# call the Actions API either, so "push a branch" is the only handle it has.
+#
+# Output goes to the `fpl-snapshot-out` branch, never to main and never back to
+# `data-snapshot` — writing to the trigger branch would re-fire this workflow
+# forever.
+name: FPL snapshot
+
+on:
+  push:
+    branches: [data-snapshot]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fpl-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Fetch snapshot
+        run: node scripts/snapshot/fetch-snapshot.mjs
+
+      - name: Publish to fpl-snapshot-out
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # An orphan branch, recreated each run. The snapshots are multi-megabyte
+          # JSON and there is no reason to accumulate history of them; the sandbox
+          # only ever wants the newest one.
+          git checkout --orphan fpl-snapshot-out
+          git rm -r --cached . >/dev/null
+          git add -f snapshot/
+          # [skip ci] keeps Vercel from building a preview deployment of a branch
+          # that contains nothing but data.
+          git commit -m "FPL snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ) [skip ci]"
+          git push --force origin fpl-snapshot-out
