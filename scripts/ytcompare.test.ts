@@ -63,6 +63,13 @@ globalThis.fetch = (async (input: RequestInfo | URL) => {
   }
   throw new Error(`unstubbed fetch: ${url}`);
 }) as typeof fetch;
+// Kept so a SECOND test in this file can put the stub back. The main test
+// restores `origFetch` when it finishes, which is right — it should not leave a
+// global monkey-patched for whatever runs next — but it also means any later
+// test in the same file starts with the real transport and would try to reach
+// fantasy.premierleague.com, which this sandbox cannot do. Discovered the
+// obvious way.
+const stubFetch = globalThis.fetch;
 
 const byId = new Map(bootstrap.elements.map((e) => [e.id, e]));
 const teamName = new Map(bootstrap.teams.map((t) => [t.id, t.short_name]));
@@ -1162,3 +1169,213 @@ test("score the published squads and the app's drafts on live 2026/27 data", asy
 
   globalThis.fetch = origFetch;
 });
+
+// ---------------------------------------------------------------------------
+// THE HAALAND THRESHOLD
+//
+// The app's £100.0m draft does not contain Erling Haaland, and the user asked
+// whether that can possibly be right. The answer given at the time included a
+// sensitivity table — "his projection would have to rise by X% before he gets
+// picked" — and that table was produced in conversation, from a reading of the
+// model rather than from a run of it. Nothing in this repository computed X, so
+// nothing in this repository could contradict it when it was wrong.
+//
+// This block computes it. It is gated because it runs a full hill-climb per
+// probe point and takes minutes:
+//
+//   HAALAND=1 npx vitest run -c vitest.yt.config.ts --disable-console-intercept
+//
+// WHAT IS AND IS NOT PROVED HERE. `bestLegalSquad` is a seeded hill-climb, not
+// an exact solver, so the number below is the point at which THE SEARCH switches
+// over, and a stronger search could switch earlier. That is a real limitation
+// and it is why the assertion is a band rather than a point. What the band does
+// close is the failure mode that produced the bad table in the first place: a
+// figure quoted with nothing behind it. Two independent guards make a
+// mis-measured threshold loud rather than plausible — the climb must find a
+// Haaland-free squad at the bottom of the bracket and a Haaland-containing one
+// at the top, and the forced-in comparison must reproduce the gap the threshold
+// implies. A threshold with no squad change under it is not a threshold.
+//
+// The interesting quantity is not really the percentage anyway; it is the
+// straight cost of overriding the model, printed first. "How many points does
+// insisting on Haaland cost" is a question the user can act on. "By what factor
+// is the model wrong about him" is a question about the model.
+//
+// AS MEASURED on the 2026-07-26 snapshot, GW1, horizon 5:
+//
+//   Haaland £15.5m, discounted horizon xP 21.62, GW1 xP 5.50
+//   best legal squad                   205.71   £100.0m   Haaland out
+//   best legal squad containing him    200.26   £100.0m
+//   cost of insisting                    5.45   (2.65% of the squad total)
+//   threshold                          +25.2%   (21.62 -> 27.08)
+//
+// The two are the same measurement seen twice: 21.62 x 0.252 = 5.45, which is
+// what the consistency assertion at the end checks and is the reason it is
+// there rather than being left as a coincidence for a reader to notice.
+//
+// The conversational table this replaces said +22.8%. That was not far out, and
+// being not far out is exactly what made it dangerous — it read as though it had
+// been computed. The squad it displaces is the part that table could not have
+// got right at all: Haaland comes in alongside three DOWNGRADES (B.Fernandes
+// £12.0m -> Fernandes £6.0m, Gabriel £8.0m -> Mukiele £5.5m, Bruno G. £7.0m ->
+// Buendía £6.0m, Calvert-Lewin dropped), because at £15.5m he is not funded by
+// one sale but by the whole spine. That, and not the percentage, is the honest
+// answer to "is leaving Haaland out really smart?".
+test.runIf(process.env.HAALAND)(
+  "measures how far Haaland's projection must move before the app drafts him",
+  { timeout: 1_800_000 },
+  async () => {
+    globalThis.fetch = stubFetch;
+    try {
+      const nextEvent = bootstrap.events.find((e) => e.is_next)?.id;
+      if (nextEvent == null) throw new Error("no is_next event in the snapshot");
+      const pool = launchPool(bootstrap.elements);
+      const past = await fetchPastSeason(pool, 16);
+      expect(past.failed).toBe(0);
+      const { xp, variants } = buildLaunchVariants(bootstrap, fixtures, nextEvent, 5, past.data);
+
+      // By name, then pinned to the id the rest of this file already uses. Either
+      // check alone can pass on the wrong player: "Haaland" could in principle be
+      // two people, and a hard-coded id silently becomes someone else when the
+      // bootstrap is re-issued. Both together cannot.
+      const haalands = bootstrap.elements.filter((e) => e.web_name === "Haaland");
+      expect(haalands.length, "expected exactly one Haaland in the bootstrap").toBe(1);
+      const HAA = haalands[0].id;
+      expect(HAA).toBe(411);
+      expect(el(HAA).element_type).toBe(4);
+
+      // The app's real objective, exactly as `buildSquadWithinBudget` ranks by.
+      const tdOf = (id: number) => xp.get(id)?.totalDiscounted ?? 0;
+      expect(tdOf(HAA), "Haaland must have a positive projection or this measures nothing")
+        .toBeGreaterThan(0);
+      const valueAt = (lam: number) => (id: number) => (id === HAA ? tdOf(id) * lam : tdOf(id));
+      const sumOf = (v: (id: number) => number) => (squad: Element[]) =>
+        squad.reduce((a, e) => a + v(e.id), 0);
+      const sum15 = sumOf(tdOf);
+      const hasHaa = (squad: Element[]) => squad.some((e) => e.id === HAA);
+
+      const seeds = variants.map((v) => v.squad);
+
+      console.log(
+        `\n=== THE HAALAND THRESHOLD  (snapshot ${meta.fetchedAt}, GW${nextEvent}, horizon 5)`
+      );
+      console.log(
+        `  Haaland ${money(el(HAA).now_cost)}  discounted horizon xP ${fmt(tdOf(HAA))}` +
+          `  GW1 xP ${fmt(xp.get(HAA)?.next ?? 0)}`
+      );
+
+      // --- 1. the unconstrained optimum ------------------------------------
+      const base = bestLegalSquad(tdOf, seeds, sum15);
+      if (!base) throw new Error("no legal squad found at all");
+      console.log(
+        `  best legal squad on the app's objective     ${fmt(sum15(base.squad))}` +
+          `  ${money(base.cost)}  ${legality(base.squad, base.cost)}  Haaland ${hasHaa(base.squad) ? "IN" : "out"}`
+      );
+
+      // --- 2. what insisting on him costs -----------------------------------
+      // Forced in by making him worth an unreachable amount TO THE CLIMB, then
+      // scoring the squad it lands on with the REAL objective. A bonus rather
+      // than a squad-membership constraint because `bestLegalSquad` has no
+      // must-include parameter, and adding one to a function three other blocks
+      // depend on to do something else is a worse trade than this.
+      const BONUS = 1e6;
+      const forcedValue = (id: number) => (id === HAA ? tdOf(id) + BONUS : tdOf(id));
+      const forced = bestLegalSquad(forcedValue, seeds, sumOf(forcedValue));
+      if (!forced) throw new Error("no legal squad found containing Haaland");
+      expect(hasHaa(forced.squad), "the bonus failed to force Haaland in").toBe(true);
+      const cost = sum15(base.squad) - sum15(forced.squad);
+      console.log(
+        `  best legal squad that CONTAINS Haaland      ${fmt(sum15(forced.squad))}` +
+          `  ${money(forced.cost)}  ${legality(forced.squad, forced.cost)}`
+      );
+      console.log(
+        `  => insisting on Haaland costs ${fmt(cost)} discounted xP over 5 GWs` +
+          ` (${((100 * cost) / sum15(base.squad)).toFixed(2)}% of the squad total)`
+      );
+      const out = base.squad.filter((e) => !forced.squad.some((f) => f.id === e.id));
+      const inn = forced.squad.filter((e) => !base.squad.some((b) => b.id === e.id));
+      console.log(
+        `     he displaces: ${out.map((e) => `${e.web_name} ${money(e.now_cost)}`).join(", ")}` +
+          `\n     replaced by:  ${inn.map((e) => `${e.web_name} ${money(e.now_cost)}`).join(", ")}`
+      );
+
+      // --- 3. the threshold --------------------------------------------------
+      // Bracket by doubling the uplift, then bisect. The Haaland-containing
+      // squad from step 2 joins the seed set so the climb is never asked to
+      // discover that basin from scratch at the moment it matters most; without
+      // it the measured threshold is an artefact of where the seeds happen to
+      // sit rather than of the objective.
+      const probeSeeds = [...seeds, forced.squad, base.squad];
+      const picksHaaland = (lam: number) => {
+        const v = valueAt(lam);
+        const r = bestLegalSquad(v, probeSeeds, sumOf(v));
+        return r != null && hasHaa(r.squad);
+      };
+
+      expect(picksHaaland(1), "Haaland is already in the optimum; this block measures nothing")
+        .toBe(false);
+      let lo = 1;
+      let hi = 1;
+      for (let step = 0; step < 6; step++) {
+        hi = 1 + 0.1 * Math.pow(2, step);
+        console.log(`  bracketing at +${((hi - 1) * 100).toFixed(1)}% ...`);
+        if (picksHaaland(hi)) break;
+        lo = hi;
+      }
+      if (!picksHaaland(hi)) throw new Error(`Haaland not drafted even at +${((hi - 1) * 100).toFixed(0)}%`);
+      for (let step = 0; step < 10; step++) {
+        const mid = (lo + hi) / 2;
+        if (picksHaaland(mid)) hi = mid;
+        else lo = mid;
+      }
+      const pct = (hi - 1) * 100;
+      console.log(
+        `  => the app drafts Haaland once his projection rises by +${pct.toFixed(1)}%` +
+          `  (bracket +${((lo - 1) * 100).toFixed(1)}% .. +${pct.toFixed(1)}%)`
+      );
+      console.log(
+        `     i.e. ${fmt(tdOf(HAA))} -> ${fmt(tdOf(HAA) * hi)} discounted xP over the horizon`
+      );
+
+      // --- 4. the guards -----------------------------------------------------
+      // A threshold is only meaningful if the squad really does change across
+      // it. Both ends are re-run and compared, so a bisection that converged on
+      // noise — the same squad on both sides, the flag flipping for some reason
+      // other than Haaland — fails here instead of being printed as a finding.
+      const below = bestLegalSquad(valueAt(lo), probeSeeds, sumOf(valueAt(lo)));
+      const above = bestLegalSquad(valueAt(hi), probeSeeds, sumOf(valueAt(hi)));
+      expect(below && hasHaa(below.squad)).toBe(false);
+      expect(above && hasHaa(above.squad)).toBe(true);
+
+      // And the threshold must be consistent with the cost measured in step 2:
+      // at the switching point the uplift Haaland is given has to be worth about
+      // what step 2 said displacing him is worth. On the measured run these
+      // agree to two decimals (21.62 x 0.252 = 5.45 against 5.45), which is a
+      // stronger statement than it looks — the two are computed by different
+      // routes, one by differencing two climbs and one by bisecting a third.
+      //
+      // Written against `pct` and not against `hi`, deliberately. `pct` is the
+      // number that gets printed, quoted, and told to the user, so it is the one
+      // that has to be load-bearing; an off-by-a-factor between `hi` and `pct`
+      // is precisely the kind of slip that produced the table this block
+      // replaces, and a mutation halving `pct` survived the whole file while
+      // this assertion still named `hi`.
+      //
+      // The lower bound is the tight one. The upper is loose because a hill-climb
+      // can leave points on the table at either end, which inflates the apparent
+      // uplift needed; 1.6 catches a doubling without failing on search slack.
+      const upliftAtSwitch = (tdOf(HAA) * pct) / 100;
+      expect(upliftAtSwitch).toBeGreaterThan(cost * 0.9);
+      expect(upliftAtSwitch).toBeLessThan(cost * 1.6);
+
+      // The band. Wide, on purpose: it is here to catch a model change that
+      // moves Haaland's standing by a lot, not to freeze a hill-climb's third
+      // decimal. Re-measure and widen with a comment if a legitimate change
+      // trips it; do not narrow it to whatever today's run prints.
+      expect(pct).toBeGreaterThan(5);
+      expect(pct).toBeLessThan(60);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  }
+);
