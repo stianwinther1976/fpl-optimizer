@@ -563,8 +563,16 @@ function actualGwPoints(
   minutes: Map<number, number>,
   /** Optional accumulator: how often the bench was actually needed, and what it
    * contributed. Only read by the bench experiment below; the season sim itself
-   * passes nothing and is unaffected. */
-  out?: { subs: number; subPoints: number; blanks: number }
+   * passes nothing and is unaffected.
+   *
+   * `idealSlot`, when present, additionally runs a COUNTERFACTUAL pass in which
+   * every bench player is assumed to have played, and counts how often each
+   * bench INDEX gets used. That is the quantity a slot-weighted objective needs
+   * and it is not the same as `subs`: `subs` counts slots FILLED, which is a
+   * joint fact about the fixture list and about how good this particular bench
+   * is, and using it as a slot weight would let a bad bench justify itself.
+   * `idealSlot` counts slots NEEDED, which depends only on the XI. */
+  out?: { subs: number; subPoints: number; blanks: number; idealSlot?: number[]; gws?: number }
 ): number {
   const squad = squadIds.map((id) => elById.get(id)!).filter(Boolean);
   const xi = pickBestXi(squad, xpNext);
@@ -598,6 +606,38 @@ function actualGwPoints(
         out.subPoints += pts(b);
       }
       break;
+    }
+  }
+
+  // The counterfactual pass. Identical to the loop above except that the
+  // `mins(b) === 0` test is gone — that single dropped condition is the whole
+  // difference between "was this slot filled" and "was this slot needed".
+  // Deliberately a second loop rather than a flag threaded through the first:
+  // the first one is load-bearing for every points total in this file, and the
+  // measurement is not worth the risk of editing it.
+  if (out?.idealSlot) {
+    out.gws = (out.gws ?? 0) + 1;
+    const eff = [...starterIds];
+    const used = new Set<number>();
+    for (let i = 0; i < eff.length; i++) {
+      const sid = eff[i];
+      if (mins(sid) > 0) continue;
+      const sType = typeOf(sid);
+      for (let bi = 0; bi < benchIds.length; bi++) {
+        const b = benchIds[bi];
+        if (used.has(b)) continue;
+        const bType = typeOf(b);
+        if ((sType === 1) !== (bType === 1)) continue;
+        const counts: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
+        for (const id of eff) counts[typeOf(id)]++;
+        counts[sType]--;
+        counts[bType]++;
+        if (counts[1] !== 1 || !isValidFormation(counts[2], counts[3], counts[4])) continue;
+        eff[i] = b;
+        used.add(b);
+        out.idealSlot[bi]++;
+        break;
+      }
     }
   }
 
@@ -897,6 +937,11 @@ describe(`${SEASON} full-season simulation`, () => {
     // Projected XI xP (incl. captain) vs realized — to calibrate the
     // "realistic team score" display factor.
     let projectedXiTotal = 0;
+    // SLOTW=1 only. `undefined` otherwise, so the shipped run passes exactly
+    // what it passed before and the reports stay byte-identical.
+    const slotAcc = process.env.SLOTW
+      ? { subs: 0, subPoints: 0, blanks: 0, idealSlot: [0, 0, 0, 0], gws: 0 }
+      : undefined;
 
     for (let gw = 1; gw <= LAST; gw++) {
       const st = buildStateAt(gw, season);
@@ -957,7 +1002,7 @@ describe(`${SEASON} full-season simulation`, () => {
         squad.map((id) => elById.get(id)!).filter(Boolean),
         xpNext
       ).totalXp;
-      modelTotal += actualGwPoints(squad, elById, xpNext, st.actual, st.minutesAt);
+      modelTotal += actualGwPoints(squad, elById, xpNext, st.actual, st.minutesAt, slotAcc);
       // Set & forget: captain by best season PPG, else same engine.
       const ppgNext = (id: number) => parseFloat(elById.get(id)?.points_per_game ?? "0") || 0;
       setForgetTotal += actualGwPoints(
@@ -967,6 +1012,121 @@ describe(`${SEASON} full-season simulation`, () => {
         st.actual,
         st.minutesAt
       );
+    }
+
+    // -----------------------------------------------------------------------
+    // AUTOSUB SLOT WEIGHTS — the input an autosub-aware bench objective needs,
+    // and the number nobody here had measured.
+    //
+    // Every previous attempt in this file weighted the bench with a single
+    // FLAT discount (the note above `buildSquadWithinBudget` sweeps 0.15 to
+    // 0.85; the cheapest-bench experiment below sweeps the two extremes). A
+    // flat weight is wrong in a specific way: the first substitute comes on far
+    // more often than the third, so a flat weight simultaneously overpays for
+    // the last bench slot and underpays for the first. Whether fixing that is
+    // worth anything cannot be argued from a chair, and it cannot be measured
+    // without these four numbers.
+    //
+    // NEEDED, NOT FILLED. `idealSlot` counts the slot as used whenever the
+    // autosub rules would reach it with a bench that plays. The filled count is
+    // in `subs` alongside it and is systematically lower; using the filled rate
+    // as a weight would be circular, because a bench of non-players would then
+    // report that bench slots are worthless and justify itself.
+    //
+    // MEASURED, all four archived seasons, 152 managed gameweeks:
+    //
+    //                    22-23   23-24   24-25   25-26   pooled
+    //   sub GK           0.079   0.132   0.000   0.079    0.072
+    //   outfield sub 1   0.632   0.500   0.447   0.474    0.513
+    //   outfield sub 2   0.316   0.342   0.211   0.263    0.283
+    //   outfield sub 3   0.079   0.053   0.053   0.000    0.046
+    //   total need/GW    1.105   1.026   0.711   0.816    0.914
+    //   XI blanks/GW      1.29    1.03    0.71    0.82     0.96
+    //   filled/GW         0.68    0.89    0.45    0.68     0.68
+    //   bench pts/GW      2.24    2.79    1.71    2.68     2.36
+    //
+    // THE PROFILE IS THE FINDING. Not one number in the 0.15-0.85 flat range
+    // every previous experiment swept is a good approximation to it: the first
+    // outfield sub is worth 0.513 and the third is worth 0.046, an eleven-fold
+    // spread inside a bench that has always been priced as though it were
+    // uniform. A flat 0.30 overpays the last slot by six times and underpays
+    // the first by nearly two. The sub keeper, at 0.072, is close to dead
+    // money — which is the one directly actionable line here, and it needs no
+    // new optimiser to act on.
+    //
+    // WHAT THIS BOUNDS, AND IT IS THE REASON THIS BLOCK STOPS HERE. The whole
+    // autosub route is worth 2.36 pts/GW, or about 19 points over an 8-GW
+    // horizon, and that is the value of the ENTIRE bench measured from nothing.
+    // A change in bench COMPOSITION can only move part of it. Because slot 1
+    // carries 0.513 and slots 2-3 carry 0.329 between them, essentially all the
+    // available headroom sits in one player, and improving him by d points per
+    // game is worth 0.513 x d per GW — 4.1 x d over eight.
+    //
+    // So a claimed "+4 to +10 points over 8 GWs from a smarter bench" requires
+    // upgrading the first substitute by 1.0 to 2.4 points per game, funded out
+    // of the XI. That is the trade the arithmetic actually describes: money
+    // moved from a slot weighted 1.0 to a slot weighted 0.513. It can only pay
+    // if xP per pound is steeper at the bench end of the market than at the XI
+    // end — possible, since premiums price badly — but that is a claim about
+    // the xP/price curve, and NOTHING here measures it. The +4 to +10 figure
+    // was produced in conversation and this block does not support it.
+    //
+    // NOT IMPLEMENTED, DELIBERATELY. The next step is a squad objective of the
+    // form sum(XI) + sum_j w_j * xp(bench slot j), which is the generalisation
+    // of the flat-weight experiment recorded above `buildSquadWithinBudget`
+    // with the guessed constant replaced by the profile above. It is worth
+    // trying precisely because the shape is new. It is NOT worth shipping on
+    // the strength of a better-motivated shape: the flat version lost 8729 ->
+    // 8516 managed, the extreme version came out -58 over four seasons, and
+    // `objVsRealSpearman` in the experiment below found that among squads the
+    // model rates as near-equivalent a higher projection does not buy more real
+    // points. Every one of those says the projections and not the objective are
+    // the binding constraint. When it is tried it must be measured on the
+    // 240-restart family medians that experiment uses, not on one squad per
+    // objective — one squad per objective is what produced the wrong answer
+    // there, and the family spread is 230-626 points against gaps of tens.
+    //
+    // Run: SEASON=2024-25 SLOTW=1 npx vitest run --config vitest.sim.config.ts \
+    //        -t "plays the season" --disable-console-intercept
+    if (slotAcc) {
+      const n = slotAcc.gws || 1;
+      const names = ["GK (bench 1)", "outfield sub 1", "outfield sub 2", "outfield sub 3"];
+      console.log(`\n=== AUTOSUB SLOT WEIGHTS ${SEASON} (${n} GWs, managed squad)`);
+      console.log(
+        `  XI blanks ${slotAcc.blanks} (${(slotAcc.blanks / n).toFixed(2)}/GW), ` +
+          `slots actually FILLED ${slotAcc.subs} (${(slotAcc.subs / n).toFixed(2)}/GW), ` +
+          `worth ${slotAcc.subPoints} pts (${(slotAcc.subPoints / n).toFixed(2)}/GW)`
+      );
+      let need = 0;
+      for (let i = 0; i < 4; i++) {
+        need += slotAcc.idealSlot[i];
+        console.log(
+          `  ${names[i].padEnd(16)} needed ${String(slotAcc.idealSlot[i]).padStart(3)}/${n}` +
+            `  w = ${(slotAcc.idealSlot[i] / n).toFixed(3)}`
+        );
+      }
+      console.log(`  total slot-need mass ${(need / n).toFixed(3)} per GW`);
+      // Guards. A counterfactual bench can only be reached MORE often than a
+      // real one, and it can never be reached more often than there are blanks
+      // to cover; either inequality failing means the second loop has drifted
+      // from the first and the weights are measuring something else.
+      //
+      // STRICTLY greater, not `>=`. `>=` is the safe-looking form and it is
+      // useless: the one mutation that matters here is leaving the
+      // `mins(b) === 0` test in the counterfactual loop, which turns the whole
+      // measurement back into the filled rate it exists to avoid — and under
+      // `>=` that mutant passes, because it makes the two counts equal. The
+      // margins are 42/26, 39/34, 27/17 and 31/26, so a real bench failing to
+      // cover something is not a rare event over 38 gameweeks; if a season ever
+      // does produce a bench that played every week this needs re-reading, not
+      // relaxing.
+      expect(need).toBeGreaterThan(slotAcc.subs);
+      expect(need).toBeLessThanOrEqual(slotAcc.blanks);
+      // And the profile has to be DECREASING in slot index among the outfield
+      // subs, because slot j+1 is only reached once slot j has been. If this
+      // ever fails, the bench ordering and the loop disagree.
+      expect(slotAcc.idealSlot[1]).toBeGreaterThanOrEqual(slotAcc.idealSlot[2]);
+      expect(slotAcc.idealSlot[2]).toBeGreaterThanOrEqual(slotAcc.idealSlot[3]);
     }
 
     const report = {
