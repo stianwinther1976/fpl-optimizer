@@ -1379,3 +1379,296 @@ test.runIf(process.env.HAALAND)(
     }
   }
 );
+
+// ---------------------------------------------------------------------------
+// THE SECOND KEEPER
+//
+// The autosub slot weights measured in `scripts/simulate.test.ts` (SLOTW=1,
+// 152 managed gameweeks) put the substitute goalkeeper at 0.072 — he is on the
+// pitch about one week in fourteen. The app's own draft has been buying him at
+// £5.5m, out of a £100.0m budget, using an objective that values all fifteen
+// players equally. That is £1.5m over the floor spent on a slot worth seven
+// percent of a starting one, and the question the user asked is what taking it
+// back is worth.
+//
+//   GK2=1 npx vitest run -c vitest.yt.config.ts --disable-console-intercept
+//
+// WHY THIS IS NOT CIRCULAR, WHICH IS THE ONLY REASON IT IS WORTH RUNNING. The
+// obvious way to score a squad here is the app's own sum-over-fifteen, and
+// that is exactly the yardstick that bought the expensive keeper in the first
+// place — it would report any downgrade as a loss by construction. So the
+// comparison is made on two quantities that are NOT the objective under test:
+//
+//   XI value  — discounted horizon xP of the eleven that actually play. The
+//               eleven score every week; this is what the budget is for.
+//   exposure  — the backup's own xP times 0.072, which is what is being given
+//               up in expected autosub value.
+//
+// Net = gain in XI value - loss in exposure. Both terms come out of the same
+// xP model, so this does not escape projection error — but it does escape the
+// specific error of counting a bench keeper as though he were a starter, which
+// is the error being investigated.
+//
+// The user's added condition is the right one and is reported alongside:
+// cheap is not enough, the backup should also be someone who would actually
+// PLAY if the first keeper is unavailable. A £4.0m third-choice keeper saves
+// the money and quietly makes the 0.072 into something closer to zero, since
+// he blanks in the same weeks everyone else does. `pStart` is printed for
+// every candidate so that trade is visible rather than assumed.
+//
+// MEASURED, snapshot 2026-07-26, GW1, horizon 5 gameweeks:
+//
+//   best squad, app's objective   XI value 161.03  backup Donnarumma £5.5m pStart 0.92
+//   same objective, keeper kept   XI value 163.51  backup Donnarumma £5.5m pStart 0.92
+//   best squad, slot-weighted     XI value 165.93  backup Palmer     £4.0m pStart 0.53
+//   => the whole move is +4.90 XI xP, split +2.48 cheaper OUTFIELD subs
+//      and +2.42 the KEEPER. Only the second half is this block's question.
+//   => net of the autosub exposure given up, the keeper downgrade is
+//      +1.74 discounted xP over five gameweeks, for £1.5m released.
+//
+// The £4.0m tier all reach the same XI (165.93) — the eleven do not care WHICH
+// £4.0m keeper is behind them — so within that tier the ranking is purely the
+// backup's own xP, which is the user's criterion doing the work: Palmer (IPS,
+// pStart 0.53) and Dovin (COV, 0.48) at +1.74 against Heaton/Pecsi/Jaros/Davies
+// (pStart 0.00) at +1.52. Buying a keeper who might actually play is worth
+// about 0.2 xP and costs nothing, so there is no reason not to.
+//
+// The £4.5m tier is the interesting trade and the answer is no. Perri (LEE)
+// starts with pStart 0.95 — as close to a guaranteed starter as the pool has —
+// and nets +0.84 against Palmer's +1.74. The extra £0.5m out of the XI costs
+// about 0.90 xP over five gameweeks and buys 0.42 of pStart on a slot that is
+// on the pitch one week in fourteen. At 0.072, near-certainty is not worth
+// paying for; that is the whole point of the slot weight.
+test.runIf(process.env.GK2)(
+  "measures what a cheaper second goalkeeper is worth",
+  { timeout: 1_800_000 },
+  async () => {
+    globalThis.fetch = stubFetch;
+    try {
+      const nextEvent = bootstrap.events.find((e) => e.is_next)?.id;
+      if (nextEvent == null) throw new Error("no is_next event in the snapshot");
+      const pool = launchPool(bootstrap.elements);
+      const past = await fetchPastSeason(pool, 16);
+      expect(past.failed).toBe(0);
+      XP_DEBUG.minutes = new Map();
+      const { xp, variants } = buildLaunchVariants(bootstrap, fixtures, nextEvent, 5, past.data);
+      const pStartOf = (id: number) => XP_DEBUG.minutes?.get(id)?.pStart ?? NaN;
+
+      const tdOf = (id: number) => xp.get(id)?.totalDiscounted ?? 0;
+      const sum15 = (squad: Element[]) => squad.reduce((a, e) => a + tdOf(e.id), 0);
+
+      // The measured profile, in bench order: sub GK first, then the three
+      // outfield subs. Sourced from the SLOTW block, not guessed here — if that
+      // measurement is re-run these must be updated with it.
+      const W = [0.072, 0.513, 0.283, 0.046];
+      const slotW = (squad: Element[]) => {
+        const xi = pickBestXi(squad, tdOf);
+        let t = xi.starters.reduce((a, s) => a + tdOf(s.element.id), 0);
+        xi.bench.forEach((s, i) => {
+          t += (W[i] ?? 0) * tdOf(s.element.id);
+        });
+        return t;
+      };
+      const xiValue = (squad: Element[]) =>
+        pickBestXi(squad, tdOf).starters.reduce((a, s) => a + tdOf(s.element.id), 0);
+      /** The keeper who ends up on the bench, i.e. the one this block is about. */
+      const benchGk = (squad: Element[]) => {
+        const gks = squad.filter((e) => e.element_type === 1);
+        if (gks.length !== 2) throw new Error(`squad has ${gks.length} keepers`);
+        return tdOf(gks[0].id) <= tdOf(gks[1].id) ? gks[0] : gks[1];
+      };
+      const describe1 = (e: Element) =>
+        `${e.web_name} (${teamName.get(e.team)}) ${money(e.now_cost)} ` +
+        `pStart ${pStartOf(e.id).toFixed(2)} xP ${fmt(tdOf(e.id))}`;
+
+      const seeds = variants.map((v) => v.squad);
+      console.log(`\n=== THE SECOND KEEPER  (snapshot ${meta.fetchedAt}, GW${nextEvent}, horizon 5)`);
+
+      // --- what the app ships today -----------------------------------------
+      const shipped = variants.reduce((b, v) => (sum15(v.squad) > sum15(b.squad) ? v : b), variants[0]);
+      console.log(`  app's shipped draft      ${money(shipped.cost)}  backup ${describe1(benchGk(shipped.squad))}`);
+
+      // --- the search's own optimum on the app's objective --------------------
+      const base = bestLegalSquad(tdOf, seeds, sum15);
+      if (!base) throw new Error("no legal squad found");
+      const baseGk = benchGk(base.squad);
+      console.log(
+        `  best squad, app's objective  ${money(base.cost)}  XI value ${fmt(xiValue(base.squad))}` +
+          `  backup ${describe1(baseGk)}`
+      );
+
+      // --- the locked climb, used for every row below --------------------------
+      // Maximise `slotW` subject to `g` being IN the squad and being the SECOND
+      // keeper. Both halves are needed. The `+1e6` in `forced` makes any squad
+      // without `g` score 1e6 below any squad with him, so ownership is
+      // absolute; the `- 1e6` afterwards only keeps the printed magnitudes sane
+      // and cannot change the argmax (it shifts every containing squad by the
+      // same constant).
+      //
+      // The `- 1e5` is the half that the first two runs of this block were
+      // missing, and it mattered: locking Donnarumma without it produced a
+      // reference squad that kept him and PROMOTED HIM INTO THE XI, selling the
+      // first-choice keeper to pay for it and putting a £4.0m man on the bench.
+      // That is a perfectly good squad and a useless reference — it has already
+      // taken the cheap-backup decision that is supposed to be under test, so
+      // the incumbent's real cost never appears. The question is what a £5.5m
+      // player sitting on the BENCH costs, so the bench is where he has to sit.
+      const lockedBest = (g: Element) => {
+        const forced = (id: number) => (id === g.id ? tdOf(id) + 1e6 : tdOf(id));
+        const r = bestLegalSquad(forced, [...seeds, base.squad], (sq) =>
+          sq.reduce((a, e) => a + forced(e.id), 0) - 1e6 + slotW(sq) - sum15(sq) -
+          (benchGk(sq).id === g.id ? 0 : 1e5)
+        );
+        // Ownership is enforced here; whether he ended up as the backup is left
+        // to the caller, so the table can say so out loud instead of silently
+        // dropping a row.
+        return r && r.squad.some((e) => e.id === g.id) ? r : null;
+      };
+
+      // --- the reference: same objective, incumbent keeper kept ---------------
+      // THIS IS THE COMPARISON THAT MATTERS AND THE FIRST RUN OF THIS BLOCK GOT
+      // IT WRONG. Scoring each candidate against `base` (the sum-over-fifteen
+      // optimum) charges the keeper with the whole gain from re-weighting the
+      // bench — the three outfield subs get cheaper too, and every £4.0m keeper
+      // came out with an identical "+4.91" precisely because that number was
+      // not about the keeper at all. The honest reference is the same locked
+      // climb, on the same objective, with the incumbent held in place: then
+      // the only difference between reference and row is the keeper.
+      const ref = lockedBest(baseGk);
+      if (!ref) throw new Error("could not lock the incumbent keeper");
+      if (benchGk(ref.squad).id !== baseGk.id)
+        throw new Error("the incumbent would not stay on the bench; the reference is meaningless");
+      const refXi = xiValue(ref.squad);
+      console.log(
+        `  same objective, keeper kept  ${money(ref.cost)}  XI value ${fmt(refXi)}` +
+          `  backup ${describe1(benchGk(ref.squad))}`
+      );
+
+      // --- the same search told what the bench is actually worth --------------
+      // No constraint at all; only the objective changes. If the slot weights
+      // matter, this is where a cheaper keeper shows up on its own.
+      const weighted = bestLegalSquad(tdOf, [...seeds, base.squad, ref.squad], slotW);
+      if (!weighted) throw new Error("no legal squad found on the weighted objective");
+      const wGk = benchGk(weighted.squad);
+      console.log(
+        `  best squad, slot-weighted    ${money(weighted.cost)}  XI value ${fmt(xiValue(weighted.squad))}` +
+          `  backup ${describe1(wGk)}`
+      );
+      console.log(
+        `  => weighting the bench moves the backup keeper ` +
+          `${money(baseGk.now_cost)} -> ${money(wGk.now_cost)}` +
+          ` and the XI ${fmt(xiValue(base.squad))} -> ${fmt(xiValue(weighted.squad))}`
+      );
+      // Split that gain in two, because the two halves are separate decisions and
+      // only one of them is the question the user asked.
+      console.log(
+        `     of which cheaper OUTFIELD subs ${fmt(refXi - xiValue(base.squad))}` +
+          ` and the KEEPER ${fmt(xiValue(weighted.squad) - refXi)} (XI xP over 5 GWs)`
+      );
+
+      // --- every cheap keeper, forced in and paid for --------------------------
+      // Locked one at a time so the freed money is actually reinvested by the
+      // climb rather than left in the bank, and so the answer is a table the
+      // user can read down rather than a single winner with no alternatives.
+      const gks = bootstrap.elements
+        .filter((e) => e.element_type === 1 && PICKABLE.some((p) => p.id === e.id))
+        .filter((e) => e.now_cost <= 45)
+        .sort((a, b) => a.now_cost - b.now_cost || pStartOf(b.id) - pStartOf(a.id));
+      console.log(`\n  ${gks.length} pickable keepers at £4.5m or less; each locked in as the backup:`);
+      console.log(
+        `  ${"keeper".padEnd(28)} ${"price".padStart(6)} ${"pStart".padStart(7)}` +
+          ` ${"XI value".padStart(9)} ${"vs ref".padStart(8)} ${"exposure".padStart(9)} ${"net".padStart(7)}`
+      );
+      const baseExposure = W[0] * tdOf(baseGk.id);
+      type Cand = { e: Element; xi: number; net: number; cost: number };
+      const rows: Cand[] = [];
+      for (const g of gks) {
+        const r = lockedBest(g);
+        if (!r) continue;
+        // Only meaningful if he really is the BACKUP; a cheap keeper the model
+        // rates ahead of the incumbent is a different question.
+        const bg = benchGk(r.squad);
+        if (bg.id !== g.id) {
+          console.log(`  ${describe1(g).padEnd(52)}  (climbs into the XI, not the bench — skipped)`);
+          continue;
+        }
+        const xiV = xiValue(r.squad);
+        const exposure = W[0] * tdOf(g.id);
+        const net = xiV - refXi - (baseExposure - exposure);
+        rows.push({ e: g, xi: xiV, net, cost: r.cost });
+        console.log(
+          `  ${(g.web_name + " (" + teamName.get(g.team) + ")").padEnd(28)} ${money(g.now_cost).padStart(6)}` +
+            ` ${pStartOf(g.id).toFixed(2).padStart(7)} ${fmt(xiV).padStart(9)}` +
+            ` ${(xiV - refXi >= 0 ? "+" : "") + fmt(xiV - refXi)}`.padStart(9) +
+            ` ${fmt(exposure).padStart(9)} ${((net >= 0 ? "+" : "") + fmt(net)).padStart(7)}`
+        );
+      }
+
+      rows.sort((a, b) => b.net - a.net);
+      const best = rows[0];
+      if (best) {
+        console.log(
+          `\n  BEST: ${describe1(best.e)}  net ${(best.net >= 0 ? "+" : "") + fmt(best.net)} discounted xP over 5 GWs` +
+            `  (squad ${money(best.cost)})`
+        );
+        console.log(
+          `  Against the incumbent ${describe1(baseGk)} — the money released is ` +
+            `${money(baseGk.now_cost - best.e.now_cost)}.`
+        );
+      }
+
+      // --- guards --------------------------------------------------------------
+      // The weights must be the measured ones, in bench order. A reordering here
+      // silently reweights the whole table, and every number above would still
+      // look plausible.
+      expect(W).toEqual([0.072, 0.513, 0.283, 0.046]);
+      expect(W[1]).toBeGreaterThan(W[0]);
+      // The block measures nothing if there is no cheap keeper to compare with,
+      // or if the incumbent is already at the floor.
+      expect(rows.length).toBeGreaterThan(0);
+      expect(baseGk.now_cost).toBeGreaterThan(40);
+      // The headline: the winner sits at the £4.0m floor. If a model change ever
+      // makes a £4.5m keeper win outright, that is a real finding and this line
+      // should be re-measured, not relaxed.
+      expect(best.e.now_cost).toBe(40);
+      // `net` must charge the downgrade for the autosub exposure it gives up.
+      // STRICT: dropping the exposure term makes `net` exactly equal to the
+      // `vs ref` column, so `<=` would let that mutation through. The measured
+      // gap is 2.42 -> 1.74.
+      expect(best.net).toBeLessThan(best.xi - refXi);
+      // That one line does more work than it looks like it does. Mutation
+      // tested three ways: dropping the exposure term, scoring `net` against
+      // `base` instead of `refXi`, and dropping the bench-pin penalty from
+      // `lockedBest`. It catches the first two; the third throws earlier, where
+      // `ref` is built. A fourth guard written here — "net must be at least a
+      // point below the naive base-relative figure" — was removed after mutation
+      // testing showed it killed nothing this one does not already kill. It
+      // read like a second line of defence and was a second copy of the first.
+      // And `slotW` must actually differ from `sum15`, or the "same search, one
+      // objective changed" line above is comparing a thing with itself.
+      expect(slotW(base.squad)).toBeLessThan(sum15(base.squad));
+      // (The "reference really does bench the incumbent" check is NOT repeated
+      // here. It throws where `ref` is built, which is before anything is
+      // printed — a duplicate assertion down here would be unreachable, and an
+      // unreachable assertion is worse than none: it reads like coverage.)
+      // Dominance. `weighted` is the SAME objective with the lock removed, and
+      // it climbs from a seed set that includes `ref.squad`, so an unconstrained
+      // optimum below a constrained one means the lock arithmetic leaked into
+      // the score. This is the guard that would catch the `- 1e6` being applied
+      // to a squad that does not contain the locked keeper.
+      expect(slotW(weighted.squad)).toBeGreaterThanOrEqual(slotW(ref.squad) - 1e-9);
+      expect(slotW(ref.squad)).toBeGreaterThanOrEqual(slotW(base.squad) - 1e-9);
+      // The correction must actually bite. If the reference were no better than
+      // `base`, then "vs ref" and the old, wrong "vs base" would be the same
+      // column and the defect this block was rewritten to fix would be back
+      // without changing a printed number. (Writing the decomposition identity
+      // here instead is tempting and worthless: (r-b) + (w-r) === (w-b) holds
+      // for any three numbers.)
+      // Measured margin 163.51 - 161.03 = 2.48; the bound is set at a full point
+      // so a change that all but collapses the correction still trips it.
+      expect(refXi).toBeGreaterThan(xiValue(base.squad) + 1.0);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  }
+);
