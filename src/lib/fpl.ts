@@ -242,9 +242,20 @@ export async function fetchPastSeason(
             ? {
                 seasonName: newest.season_name,
                 minutes: newest.minutes,
-                // `starts` only exists from 2021/22. Absent is NOT zero: a
-                // 3000-minute 2020/21 season read as "0 starts" would rate the
-                // player below someone who has never played at all.
+                // Passed through verbatim, INCLUDING zero, because zero here
+                // is ambiguous and only the consumer can disambiguate it.
+                //
+                // An earlier version of this comment said `starts` "only
+                // exists from 2021/22" and that an absent value is not zero.
+                // Both halves are wrong. Counted over the element summaries in
+                // the 2026/27 snapshot, not one row before 2022/23 reports a
+                // start, and the API never sends `null` for the field — it
+                // sends `0`. So there is no absent value to protect here; the
+                // real hazard is a `0` on a pre-2022/23 row, which means "not
+                // recorded" rather than "did not start". That call needs the
+                // season name, so it is made in `startsUnrecorded` in `xp.ts`
+                // against `XP_CONFIG.startsRecordedFrom`, which carries the
+                // per-season counts that place the cut-off.
                 starts: newest.starts,
               }
             : undefined,

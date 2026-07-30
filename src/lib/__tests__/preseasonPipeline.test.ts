@@ -851,8 +851,10 @@ describe("players with and without a record are scored by the same machine", () 
     const r = xp.get(regular)!.next;
     const n = xp.get(newcomer)!.next;
     // Wide, not merely present, and the threshold is set from measurement
-    // rather than taste: the unknown lands at 0.27 of the regular once everyone
-    // shares one anchor, and at 0.47 with the defect restored. A looser bound
+    // rather than taste: the unknown lands at 0.2746 of the regular once
+    // everyone shares one anchor, and at 0.5015 with the defect restored (the
+    // second figure read 0.47 before `preseasonRecordlessGlobalCap` shipped and
+    // was re-measured, not adjusted from memory). A looser bound
     // like "less than 0.7" is satisfied by both and proves nothing — which was
     // the first draft of this test, and it was checked before being believed.
     expect(n).toBeLessThan(r * 0.35);
@@ -878,9 +880,20 @@ describe("players with and without a record are scored by the same machine", () 
       ],
       past
     );
-    // 8.6x sharing one anchor, 3.4x with the defect restored. Both clear a
+    // 5.50x sharing one anchor, 2.80x with the defect restored. Both clear a
     // 2x bound, so 2x would have been a test that could not fail.
-    expect(xp.get(dear)!.next).toBeGreaterThan(xp.get(cheap)!.next * 6);
+    //
+    // THESE NUMBERS MOVED, and the bound with them. They read 8.6x and 3.4x
+    // against a 6x bar until `preseasonRecordlessGlobalCap` shipped, which
+    // clamps a record-less player's `pStart` to 0.55 no matter what his price
+    // says — and the £9.5m man here is record-less by construction, so the cap
+    // takes the top off the separation the market was buying. 5.50x is not a
+    // regression, it is the same signal through a ceiling that exists because
+    // record-less players called at 0.97 started 47% of the time. Both figures
+    // were re-measured through the real `projectAll` path at the shipped
+    // config, the defect one by restoring the `past && past.minutes > 0` guard
+    // on `pastUsable` in `xp.ts` and reading the ratio back out.
+    expect(xp.get(dear)!.next).toBeGreaterThan(xp.get(cheap)!.next * 4);
   });
 });
 

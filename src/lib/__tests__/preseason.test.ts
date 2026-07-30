@@ -1440,6 +1440,152 @@ describe("pre-season record source", () => {
     expect(evenPresent(110)).toBeCloseTo(XP_CONFIG.preseasonMaxPStart, 10);
   });
 
+  it("credits a season played before FPL recorded starts", () => {
+    // FPL's `history_past` rows only carry a real `starts` figure from 2022/23.
+    // Older rows report `starts: 0` however many games the player started, and
+    // both `impliedStarts` and `fetchPastSeason` were guarding against `null` —
+    // a value the API never sends. So a full season was being read as evidence
+    // of never starting, which is strictly worse than no evidence at all.
+    //
+    // The player this describes is not exotic: he is a returning regular whose
+    // last Premier League season predates the change, which in 2026/27 means
+    // most of a promoted club's spine. Targett came out of the broken model at
+    // pStart 0.031 and comes out of the fixed one at 0.090. (An earlier version
+    // of this line said "on 6295 credited minutes"; that number reconstructs
+    // from nothing — see the post-mortem in `xp.ts` — and is now dropped.)
+    const past = new Map<number, PastSeasonStats>([
+      [1, { points: 90, minutes: 2700, starts: 0, seasonName: "2021/22", plSeasons: 1,
+            seasons: [{ seasonName: "2021/22", minutes: 2700, starts: 0 }] }],
+      [2, { points: 0, minutes: 0, plSeasons: 0, seasons: [] }],
+    ]);
+    const [returning] = midfielders(past);
+    // 2700 minutes at the 80-minute estimate is 33.75 starts, aged four seasons
+    // to a weight of 0.0915 and shrunk against six games of prior: measured
+    // 0.4866. Read as a literal zero it was 0.1607, so the bar sits between the
+    // two and well clear of either. (Both figures were restated after an audit:
+    // the comment used to say 0.517 and 0.190, neither of which reproduced. The
+    // gap is what the test is about and the gap is unchanged.)
+    expect(returning).toBeGreaterThan(0.4);
+  });
+
+  it("does not launder a modern substitute's minutes into starts", () => {
+    // The other half of the same rule, and the reason it keys on the season
+    // rather than on "zero starts but lots of minutes". From 2022/23 the field
+    // is populated and a zero is a fact: this player came off the bench for 900
+    // minutes and started nothing, and the model must be able to see that. A
+    // minutes threshold would have quietly promoted him to eleven starts.
+    const past = new Map<number, PastSeasonStats>([
+      [1, { points: 40, minutes: 900, starts: 0, seasonName: "2024/25", plSeasons: 1,
+            seasons: [{ seasonName: "2024/25", minutes: 900, starts: 0 }] }],
+      [2, { points: 0, minutes: 0, plSeasons: 0, seasons: [] }],
+    ]);
+    const [superSub] = midfielders(past);
+    // Measured 0.0566 — the recent season carries weight 0.55, so his zero is
+    // believed hard. Imputing 900/80 would have put him at 0.2866. (Restated
+    // after an audit; the comment used to read 0.067 and 0.297.)
+    expect(superSub).toBeLessThan(0.2);
+  });
+
+  it("treats the first recorded season as recorded", () => {
+    // THE BOUNDARY ITSELF. The two tests above bracket `startsRecordedFrom`
+    // without touching it: one sits three seasons below it, the other two above.
+    // So the constant could have been 2023 instead of 2022, or the comparison
+    // `<=` instead of `<`, and the whole suite stayed green while every 2022/23
+    // substitute in the archive had his bench minutes laundered into starts.
+    //
+    // 2022/23 is the first season FPL populated the field, so a zero on this row
+    // is a fact about the player and not an artefact of the schema. The record
+    // below is built to make the two readings maximally far apart: 2700 minutes
+    // with zero starts imputes 33.75 starts. Measured 0.1236 shipped against
+    // 0.5793 with `startsRecordedFrom` moved to 2023, which is the mutation
+    // this test exists to catch — a gap of 0.46, and the bound at 0.3 sits
+    // clear of both ends of it.
+    //
+    // (This used to say the fixture was "the same fixture as the pre-2022 test"
+    // and quote that test's 0.4866. It is not the same fixture and 0.4866 is
+    // not this test's counterfactual: the season name is the only input that
+    // matters here and changing it moves both the branch AND the decay weight,
+    // so neither reading transfers. An audit caught it; both numbers above are
+    // this fixture's own.)
+    const past = new Map<number, PastSeasonStats>([
+      [1, { points: 90, minutes: 2700, starts: 0, seasonName: "2022/23", plSeasons: 1,
+            seasons: [{ seasonName: "2022/23", minutes: 2700, starts: 0 }] }],
+      [2, { points: 0, minutes: 0, plSeasons: 0, seasons: [] }],
+    ]);
+    const [boundary] = midfielders(past);
+    expect(boundary).toBeLessThan(0.3);
+  });
+
+  it("treats an absent start count as absent, not as zero", () => {
+    // `startsUnrecorded`'s FIRST guard, which nothing reached before. Every
+    // other fixture in this describe supplies a number for `starts`, so the
+    // `row.starts == null` line could have returned `false` and the suite stayed
+    // green — and the consequence of that mutation is not subtle. `impliedStarts`
+    // would fall through to `row.starts ?? 0` and read a full season as zero
+    // starts, which is the exact defect the pre-2022 test above exists to
+    // prevent, reappearing through a different door.
+    //
+    // The row is dated 2024/25 on purpose. That is comfortably inside the
+    // recorded era, so the season-name branch CANNOT be what saves it; only the
+    // null check can. A missing field is a different thing from a recorded zero
+    // even on a modern row, because whatever produced the row failed to carry
+    // the column rather than telling us the player started nothing.
+    const past = new Map<number, PastSeasonStats>([
+      [1, { points: 90, minutes: 2700, seasonName: "2024/25", plSeasons: 1,
+            seasons: [{ seasonName: "2024/25", minutes: 2700 }] } as PastSeasonStats],
+      [2, { points: 0, minutes: 0, plSeasons: 0, seasons: [] }],
+    ]);
+    const [missing] = midfielders(past);
+    // 2700 minutes at the 80-minute estimate is 33.75 starts on a season that
+    // has not aged at all, so this is the strongest reading in the describe:
+    // measured 0.7467. Read as a literal zero it is 0.0566 — a factor of
+    // thirteen, and on the wrong side of every bar in this file.
+    expect(missing).toBeGreaterThan(0.7);
+  });
+
+  it("lets a recorded zero stand when the row cannot be dated", () => {
+    // `startsUnrecorded`'s SECOND guard. Failing to parse a season name yields
+    // `NaN`, `Number.isFinite` rejects it, and the recorded value stands. The
+    // tempting simplification — default the year to 0 — inverts the answer,
+    // because 0 is less than `startsRecordedFrom` and every undated row would
+    // then be treated as pre-schema and have its minutes laundered into starts.
+    //
+    // Standing on the recorded value is the conservative reading and the right
+    // one: imputation is a repair for a KNOWN schema gap, and a row we cannot
+    // date is not known to have one. In production the branch should never fire
+    // — `fetchPastSeason` copies `season_name` onto all three shapes it builds —
+    // which is precisely why it needs a test rather than a comment.
+    const past = new Map<number, PastSeasonStats>([
+      [1, { points: 90, minutes: 2700, starts: 0, plSeasons: 1,
+            seasons: [{ minutes: 2700, starts: 0 }] } as PastSeasonStats],
+      [2, { points: 0, minutes: 0, plSeasons: 0, seasons: [] }],
+    ]);
+    const [undated] = midfielders(past);
+    // Measured 0.0346, the recorded zero believed. Defaulting the year to 0
+    // instead of NaN imputes the same 33.75 starts off the same row and takes
+    // him to 0.8017, so the two readings are not close to each other and no
+    // choice of bar between them could be accused of taste.
+    expect(undated).toBeLessThan(0.3);
+  });
+
+  it("keeps a recorded start count instead of replacing it with the estimate", () => {
+    // A positive count is evidence at any age, and evidence must never be
+    // overwritten by a guess derived from the same row. The record below is
+    // deliberately self-contradictory — 30 starts inside 300 minutes — because
+    // that is what makes it possible to see WHICH branch ran: the recorded 30
+    // and the 3.75 the minutes imply are far enough apart that no tuning
+    // constant could carry the result from one to the other.
+    const past = new Map<number, PastSeasonStats>([
+      [1, { points: 20, minutes: 300, starts: 30, seasonName: "2021/22", plSeasons: 1,
+            seasons: [{ seasonName: "2021/22", minutes: 300, starts: 30 }] }],
+      [2, { points: 0, minutes: 0, plSeasons: 0, seasons: [] }],
+    ]);
+    const [recorded] = midfielders(past);
+    // Measured 0.4504 on the recorded count against 0.1969 on the estimate.
+    // (Restated after an audit; the comment used to read 0.481 and 0.226.)
+    expect(recorded).toBeGreaterThan(0.4);
+  });
+
   it("does not let a long career read as a nailed one", () => {
     // A substitute playing a third of every season for five years accumulates a
     // bigger age-weighted MINUTES SUM than a nailed starter has in one season.
@@ -1532,12 +1678,26 @@ describe("pre-season club start mass", () => {
   // has something to allocate.
   //
   // Nine and not eleven, deliberately. The established club has to be over the
-  // target by LESS than its own record-less players are worth, or a rule that
-  // normalised downward as well as up would find nothing to take and the
-  // up-only test below could not fail. At eleven the club's surplus was 3.58
-  // against 3.28 of movable mass and the down-normalising mutant was a silent
-  // no-op; at nine the surplus is smaller than the movable mass and the mutant
-  // scales those players to a quarter of their value.
+  // target by LESS than its own record-less players are worth, so that a rule
+  // normalising downward has room to land the club exactly ON the target
+  // instead of merely shedding everything it can reach. Measured both ways:
+  //
+  //   nailed   surplus over 9.6   movable mass   down-normalised club sum
+  //     9          2.7136            3.8638        9.6000  (exact landing)
+  //    11          3.4610            2.7638       10.2971  (pool exhausted)
+  //
+  // At nine the record-less players go 3.8638 -> 1.1503, just under a third of
+  // their value, and the club lands on 9.6 to four decimals — which is what
+  // lets the test below assert a MAGNITUDE and not just a direction. At eleven
+  // they are zeroed and the club stays above target, so every under-scaling
+  // mutant would look identical to the correct one.
+  //
+  // (An earlier version of this note said the surplus at eleven was 3.58
+  // against 3.28 and that the down-normalising mutant was "a silent no-op"
+  // there. Neither figure reproduced, and the no-op was a property of a broken
+  // draft of the down branch rather than of the fixture — see the draft table
+  // in the UP ONLY bullet. The reason for choosing nine survives; the account
+  // of what happens at eleven did not.)
   const promoted = club(PROMOTED, 100, 18, 55);
   const established = club(ESTABLISHED, 200, 18, 101);
   const keepers = [
@@ -1547,7 +1707,29 @@ describe("pre-season club start mass", () => {
     el({ id: 93, web_name: "GK B2", team: ESTABLISHED, element_type: 1, now_cost: 40 }),
   ];
   const elements = [...promoted, ...established, ...keepers];
-  const past = nailed(Array.from({ length: 9 }, (_, i) => 200 + i));
+
+  /** An entry that says "asked, and there is nothing on record" — which is a
+   *  different thing from no entry at all. */
+  function blank(ids: number[]): Map<number, PastSeasonStats> {
+    return new Map(
+      ids.map((id) => [id, { points: 0, minutes: 0, plSeasons: 0, seasons: [] } satisfies PastSeasonStats])
+    );
+  }
+
+  // PRODUCTION SHAPE, and it is not decoration. `fetchPastSeason` returns an
+  // entry for EVERY player it was asked about — on the live 2026/27 snapshot,
+  // 399 entries for 399 pooled players, of which 35 carry no usable season row.
+  // An earlier version of this fixture gave the record-less players no key at
+  // all, and that made `hasEvidence: preseasonEvidence(...) != null` and the
+  // much weaker `hasEvidence: p != null` indistinguishable: the mutant survived
+  // the entire suite while being wrong about every record-less player in
+  // production, where it would have excluded all 35 from the lift they exist
+  // for. Handing in a blank row is what makes `preseasonEvidence` the thing
+  // under test rather than the shape of the map.
+  const past = new Map<number, PastSeasonStats>([
+    ...blank(elements.map((e) => e.id)),
+    ...nailed(Array.from({ length: 9 }, (_, i) => 200 + i)),
+  ]);
 
   /** elementId -> shipped `pStart`, read out of the shipped call. */
   function pStarts(): Map<number, number> {
@@ -1585,8 +1767,18 @@ describe("pre-season club start mass", () => {
     // the target back out of the config and so holds for any value at all —
     // including 0, which switches the mechanism off. The value is not a free
     // parameter: it is the measured number of a match's ten outfield starts
-    // that go to players already on their club's GW1 element list (9.597 over
-    // 60 club-seasons; the goalkeeper control returns 0.993 against a known 1).
+    // that go to players already on their club's GW1 element list: 9.685 over
+    // 298 club-matches, 9.620 and 9.440 on the two archive seasons whose
+    // element list is a genuine GW1 one, and the goalkeeper control returns
+    // 0.960 against a known 1. Regenerate with `SHIRT_COUNT=1`.
+    //
+    // (This comment used to say "9.597 over 60 club-seasons; the goalkeeper
+    // control returns 0.993". Both figures were wrong and the first was also
+    // attached to the wrong population — `xp.ts` quoted 9.597 as the count at
+    // the clubs the rule REACHES and 9.775 as the pooled one, so the two files
+    // disagreed about what the same number measured. Neither had apparatus
+    // behind it until `SHIRT_COUNT=1` was written.)
+    //
     // The docstring on `preseasonClubStartMass` carries the derivation, the
     // per-season Brier, and the refuted alternatives. Change one, change both.
     expect(XP_CONFIG.preseasonClubStartMass).toBeCloseTo(9.6, 10);
@@ -1596,14 +1788,128 @@ describe("pre-season club start mass", () => {
 
   it("leaves a club that already has eleven starters alone", () => {
     // Up only. Making the sum an equality instead of a floor would pull the
-    // established club DOWN to the target, and that costs accuracy on the
-    // players the model actually drafts: measured over the three informative
-    // seasons, allowing both directions moved has-record Brier from .1945 to
-    // .1965 while the floor-only rule left it untouched.
+    // established club DOWN to the target.
+    //
+    // THE REASON GIVEN HERE USED TO BE WRONG, TWICE. It first said
+    // down-normalisation costs the players the model actually drafts, moving
+    // has-record Brier from .1945 to .1965. That cannot happen: `movable`
+    // excludes anyone with a record, so no proven starter is reachable in
+    // either direction, and the has-record Brier is identical to six decimals
+    // between the two regimes — the harness now asserts that rather than
+    // printing it. The correction then quoted .2174 to .2312 on the
+    // record-less group and .1989 to .2016 on the pool, and those were wrong
+    // too: measured at a target of 10.0, quoted as if they were live at 9.6.
+    //
+    // Re-measured on the shipped configuration (`DOWN_NORM=1`), the pool goes
+    // .19578 to .20318 and the record-less group .18995 to .23283, paired
+    // bootstraps +.00740 [+.00282, +.01209] and +.04289 [+.01646, +.07725].
+    // Both intervals clear zero, so the refutation is real and not just a
+    // preference for the invariant. On the 400 rows the rule actually moves it
+    // is .157 to .262, because it takes the club's whole surplus out of the
+    // record-less players and drops them from .3090 to .0478 against an
+    // observed start rate of .2825.
+    //
+    // TWO EARLIER DRAFTS OF THAT MEASUREMENT BOTH SAID "BUYS NOTHING", and
+    // both said it because the branch had been quietly crippled rather than
+    // because it was harmless. The UP ONLY bullet on `clubStartMass` carries
+    // the table of what each draft got wrong; it is the more instructive half
+    // of this whole exercise.
+    expect(XP_CONFIG.preseasonClubStartMassDown).toBe(false);
     const before = baseline();
     const after = pStarts();
     expect(sum(before, established)).toBeGreaterThan(XP_CONFIG.preseasonClubStartMass);
     for (const e of established) expect(after.get(e.id)).toBe(before.get(e.id));
+
+    // AND THE MECHANISM IS REACHABLE, which is the half that makes the loop
+    // above worth running. `preseasonClubStartMassDown` is a measurement switch
+    // (see `DOWN_NORM=1`), and a measurement switch that had quietly become a
+    // no-op would let the harness report "down-normalisation costs nothing"
+    // while measuring nothing at all — which is exactly the failure that put
+    // three unreproducible figures in this comment for two rewrites running.
+    // The fixture note above explains why the established club carries NINE
+    // record-holders and not eleven: it is sized so that its surplus is smaller
+    // than its movable mass, so the down branch has something to take.
+    const keep = XP_CONFIG.preseasonClubStartMassDown;
+    let down: Map<number, number>;
+    try {
+      XP_CONFIG.preseasonClubStartMassDown = true;
+      down = pStarts();
+    } finally {
+      XP_CONFIG.preseasonClubStartMassDown = keep;
+    }
+    // A MAGNITUDE, NOT A DIRECTION. `toBeLessThan` alone is far too weak: an
+    // audit mutated the scale factor to `Math.sqrt(k)` on the down path only
+    // and the mutant survived the entire suite AND the harness's own guards,
+    // while silently halving every figure published in the UP ONLY bullet.
+    // The club lands exactly on the target when the record-less pool can
+    // absorb the surplus, which the fixture note above sizes it to do, so
+    // pinning that costs nothing and kills the whole class at once.
+    expect(sum(down, established)).toBeCloseTo(XP_CONFIG.preseasonClubStartMass, 6);
+    expect(sum(down, established)).toBeLessThan(sum(after, established));
+    // It reaches the record-less players and ONLY them: the nine with a season
+    // on the books never enter `primary` in either direction, and that is the
+    // structural fact the `Brier(ev)` control column in the harness rests on.
+    const recorded = established.filter((e) => e.id < 209);
+    const unrecorded = established.filter((e) => e.id >= 209);
+    for (const e of recorded) expect(down.get(e.id)).toBe(after.get(e.id));
+    // 3.8638 -> 1.1503. Pinned, for the same reason as the club sum above.
+    expect(sum(down, unrecorded)).toBeCloseTo(1.1503, 4);
+    expect(sum(after, unrecorded)).toBeCloseTo(3.8638, 4);
+  });
+
+  it("sheds the whole record-less pool when a club's surplus exceeds it", () => {
+    // THE OTHER HALF OF THE DOWN BRANCH, and the half that was missing when
+    // this branch was first written. `allocate` breaks out of its loop when the
+    // wanted mass falls to zero, which going UP means "nothing left to place"
+    // and going DOWN means "the surplus is bigger than this whole pool". Read
+    // the second as the first and the rule writes nothing at all — it becomes a
+    // silent no-op on exactly the clubs it exists to test. An audit measured
+    // the draft that did this as inert on 22 of 35 eligible club-seasons,
+    // Arsenal 2023/24 among them, which is the very club the UP ONLY bullet
+    // cites as the over-allocated tail.
+    //
+    // The test above cannot catch it: its club is sized so the record-less pool
+    // CAN absorb the surplus, so that path never runs there. Two mutants
+    // survived the whole suite on that fixture — restoring the unconditional
+    // break, and shedding half the pool instead of all of it. This club is the
+    // mirror image: eleven men with a record instead of nine, so the surplus
+    // (3.4610) is larger than the movable mass (2.7638) and the pool has to be
+    // emptied. The club then stays ABOVE target at 10.2971, which is the honest
+    // answer — a record-less-only correction cannot take a club below the mass
+    // its proven starters already account for, and the model says so rather
+    // than pretending otherwise.
+    const deepPast = new Map<number, PastSeasonStats>([
+      ...blank(elements.map((e) => e.id)),
+      ...nailed(Array.from({ length: 11 }, (_, i) => 200 + i)),
+    ]);
+    const read = () => {
+      XP_DEBUG.minutes = new Map();
+      try {
+        project(elements, deepPast);
+        return new Map([...XP_DEBUG.minutes].map(([id, m]) => [id, m.pStart]));
+      } finally {
+        XP_DEBUG.minutes = null;
+      }
+    };
+    const before = read();
+    const keep = XP_CONFIG.preseasonClubStartMassDown;
+    let down: Map<number, number>;
+    try {
+      XP_CONFIG.preseasonClubStartMassDown = true;
+      down = read();
+    } finally {
+      XP_CONFIG.preseasonClubStartMassDown = keep;
+    }
+    const recorded = established.filter((e) => e.id < 211);
+    const unrecorded = established.filter((e) => e.id >= 211);
+    // The premise: surplus really does exceed the pool, or the rest is vacuous.
+    expect(sum(before, established) - XP_CONFIG.preseasonClubStartMass).toBeCloseTo(3.461, 3);
+    expect(sum(before, unrecorded)).toBeCloseTo(2.7638, 4);
+    // Emptied, not scaled — every one of them, to zero.
+    for (const e of unrecorded) expect(down.get(e.id)).toBe(0);
+    // And the men with a record are still untouched, in this direction too.
+    for (const e of recorded) expect(down.get(e.id)).toBe(before.get(e.id));
+    expect(sum(down, established)).toBeCloseTo(10.2971, 4);
   });
 
   it("takes the shortfall out of the record-less players, not the known ones", () => {
@@ -1611,9 +1917,13 @@ describe("pre-season club start mass", () => {
     // Premier League veteran, or an established side that sold half its squad.
     // The deficit is evidence about the players nothing is known about, so
     // spreading it over a man with 36 starts on the books would overwrite the
-    // one number that was measured rather than guessed. Absorbing it into the
-    // record-less players alone landed pool Brier at .1953; spreading it over
-    // everyone landed .1967, worse than doing nothing to the record-less.
+    // one number that was measured rather than guessed.
+    //
+    // THE BRIER DOES NOT DECIDE THIS ONE, and an earlier version of this
+    // comment claimed it did (.1953 against .1967). Re-measured through the
+    // real apparatus at the shipped config, the two scopes are indistinguishable
+    // — .1958 against .1956, paired bootstrap -0.00017 [-0.00167, +0.00117].
+    // What keeps record-less-only is the argument above, not the number.
     const mixedTeam = 12;
     const mixed = club(mixedTeam, 300, 18, 55);
     const mixedPast = nailed([300, 301, 302]);
@@ -1701,7 +2011,16 @@ describe("pre-season club start mass", () => {
     // by handing the £4.0m man and the £5.5m man the same lift.
     const before = baseline();
     const after = pStarts();
-    const max = XP_CONFIG.preseasonMaxPStart;
+    // The ceiling that binds HERE is the record-less one: every player in the
+    // promoted club is record-less by construction, so `capOf` gives them all
+    // `preseasonRecordlessMaxPStart` and `preseasonMaxPStart` never comes into
+    // it. Reading the wrong one made `free` the whole club and the multiplier
+    // came out at exactly 1, because the men the cap had already stopped were
+    // being averaged in with the men it had not.
+    const max = Math.min(
+      XP_CONFIG.preseasonMaxPStart,
+      XP_CONFIG.preseasonRecordlessMaxPStart
+    );
     // One multiplier for everyone the ceiling does not bind on. That IS
     // proportionality, and a flat top-up cannot fake it.
     const free = promoted.filter((e) => after.get(e.id)! < max - 1e-9);
@@ -1728,25 +2047,562 @@ describe("pre-season club start mass", () => {
     // here by exactly the overflow.
     const before = baseline();
     const after = pStarts();
-    const max = XP_CONFIG.preseasonMaxPStart;
-    const pinned = promoted.filter((e) => after.get(e.id)! >= max - 1e-9);
+    // Record-less club, so the record-less ceiling is the operative one. See
+    // the sibling test above for what reading `preseasonMaxPStart` here did.
+    const max = Math.min(
+      XP_CONFIG.preseasonMaxPStart,
+      XP_CONFIG.preseasonRecordlessMaxPStart
+    );
+    // Pinned BY the rule: lifted onto the ceiling, as opposed to having started
+    // above it under his own steam. Without the second clause this set also
+    // picks up the untouched 0.660 player and the equality assertion at the
+    // foot of the test reads him as a ceiling violation.
+    const pinned = promoted.filter(
+      (e) => after.get(e.id)! >= max - 1e-9 && before.get(e.id)! < max - 1e-9
+    );
     // If nothing reaches the ceiling the rest of this proves nothing.
     expect(pinned.length).toBeGreaterThan(0);
-    for (const e of promoted) expect(after.get(e.id)!).toBeLessThanOrEqual(max + 1e-9);
+    // The bar is "nobody is LIFTED past the ceiling", not "nobody is above it".
+    // Those differ, and the difference is the whole up-only invariant: a rule
+    // that exists to hand out a club's MISSING start probability has no
+    // business taking any away.
+    for (const e of promoted) {
+      expect(after.get(e.id)!).toBeLessThanOrEqual(Math.max(before.get(e.id)!, max) + 1e-9);
+      expect(after.get(e.id)!).toBeGreaterThanOrEqual(before.get(e.id)! - 1e-9);
+    }
+    // THIS COMMENT USED TO POINT AT A PLAYER AT 0.660 and assert the fixture
+    // contained one, on the grounds that otherwise the two bars above are the
+    // same bar. He is gone, and not by accident: `preseasonRecordlessGlobalCap`
+    // now clamps every record-less prior to the same 0.55 BEFORE `clubStartMass`
+    // runs, so a record-less player strictly above his own ceiling is no longer
+    // reachable on the shipped config at all. The one at 0.660 arrives here at
+    // 0.550. Asserting his existence is now asserting the opposite of the truth.
+    //
+    // So the reachable boundary case is EQUALITY, and it is the one that keeps
+    // `movable`'s exclusion honest: a player sitting exactly on the ceiling must
+    // come out exactly on it, neither scaled up and clipped back (same answer,
+    // by luck) nor dragged down. The strictly-above case is still a real
+    // invariant of the function and is tested directly, off the shipped config,
+    // in the sibling test below.
+    expect(promoted.filter((e) => before.get(e.id)! > max + 1e-9).length).toBe(0);
+    const atCap = promoted.filter((e) => Math.abs(before.get(e.id)! - max) < 1e-9);
+    expect(atCap.length).toBeGreaterThan(0);
+    for (const e of atCap) expect(after.get(e.id)!).toBeCloseTo(max, 10);
     // Everyone else is lifted by MORE than the single-pass multiplier...
     const onePass = XP_CONFIG.preseasonClubStartMass / sum(before, promoted);
     const spare = promoted.find((e) => after.get(e.id)! < max - 1e-9)!;
     expect(after.get(spare.id)! / before.get(spare.id)!).toBeGreaterThan(onePass);
     // ...and the club total is exact, not short by what the ceiling took.
     expect(sum(after, promoted)).toBeCloseTo(XP_CONFIG.preseasonClubStartMass, 6);
-    // The ceiling itself, pinned to the literal for the same reason the target
-    // is above: `max` is read out of the config, so every bar in this block
-    // that mentions it is satisfied by any value in (0, 1]. 0.97 is the claim
-    // that nobody starts every game he is fit for — an ever-present misses
-    // about one in 33 through squad rotation alone — and it is load-bearing:
-    // the redistribution loop below only exists because it bites.
-    expect(max).toBeCloseTo(0.97, 10);
-    expect(pinned.every((e) => Math.abs(after.get(e.id)! - 0.97) < 1e-9)).toBe(true);
+    // The ceilings themselves, pinned to their literals for the same reason the
+    // target is above: `max` is read out of the config, so every bar in this
+    // block that mentions it is satisfied by any value in (0, 1].
+    //
+    // 0.97 is the claim that nobody starts every game he is fit for — an
+    // ever-present misses about one in 33 through squad rotation alone.
+    //
+    // 0.55 is the separate claim that a club's ACCOUNTING deficit may not carry
+    // a player the model has no Premier League record for anywhere near that
+    // far. Both are load-bearing: the redistribution loop only exists because a
+    // ceiling bites, and on a record-less club it is this one that does.
+    expect(XP_CONFIG.preseasonMaxPStart).toBeCloseTo(0.97, 10);
+    expect(XP_CONFIG.preseasonRecordlessMaxPStart).toBeCloseTo(0.55, 10);
+    expect(pinned.every((e) => Math.abs(after.get(e.id)! - 0.55) < 1e-9)).toBe(true);
+  });
+
+  it("does not pull down a record-less player who is already above the ceiling", () => {
+    // The strictly-above half of the up-only invariant, which the shipped config
+    // can no longer reach: the prior clamp and the lift ceiling are the same
+    // 0.55, so nobody record-less ever enters `clubStartMass` above his own cap.
+    // That is a property of the CONSTANTS, not of the function, and the function
+    // has to survive the constants moving. Raising the clamp to
+    // `preseasonMaxPStart` unclamps the priors while leaving the lift ceiling
+    // where it is, which is exactly the configuration the code shipped with
+    // before the uniform cap, and it puts the top promoted player back at 0.660.
+    //
+    // A version that capped him instead of skipping him passes a naive
+    // `after <= max` and silently turns the ceiling into a clamp that fires in
+    // some clubs and not others, depending only on whether the club happened to
+    // be short — the same player rated 0.660 at a club with eleven starters and
+    // 0.550 at a club with six.
+    const keep = XP_CONFIG.preseasonRecordlessGlobalCap;
+    let before: Map<number, number>;
+    let after: Map<number, number>;
+    try {
+      XP_CONFIG.preseasonRecordlessGlobalCap = XP_CONFIG.preseasonMaxPStart;
+      before = baseline();
+      after = pStarts();
+    } finally {
+      XP_CONFIG.preseasonRecordlessGlobalCap = keep;
+    }
+    const max = XP_CONFIG.preseasonRecordlessMaxPStart;
+    const over = promoted.filter((e) => before.get(e.id)! > max + 1e-9);
+    // Without this the rest of the test is vacuous, which is precisely what
+    // happened to the assertion this one replaces.
+    expect(over.length).toBeGreaterThan(0);
+    expect(before.get(over[0].id)!).toBeCloseTo(0.66, 2);
+    for (const e of over) expect(after.get(e.id)!).toBeCloseTo(before.get(e.id)!, 10);
+    // And the club still reaches its target, so skipping him is not a licence to
+    // land short — the shortfall he does not absorb goes to everyone else.
+    expect(sum(after, promoted)).toBeCloseTo(XP_CONFIG.preseasonClubStartMass, 6);
+  });
+
+  it("will not let a club's accounting deficit make an unknown as nailed as a proven starter", () => {
+    // The rule redistributes a club's MISSING start probability, and it is
+    // arithmetic: nothing in it knows whether the man it lands on is a
+    // first-choice signing or a fifth-choice squad filler. Carrying a player the
+    // model has no Premier League record for all the way to `preseasonMaxPStart`
+    // asserts he is as nailed as an ever-present who earned that number, on
+    // strictly less information than the model demands for a tenth of it.
+    //
+    // What it cost, before the record-less ceiling existed: over 2023/24-2025/26
+    // the record-less players this rule put in the top bucket were called at
+    // 0.970 and started 47% of the time (n=45), and the group as a whole scored
+    // Brier .2067 against .1939 with the ceiling in. The full sweep is on
+    // `preseasonRecordlessMaxPStart`.
+    //
+    // The fixture is one club short of target, holding one veteran with a real
+    // record and seventeen unknowns, so both ceilings are exercised in the same
+    // call and the test can say which applies to whom.
+    const T = 14;
+    const squad = club(T, 400, 18, 60);
+    const veteranPast = nailed([400]);
+    const run = () => {
+      XP_DEBUG.minutes = new Map();
+      try {
+        project([...elements, ...squad], new Map([...past, ...veteranPast]));
+        return new Map([...XP_DEBUG.minutes!].map(([id, m]) => [id, m.pStart]));
+      } finally {
+        XP_DEBUG.minutes = null;
+      }
+    };
+    const p = run();
+    const recordless = squad.filter((e) => e.id !== 400);
+    // The club really is short, or nothing below is being tested.
+    const off = (() => {
+      const keep = XP_CONFIG.preseasonClubStartMass;
+      try {
+        XP_CONFIG.preseasonClubStartMass = 0;
+        return run();
+      } finally {
+        XP_CONFIG.preseasonClubStartMass = keep;
+      }
+    })();
+    expect(squad.reduce((s, e) => s + off.get(e.id)!, 0)).toBeLessThan(
+      XP_CONFIG.preseasonClubStartMass
+    );
+    // The correction fired on the unknowns...
+    expect(recordless.some((e) => p.get(e.id)! > off.get(e.id)! + 1e-9)).toBe(true);
+    // ...and stopped every one of them at the record-less ceiling, well short of
+    // the ceiling the veteran is allowed.
+    for (const e of recordless) {
+      expect(p.get(e.id)!).toBeLessThanOrEqual(
+        Math.max(off.get(e.id)!, XP_CONFIG.preseasonRecordlessMaxPStart) + 1e-9
+      );
+    }
+    expect(XP_CONFIG.preseasonRecordlessMaxPStart).toBeLessThan(
+      XP_CONFIG.preseasonMaxPStart
+    );
+    // The veteran is untouched, because the scope is record-less-only — the
+    // second half of the claim, and the thing that keeps the correction away
+    // from the one player here the model actually has evidence about.
+    expect(p.get(400)).toBe(off.get(400));
+    expect(p.get(400)!).toBeGreaterThan(XP_CONFIG.preseasonRecordlessMaxPStart);
+  });
+
+  it("holds the record-less ceiling at a club that is not short either", () => {
+    // THE HOLE THE LIFT CEILING LEAVES, and the reason the record-less ceiling
+    // is enforced at two points rather than one. `preseasonRecordlessMaxPStart`
+    // only ever fires inside `clubStartMass`, so it reaches exactly the clubs
+    // that are SHORT of `preseasonClubStartMass`. A marquee signing at a club
+    // whose eleven shirts are already accounted for is never lifted, is
+    // therefore never clipped, and walks out at whatever his price and
+    // ownership bought him — 0.97 at the top of the market. Measured on the
+    // archive the lift ceiling binds in 1, 5 and 7 clubs of 20 across the three
+    // informative seasons; the other thirteen to nineteen are this case.
+    //
+    // `preseasonRecordlessGlobalCap` closes it by clamping the prior before
+    // `clubStartMass` ever runs. The two halves are ONE RULE — "a player with
+    // no Premier League record is never projected above 0.55" — and the test
+    // that pins them equal is at the foot of this block.
+    const T = 15;
+    const squad = club(T, 600, 18, 101);
+    // Every man but the £10.1m one has a full season on the books, so the club
+    // is over target and the lift never runs. He is the marquee arrival.
+    const squadPast = nailed(Array.from({ length: 17 }, (_, i) => 601 + i));
+    const run = () => {
+      XP_DEBUG.minutes = new Map();
+      try {
+        project([...elements, ...squad], new Map([...past, ...squadPast]));
+        return new Map([...XP_DEBUG.minutes].map(([id, m]) => [id, m.pStart]));
+      } finally {
+        XP_DEBUG.minutes = null;
+      }
+    };
+    const p = run();
+    // The club is NOT short — otherwise this is the sibling test above wearing
+    // a different fixture, and the lift ceiling would be doing the work.
+    expect(squad.reduce((s, e) => s + p.get(e.id)!, 0)).toBeGreaterThan(
+      XP_CONFIG.preseasonClubStartMass
+    );
+    // Unclamped he clears the ceiling comfortably: measured 0.900, on nothing
+    // but a price tag and an ownership figure. Not the model's 0.97 maximum —
+    // that needs the top of the ownership order too, which this synthetic
+    // fixture does not give him — but far above what 45% of realised starts
+    // justifies, and the gap the clamp exists to close.
+    const keep = XP_CONFIG.preseasonRecordlessGlobalCap;
+    let unclamped: number;
+    try {
+      XP_CONFIG.preseasonRecordlessGlobalCap = 1;
+      unclamped = run().get(600)!;
+    } finally {
+      XP_CONFIG.preseasonRecordlessGlobalCap = keep;
+    }
+    expect(unclamped).toBeCloseTo(0.9, 3);
+    expect(unclamped).toBeGreaterThan(XP_CONFIG.preseasonRecordlessGlobalCap + 0.3);
+    // Clamped he sits exactly on the ceiling, and the men around him with real
+    // records are untouched — the rule reads the evidence, not the club.
+    expect(p.get(600)!).toBeCloseTo(XP_CONFIG.preseasonRecordlessGlobalCap, 10);
+    expect(p.get(601)!).toBeGreaterThan(XP_CONFIG.preseasonRecordlessGlobalCap);
+  });
+
+  it("enforces one record-less ceiling, not two independent ones", () => {
+    // The doc block on `preseasonRecordlessGlobalCap` promises this test by
+    // name. The two constants are two ENFORCEMENT POINTS of a single rule —
+    // one before `clubStartMass`, one inside it — and the sweep that chose 0.55
+    // swept them together. Letting them drift apart would produce a model that
+    // rates the same record-less player differently depending on whether his
+    // club happened to be short, which is precisely the incoherence the second
+    // enforcement point was added to remove.
+    expect(XP_CONFIG.preseasonRecordlessMaxPStart).toBeCloseTo(0.55, 10);
+    expect(XP_CONFIG.preseasonRecordlessGlobalCap).toBeCloseTo(0.55, 10);
+    expect(XP_CONFIG.preseasonRecordlessGlobalCap).toBe(
+      XP_CONFIG.preseasonRecordlessMaxPStart
+    );
+    // And the set-piece exemption stays off. It was proposed — a designated
+    // penalty taker has role evidence even without a Premier League record —
+    // implemented, measured and refuted: 0.1966 against 0.1958, worse in all
+    // three archive seasons, paired bootstrap +0.00081 [+0.00007, +0.00178].
+    // The 400 player-gameweeks it moves started 34.5% of the time, because a
+    // record-less set-piece taker is overwhelmingly a promoted club's best
+    // Championship player, and a set-piece order says who takes the penalty
+    // GIVEN he is on the pitch. The losing branch is kept executable; this bar
+    // is what stops it being switched on without re-running the sweep.
+    expect(XP_CONFIG.preseasonRecordlessCapExemptsSetPieces).toBe(false);
+  });
+
+  it("does not exempt a record-less set-piece taker from the ceiling", () => {
+    // The refuted branch, exercised in both positions so that flipping the flag
+    // is a visible behavioural change and not a dead configuration option that
+    // typechecks and does nothing. The fixture is a promoted club's penalty
+    // taker: no record at all, `penalties_order: 1`, so `setPieceStartFloor`
+    // would put him at `penaltyTakerPStart` = 0.75 if the ceiling let it.
+    //
+    // PRICED AT THE FLOOR OF THE MARKET, £4.0m, and that is load-bearing rather
+    // than flavour. At £5.5m his price prior alone already exceeds 0.55, so the
+    // clamp would land him on the ceiling whether or not the set-piece floor
+    // existed and a mutant that deleted the floor would be invisible. At £4.0m
+    // the prior is well short of the ceiling, so the only thing that can carry
+    // him to it is the floor — which is exactly the quantity under test. Id 705
+    // below is the control: same position, same £4.0m, same absent record, no
+    // set-piece order.
+    const taker = el({
+      id: 700, web_name: "Pens", team: 16, element_type: 3, now_cost: 40,
+      penalties_order: 1, direct_freekicks_order: 1,
+    });
+    const rest = club(16, 701, 17, 52);
+    const run = (id = 700) => {
+      XP_DEBUG.minutes = new Map();
+      try {
+        project(
+          [...elements, taker, ...rest],
+          new Map([...blank([700, ...rest.map((e) => e.id)]), ...past])
+        );
+        return XP_DEBUG.minutes!.get(id)!.pStart;
+      } finally {
+        XP_DEBUG.minutes = null;
+      }
+    };
+    /** The prior clamp on its own, with the club accounting switched off. */
+    const noMass = (id = 700) => {
+      const keep = XP_CONFIG.preseasonClubStartMass;
+      try {
+        XP_CONFIG.preseasonClubStartMass = 0;
+        return run(id);
+      } finally {
+        XP_CONFIG.preseasonClubStartMass = keep;
+      }
+    };
+    const shipped = run();
+    const keep = XP_CONFIG.preseasonRecordlessCapExemptsSetPieces;
+    let exempt: number;
+    try {
+      XP_CONFIG.preseasonRecordlessCapExemptsSetPieces = true;
+      exempt = run();
+    } finally {
+      XP_CONFIG.preseasonRecordlessCapExemptsSetPieces = keep;
+    }
+    // Shipped: the ceiling wins.
+    expect(shipped).toBeCloseTo(XP_CONFIG.preseasonRecordlessGlobalCap, 10);
+    // AND IT WINS AT BOTH ENFORCEMENT POINTS, which needs a second measurement
+    // and not just the sentence. This comment used to claim the assertion above
+    // covered both; an audit showed it did not. Club 16 is short, so
+    // `clubStartMass` lifts whatever the prior clamp produced back up toward
+    // the ceiling — and a mutant that dropped `Math.max(prior, floor)` from the
+    // clamp entirely was therefore invisible here, because the lift put him
+    // back on 0.55 from below. Switching the club accounting off isolates the
+    // clamp: the set-piece floor has to be what carries him to the ceiling,
+    // because his own price-and-ownership prior does not reach it.
+    expect(noMass()).toBeCloseTo(XP_CONFIG.preseasonRecordlessGlobalCap, 10);
+    // The control that makes the line above mean something: an identically
+    // priced, identically record-less team-mate in the same position, differing
+    // only in having no set-piece order, sits well short of the ceiling.
+    expect(noMass(705)).toBeLessThan(XP_CONFIG.preseasonRecordlessGlobalCap - 0.05);
+    // Exempt: the floor wins and he is projected as a near-nailed starter on
+    // the strength of a penalty order alone.
+    expect(exempt).toBeCloseTo(XP_CONFIG.penaltyTakerPStart, 6);
+    expect(exempt).toBeGreaterThan(shipped + 0.15);
+  });
+
+  it("does not apply the record-less ceiling to goalkeepers", () => {
+    // A DELIBERATE EXEMPTION, PINNED SO IT STAYS ONE. `preseasonMinutes` clamps
+    // a record-less keeper to 0.55 like anybody else, and then `projectAll`
+    // throws that clamp away — `mm = gkMm(0) ?? mm` REPLACES the minutes model
+    // with the depth chart's answer, and the depth chart caps at
+    // `preseasonMaxPStart` with no record-less awareness. An audit found this
+    // and reported it as a hole in the rule. It is not, and the reason is worth
+    // a test rather than a sentence, because the two readings are behaviourally
+    // opposite and only one of them is defensible.
+    //
+    // The cap exists to distrust `priorPStart`, which converts a price tag into
+    // an ABSOLUTE start probability with nothing competitive constraining it.
+    // The keeper depth chart is a ZERO-SUM allocation of one shirt among a
+    // club's keepers. Somebody wears it whether or not the league has seen
+    // either man before, so capping the first choice at 0.55 does not express
+    // doubt about him — it hands 0.4 of a start to his DEPUTY, who is the worse
+    // bet by every signal the depth chart has.
+    //
+    // Both of this club's keepers are record-less: `past` covers ids 200-208
+    // only, so 92 and 93 have no season on record at all.
+    const p = pStarts();
+    const first = p.get(92)!;
+    const deputy = p.get(93)!;
+    expect(first).toBeGreaterThan(XP_CONFIG.preseasonRecordlessGlobalCap + 0.2);
+    expect(first).toBeLessThanOrEqual(XP_CONFIG.preseasonMaxPStart + 1e-9);
+    // The shirt is allocated, not duplicated and not lost. If the record-less
+    // ceiling were applied here the pair would cover well under one shirt
+    // between them, which is the failure this exemption avoids.
+    expect(first + deputy).toBeGreaterThan(0.85);
+    expect(first).toBeGreaterThan(deputy * 3);
+    // And the same at the promoted club, where the exemption matters most and
+    // where nobody on the books has ever played a Premier League minute.
+    expect(p.get(90)!).toBeGreaterThan(XP_CONFIG.preseasonRecordlessGlobalCap + 0.1);
+  });
+
+  it("does not throw away a super-sub's real minutes when it lifts him", () => {
+    // `share` is not a function of `pStart` alone. `preseasonMinutes` floors it
+    // at the OBSERVED share, `minutes / (games * 90)`, precisely so that a man
+    // who plays 900 minutes off the bench is not scored as one who plays 20 —
+    // `pStart * minsPerStart` throws that away, and the floor is what rescues it.
+    //
+    // When `clubStartMass` moves a player's `pStart` the three fields of the
+    // struct have to be made to agree again, and the obvious way to do that —
+    // recompute `share` as `lifted * minsPerStart / 90` — silently deletes the
+    // floor for exactly the players it exists for. It is safe to take the `max`
+    // against the old value instead only because this rule is up-only.
+    //
+    // Reachable via `preseasonClubStartMassScope: "all"`, which is where a
+    // player with a record can be lifted at all. The knob ships, so it has to
+    // work; and the guard has to survive anyone turning it on.
+    const T = 15;
+    const squad = club(T, 600, 18, 45);
+    // 1710 minutes off the bench across a full season: observed share 0.5, and
+    // no starts at all, so `pStart` comes out of the blend near the prior.
+    const subPast = new Map<number, PastSeasonStats>([
+      [
+        600,
+        {
+          points: 60,
+          minutes: 1710,
+          starts: 0,
+          seasonName: "2025/26",
+          plSeasons: 1,
+          lastSeason: { seasonName: "2025/26", minutes: 1710, starts: 0 },
+          seasons: [{ seasonName: "2025/26", minutes: 1710, starts: 0 }],
+        } satisfies PastSeasonStats,
+      ],
+    ]);
+    const keepScope = XP_CONFIG.preseasonClubStartMassScope;
+    const readShare = () => {
+      XP_DEBUG.minutes = new Map();
+      try {
+        project(
+          [...elements, ...squad],
+          new Map([...blank(squad.map((e) => e.id)), ...past, ...subPast])
+        );
+        const m = XP_DEBUG.minutes!.get(600)!;
+        return { pStart: m.pStart, share: m.share };
+      } finally {
+        XP_DEBUG.minutes = null;
+      }
+    };
+    try {
+      XP_CONFIG.preseasonClubStartMassScope = "all";
+      const lifted = readShare();
+      const keepMass = XP_CONFIG.preseasonClubStartMass;
+      let off: ReturnType<typeof readShare>;
+      try {
+        XP_CONFIG.preseasonClubStartMass = 0;
+        off = readShare();
+      } finally {
+        XP_CONFIG.preseasonClubStartMass = keepMass;
+      }
+      // He IS lifted — otherwise the guard is never reached and this is green
+      // for the wrong reason.
+      expect(lifted.pStart).toBeGreaterThan(off.pStart + 1e-9);
+      // A full season of substitute appearances is worth half a shirt, and the
+      // lift must not be able to reduce that. Recomputing `share` from the
+      // lifted `pStart` alone gives roughly a third of it.
+      expect(off.share).toBeCloseTo(0.5, 6);
+      expect(lifted.share).toBeGreaterThanOrEqual(off.share - 1e-9);
+    } finally {
+      XP_CONFIG.preseasonClubStartMassScope = keepScope;
+    }
+  });
+
+  it("carries the lift through to share, not just to pStart", () => {
+    // THE OTHER HALF OF THE SAME GUARD, and the test above cannot see it. That
+    // one pins the FLOOR — `share` must not be dragged down by recomputing it
+    // from a lifted `pStart` — and a mutant that simply never recomputes
+    // (`share: mm.share`) satisfies a floor perfectly, so it survived the whole
+    // suite. An audit found it. On the live snapshot that mutant changes
+    // `share` for 64 players, one of them from 0.489 to 0.130.
+    //
+    // Why it matters more than a struct being tidy: `share` is what
+    // `fixtureXp` turns into appearance points and into the minutes multiplier
+    // on every attacking return. Lifting `pStart` and leaving `share` behind
+    // says the player starts more often but plays no more football, which is
+    // not a thing that happens.
+    //
+    // The subject is a plain record-less player at the promoted club, where the
+    // lift is largest. He has no observed share to floor against, so `share` is
+    // exactly `pStart * minsPerStart / 90` and the identity is checkable.
+    const read = (id: number) => {
+      XP_DEBUG.minutes = new Map();
+      try {
+        project(elements, past);
+        const m = XP_DEBUG.minutes!.get(id)!;
+        return { pStart: m.pStart, share: m.share, mps: m.minsPerStart };
+      } finally {
+        XP_DEBUG.minutes = null;
+      }
+    };
+    const off = (id: number) => {
+      const keep = XP_CONFIG.preseasonClubStartMass;
+      try {
+        XP_CONFIG.preseasonClubStartMass = 0;
+        return read(id);
+      } finally {
+        XP_CONFIG.preseasonClubStartMass = keep;
+      }
+    };
+    // NOT id 100. The promoted club's most expensive outfielder comes out of
+    // `priorPStart` at 0.550 already, lands on the record-less ceiling before
+    // the club accounting runs, and is therefore immovable: 0.550 before and
+    // 0.550 after, which would have made this test green under every mutant
+    // alive. Id 104 is four price steps down, at 0.080 on the prior and 0.520
+    // after the lift — a factor of six and a half, and short of the ceiling, so
+    // the `share` identity below is checkable rather than clipped.
+    const id = 104;
+    const before = off(id);
+    const after = read(id);
+    // He is lifted, or nothing below proves anything. Measured 0.080 -> 0.520.
+    expect(after.pStart).toBeGreaterThan(before.pStart + 0.4);
+    // And the lift arrives in `share` too, at the same ratio: 0.0711 -> 0.4622.
+    expect(after.share).toBeGreaterThan(before.share + 0.35);
+    expect(after.share).toBeCloseTo((after.pStart * after.mps) / 90, 10);
+    expect(before.share).toBeCloseTo((before.pStart * before.mps) / 90, 10);
+  });
+
+  it("keeps the unplaceable remainder off the squad unless asked to spill it", () => {
+    // `preseasonClubStartMassSpill` and the `leftover` return that feeds it
+    // were BOTH dead in this suite: flipping the flag to `true` changed nothing
+    // any test could see, and so did deleting `capOf`'s `hasEvidence` branch.
+    // An audit found both. A shipped configuration option that no test can
+    // distinguish from its opposite is not a documented decision, it is an
+    // untested code path with a comment attached.
+    //
+    // The shape that reaches them is specific and does not occur in the
+    // fixtures above: a club that is short of target AND whose record-less
+    // players cannot absorb the shortfall, because they are all pinned on the
+    // 0.55 ceiling. Six proven regulars and six record-less men at the SAME
+    // prices do it — same club, same price ladder, so the only thing that
+    // separates the two halves is whether the league has seen them play.
+    //
+    // Measured: the six unknowns carry 3.30 between them, the six regulars come
+    // out of the blend at 0.829-0.865 for 5.02, and the club therefore sums to
+    // 8.32 against a target of 9.60. The 1.28 that is left has nowhere
+    // legitimate to go.
+    const T = 14;
+    const known = club(T, 800, 6, 45);
+    const unknown = club(T, 810, 6, 45);
+    const knownPast = nailed([800, 801, 802, 803, 804, 805]);
+    const read = () => {
+      XP_DEBUG.minutes = new Map();
+      try {
+        project(
+          [...elements, ...known, ...unknown],
+          new Map([
+            ...blank([...known, ...unknown].map((e) => e.id)),
+            ...past,
+            ...knownPast,
+          ])
+        );
+        const m = XP_DEBUG.minutes!;
+        return new Map([...m].map(([id, v]) => [id, v.pStart]));
+      } finally {
+        XP_DEBUG.minutes = null;
+      }
+    };
+    const shipped = read();
+    const keep = XP_CONFIG.preseasonClubStartMassSpill;
+    let spilled: Map<number, number>;
+    try {
+      XP_CONFIG.preseasonClubStartMassSpill = true;
+      spilled = read();
+    } finally {
+      XP_CONFIG.preseasonClubStartMassSpill = keep;
+    }
+    const tot = (p: Map<number, number>, es: Element[]) =>
+      es.reduce((s, e) => s + (p.get(e.id) ?? 0), 0);
+    // The unknowns are at the ceiling either way — the spill is not allowed to
+    // reach them a second time, and this is what proves it did not.
+    for (const e of unknown) {
+      expect(shipped.get(e.id)!).toBeCloseTo(XP_CONFIG.preseasonRecordlessMaxPStart, 10);
+      expect(spilled.get(e.id)!).toBeCloseTo(XP_CONFIG.preseasonRecordlessMaxPStart, 10);
+    }
+    // SHIPPED: the six proven regulars are untouched, so the club sums to less
+    // than the target and the model is saying, out loud, that it does not know
+    // where the remaining shirts go. That is the objection spilling answers and
+    // the objection that keeps it switched off: the alternative reaches players
+    // the model already scores on evidence.
+    expect(tot(shipped, known)).toBeCloseTo(tot(read(), known), 10);
+    expect(tot(shipped, [...known, ...unknown])).toBeLessThan(
+      XP_CONFIG.preseasonClubStartMass - 1
+    );
+    // SPILLED: the remainder lands on the men with a record, and the club gets
+    // closer to its target — 5.02 to 5.82 across the six, every one of them
+    // carried to the 0.97 ceiling, club total 8.32 to 9.12.
+    expect(tot(spilled, known)).toBeGreaterThan(tot(shipped, known) + 0.6);
+    for (const e of known) {
+      expect(spilled.get(e.id)!).toBeGreaterThan(shipped.get(e.id)! + 1e-9);
+      expect(spilled.get(e.id)!).toBeLessThanOrEqual(XP_CONFIG.preseasonMaxPStart + 1e-9);
+    }
+    // And the spill is bounded by the same ceiling the primary pass respects:
+    // it closes the gap without inventing an eleventh outfielder.
+    expect(tot(spilled, [...known, ...unknown])).toBeLessThanOrEqual(
+      XP_CONFIG.preseasonClubStartMass + 1e-9
+    );
   });
 
   it("does nothing once the season is under way", () => {

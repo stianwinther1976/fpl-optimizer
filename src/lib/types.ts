@@ -152,8 +152,16 @@ export interface PastSeasonStats {
    * the minutes model should judge on: a player who started 30 games two years
    * ago but none last season is a bench player now.
    *
-   * `starts` is optional because FPL only began recording it in 2021/22 — an
-   * absent value means "not measured", not "started nothing".
+   * `starts` is declared optional for callers that build a workload by hand;
+   * the live API always sends the field, and always as a number.
+   *
+   * A ZERO IS NOT SELF-EXPLANATORY. FPL only began populating the field in
+   * 2022/23 — before that every row reads `0` regardless of what the player
+   * actually did, so a 3000-minute 2020/21 season arrives here as "0 starts".
+   * Consumers must disambiguate on the season name via `startsUnrecorded` in
+   * `xp.ts`, which tests against `XP_CONFIG.startsRecordedFrom`. Treating the
+   * zero at face value rated career regulars returning via promoted clubs
+   * below players who had never appeared at all.
    */
   lastSeason?: SeasonWorkload;
   /**
