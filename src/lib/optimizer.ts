@@ -24,7 +24,14 @@ export interface XiSlot {
 export interface BestXi {
   formation: [number, number, number];
   starters: XiSlot[]; // GK first, then DEF, MID, FWD
-  bench: XiSlot[]; // ordered: first outfield subs by xp, GK last
+  // FPL bench order: substitute GK FIRST, then the outfield subs by xp desc.
+  // (This line used to say "GK last", contradicting both the code that builds
+  // it and the comment right above that code. It is not cosmetic: the four
+  // `BENCH_SLOT_WEIGHTS` are index-aligned to this array, so a reader who
+  // trusted the old comment would price the sub keeper at 0.046 and the first
+  // outfield sub at 0.072 — the weights reversed on the two slots that carry
+  // almost all the value.)
+  bench: XiSlot[];
   captain: XiSlot | null;
   vice: XiSlot | null;
   totalXp: number; // XI xp + captain doubling
@@ -600,6 +607,202 @@ function buildDreamSquad(elements: Element[], xp: Map<number, PlayerXp>) {
   return buildSquadWithinBudget(elements, xp, 1000);
 }
 
+/**
+ * How often each bench slot is actually NEEDED, in FPL bench order — sub
+ * goalkeeper first, then the three outfield subs in priority order, which is
+ * exactly the order `pickBestXi` returns.
+ *
+ * Measured, not chosen: `scripts/simulate.test.ts` (SLOTW=1) replays 152
+ * managed gameweeks across four seasons and counts, per bench INDEX, how often
+ * an auto-sub into that slot was required. Slots NEEDED, not slots FILLED —
+ * filled is a joint fact about the fixtures and about how good this particular
+ * bench happens to be, and using it here would let a bad bench justify itself.
+ *
+ * The spread is the point. Every objective in this file before now priced a
+ * bench uniformly, and the first outfield sub turns out to be worth ELEVEN
+ * TIMES the third. Re-run SLOTW=1 if the numbers are ever questioned; do not
+ * hand-tune them.
+ */
+export const BENCH_SLOT_WEIGHTS = [0.072, 0.513, 0.283, 0.046] as const;
+
+/** Squad score with the bench priced at what it is worth instead of at par. */
+export function benchAwareScore(squad: Element[], scoreOf: (id: number) => number): number {
+  const xi = pickBestXi(squad, scoreOf);
+  let total = xi.starters.reduce((a, s) => a + scoreOf(s.element.id), 0);
+  xi.bench.forEach((s, i) => {
+    total += (BENCH_SLOT_WEIGHTS[i] ?? 0) * scoreOf(s.element.id);
+  });
+  return total;
+}
+
+/**
+ * A £100m squad built on `benchAwareScore` rather than on the sum over all
+ * fifteen — "strong eleven, honest bench".
+ *
+ * WHAT IT IS WORTH, MEASURED. Played out over four real seasons at 38
+ * set-and-forget gameweeks (`BENCH=1` in scripts/simulate.test.ts), this
+ * squad scored +64 / +19 / +40 / -51 against the greedy draft — total +72,
+ * better in three seasons of four. The unbounded search on the same objective
+ * comes out at +155 / -77 / -104 / +80, total +54, split two seasons each way.
+ *
+ * THAT IS NOT A MANDATE TO MAKE IT THE DEFAULT, and the size of the number is
+ * why. +72 over four seasons is +18 a season; the spread between the best and
+ * the worst optimum WITHIN a single objective's family, in the same
+ * experiment, is 67-566 points. The signal is inside the noise. What the
+ * measurement supports is that re-pricing the bench does not cost anything —
+ * enough to offer the structure, not enough to impose it.
+ *
+ * AND THE NUMBER IS NOT A CONSTANT. An earlier run of the identical experiment
+ * gave -140 / +19 / -2 / -51, total -174, i.e. the opposite sign. Neither this
+ * function nor `BENCH_SLOT_WEIGHTS` changed between the two runs. Exactly one
+ * thing did: commit 77099ab, the pre-season minutes model, which is the only
+ * commit in that stretch to touch `src/lib/xp.ts` — the other three (bf2483c,
+ * 2e4f41d, 916077f) added measurement harnesses and no model code at all. So
+ * this is a measurement of the bench objective UNDER ONE PROJECTION MODEL, and
+ * a change to how minutes are projected is enough to flip its sign. Re-run the
+ * `BENCH=1` gate after any change to `xp.ts`. Do not quote these figures as a
+ * settled fact about FPL.
+ *
+ * WHY THIS IS A SEPARATE FUNCTION AND NOT A FLAG ON `buildSquadWithinBudget`.
+ * That builder is greedy over PER-PLAYER scores: it fills by rank and then
+ * downgrades by xp-lost-per-tenth-saved. A bench weight is not a property of a
+ * player, it is a property of the slot he lands in, and which slot that is only
+ * exists once the other fourteen are known. So the objective has to be scored
+ * on whole squads, which means a search over squads.
+ *
+ * THE POOL IS THE SUBTLE PART. `buildSquadWithinBudget` takes the top 40 per
+ * position by projected points, and a £4.0m third-choice keeper is nowhere near
+ * that list — so a search restricted to it CANNOT BUILD THE THING THIS FUNCTION
+ * EXISTS TO BUILD, and would quietly return something close to the incumbent
+ * while looking like it had tried. The cheapest 14 per position are unioned in
+ * for exactly that reason.
+ *
+ * THE PAIRED NEIGHBOURHOOD IS THE OTHER SUBTLE PART. At £100.0m every single
+ * upgrade is unaffordable and every single downgrade loses points, so a
+ * single-swap climb declares victory immediately and a budget-tight local
+ * optimum looks global. `scripts/ytcompare.test.ts` measured that failure at
+ * 2.55 xP. Here the paired move is deliberately restricted to selling a BENCH
+ * slot down to fund an XI upgrade, which is both the move that matters and
+ * cheap enough to run in a browser — the general paired neighbourhood is
+ * 15x15 slot pairs and this is 4x11.
+ */
+/**
+ * The candidate pool the bench-aware climb searches over, exported so the
+ * property that makes it correct can be asserted directly: the CHEAPEST
+ * eligible player at each position must be reachable. A pool of "the best 40"
+ * is the natural thing to write and is exactly wrong here — on real data the
+ * cheapest keeper is somewhere past rank 60, so a search restricted to the
+ * best 40 cannot build a cheap bench and would return the greedy draft while
+ * looking like it had tried.
+ */
+export function benchAwarePool(
+  elements: Element[],
+  xp: Map<number, PlayerXp>
+): Map<ElementType, Element[]> {
+  const scoreOf = (id: number) => xp.get(id)?.totalDiscounted ?? 0;
+  const pools = new Map<ElementType, Element[]>();
+  for (const t of [1, 2, 3, 4] as ElementType[]) {
+    const eligible = elements.filter(
+      (e) => e.element_type === t && e.status !== "u" && (xp.get(e.id)?.total ?? 0) > 0
+    );
+    const byScore = [...eligible].sort((a, b) => scoreOf(b.id) - scoreOf(a.id)).slice(0, 40);
+    const byPrice = [...eligible].sort((a, b) => a.now_cost - b.now_cost).slice(0, 14);
+    const seen = new Set<number>();
+    pools.set(
+      t,
+      [...byScore, ...byPrice].filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)))
+    );
+  }
+  return pools;
+}
+
+export function buildBenchAwareSquad(
+  elements: Element[],
+  xp: Map<number, PlayerXp>,
+  budget: number
+): { squad: Element[]; cost: number } {
+  const scoreOf = (id: number) => xp.get(id)?.totalDiscounted ?? 0;
+  const seed = buildSquadWithinBudget(elements, xp, budget);
+  const pools = benchAwarePool(elements, xp);
+
+  let squad = [...seed.squad];
+  let cost = seed.cost;
+  if (squad.length !== 15) return seed;
+  let cur = benchAwareScore(squad, scoreOf);
+
+  const canSwap = (sq: Element[], i: number, inEl: Element, atCost: number): boolean => {
+    const out = sq[i];
+    if (inEl.id === out.id) return false;
+    if (inEl.element_type !== out.element_type) return false;
+    if (sq.some((s, j) => j !== i && s.id === inEl.id)) return false;
+    if (atCost - out.now_cost + inEl.now_cost > budget) return false;
+    let n = 0;
+    for (let j = 0; j < sq.length; j++) if (j !== i && sq[j].team === inEl.team) n++;
+    return n < MAX_PER_CLUB;
+  };
+
+  for (let iter = 0; iter < 120; iter++) {
+    let improved = false;
+
+    // Neighbourhood 1: single swaps.
+    for (let i = 0; i < squad.length && !improved; i++) {
+      for (const inEl of pools.get(squad[i].element_type)!) {
+        if (!canSwap(squad, i, inEl, cost)) continue;
+        const trial = [...squad];
+        trial[i] = inEl;
+        const s = benchAwareScore(trial, scoreOf);
+        if (s > cur + 1e-9) {
+          cost = cost - squad[i].now_cost + inEl.now_cost;
+          squad = trial;
+          cur = s;
+          improved = true;
+          break;
+        }
+      }
+    }
+    if (improved) continue;
+
+    // Neighbourhood 2: sell a bench slot down, spend it on the eleven.
+    const benchIds = new Set(
+      pickBestXi(squad, scoreOf).bench.map((s) => s.element.id)
+    );
+    for (let i = 0; i < squad.length && !improved; i++) {
+      if (!benchIds.has(squad[i].id)) continue;
+      for (const cheap of pools.get(squad[i].element_type)!) {
+        if (cheap.now_cost >= squad[i].now_cost) continue;
+        if (!canSwap(squad, i, cheap, cost)) continue;
+        const mid = [...squad];
+        mid[i] = cheap;
+        const midCost = cost - squad[i].now_cost + cheap.now_cost;
+        for (let j = 0; j < mid.length && !improved; j++) {
+          if (j === i || benchIds.has(mid[j].id)) continue;
+          for (const up of pools.get(mid[j].element_type)!) {
+            if (up.now_cost <= mid[j].now_cost) continue;
+            if (!canSwap(mid, j, up, midCost)) continue;
+            const trial = [...mid];
+            trial[j] = up;
+            const s = benchAwareScore(trial, scoreOf);
+            if (s > cur + 1e-9) {
+              cost = midCost - mid[j].now_cost + up.now_cost;
+              squad = trial;
+              cur = s;
+              improved = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (!improved) break;
+  }
+
+  // `cost` is maintained incrementally during the search because the budget
+  // test runs inside the innermost loop; it is recomputed here so a bookkeeping
+  // slip in one of the two neighbourhoods cannot reach the caller as a squad
+  // whose reported price is not its price.
+  return { squad, cost: squad.reduce((a, e) => a + e.now_cost, 0) };
+}
+
 export interface LaunchSquad {
   squad: Element[];
   cost: number; // tenths
@@ -634,12 +837,100 @@ export interface LaunchVariant {
   xi: BestXi;
 }
 
+/** The "value" draft's headline price ceiling: no player above £8.5m. */
+export const VALUE_CAP = 85;
+
+/**
+ * The price ceiling actually applied to the "value" draft: £8.5m, TIGHTENED to
+ * £0.5m below the balanced draft's dearest player if £8.5m would not have
+ * excluded anybody — clamped at the £4.0m floor, so between £4.1m and £4.4m
+ * the tightening is less than a full tier, and an empty squad (no draft to
+ * derive from) falls back to the headline £8.5m.
+ *
+ * Both halves are load-bearing, and I got this wrong in both directions before
+ * settling here. A bare constant stops binding the moment the balanced draft's
+ * dearest pick falls to £8.5m or below — the two builds then come out
+ * byte-identical, `buildLaunchVariants` dedupes one away, and the manager is
+ * shown three cards where four were promised, with nothing failing anywhere.
+ * That is not hypothetical, but it is narrower than it first looks: on the
+ * 2026-27 pool the balanced draft's dearest pick is £12.0m when last season's
+ * minutes are available and £8.0m when they are not, so the bug bites only on
+ * the fallback path `OptimizePanel` takes when the per-player history could
+ * not be fetched — which is the path a manager hits when the FPL API is flaky,
+ * i.e. the one nobody tests by hand.
+ *
+ * But deriving the cap from the balanced draft ALONE is worse, for a reason
+ * that is easy to get backwards — I did. On the normal path the balanced
+ * draft's dearest player is £12.0m, so a pure "one tier below" rule gives an
+ * £11.5m cap. Measured, that cap produces a squad BYTE-IDENTICAL to the one
+ * the £8.5m cap produces (both share 12 of 15 with balanced, both top out at
+ * £8.5m): the greedy build simply never wanted anyone between £8.5m and
+ * £11.5m. So the derived cap costs nothing in squad terms — the damage is
+ * entirely in the card, which would announce an £11.5m ceiling for a draft
+ * whose dearest player is £8.5m, and would move that headline number around
+ * from season to season for no reason a manager could act on.
+ *
+ * SO THE RULE IS A CONDITIONAL, NOT A MINIMUM — and this paragraph used to say
+ * "take the minimum", which is a different function and a wrong one. `min(85,
+ * dearest - 5)` tightens whenever `dearest < 90`, so it answers 82 for a
+ * balanced draft topping out at £8.7m, where £8.5m binds perfectly well and
+ * there is nothing to fix. What the product needs is: keep the headline £8.5m
+ * whenever £8.5m excludes somebody, and only when it excludes nobody fall back
+ * to one tier below the dearest pick.
+ *
+ * WHAT IT STILL CANNOT DO, at the £4.0m floor. If the balanced draft's dearest
+ * player IS £4.0m, `dearest - 5` is below the cheapest price in the game and
+ * the clamp returns 40, which excludes nobody — so the value build equals the
+ * balanced build and the dedupe in `buildLaunchVariants` drops it, leaving
+ * three cards. That is the documented failure mode, and here it is the right
+ * answer rather than a bug: in a pool where the best fifteen are all at the
+ * floor there IS no "spread the money differently" structure distinct from
+ * balanced, so showing one card for one squad is honest. It is also
+ * unreachable in the real game — a £100m budget does not produce an all-£4.0m
+ * optimum — which is why it is documented here instead of guarded against.
+ *
+ * Exported so the property that makes the variant worth showing at all — that
+ * it binds — can be asserted rather than assumed.
+ */
+export function valueCapOf(balancedSquad: Element[]): number {
+  if (balancedSquad.length === 0) return VALUE_CAP;
+  const dearest = Math.max(...balancedSquad.map((e) => e.now_cost));
+  // NOT `Math.min(VALUE_CAP, dearest - 5)`, which is what stood here and is
+  // wrong on a four-value strip nobody would think to try: £8.6m to £8.9m,
+  // where £8.5m binds but `dearest - 5` is still under 85. Prices move in
+  // £0.1m steps in-season, so that strip is an ordinary place for the dearest
+  // pick to sit, not a corner. The test that was supposed to pin this used
+  // `dearest = 120` and passed under either rule.
+  //
+  // The condition has to be "does £8.5m exclude anybody", which is
+  // `dearest > VALUE_CAP` — nothing about `dearest - 5`.
+  return dearest > VALUE_CAP ? VALUE_CAP : Math.max(40, dearest - 5);
+}
+
 /**
  * Several viable GW1 drafts, not one "answer" — pre-season uncertainty is real,
  * so we offer distinct legal £100m structures the manager can choose between:
  *  - Balanced: highest projected points overall.
  *  - Stars & scrubs: two forced premium picks, cheap enablers around them.
- *  - Value: no player above £8.5m — spreads money and risk.
+ *  - Value: no player above £8.5m (tightened if that would not bind) —
+ *    spreads money and risk.
+ *  - Strong XI: bench priced at its measured autosub value, not at par.
+ *
+ * These are STRUCTURES, not a ranking, and the four-season 240-restart
+ * experiment in `scripts/simulate.test.ts` is why. WHICH FIFTEEN you end up
+ * with swamps WHICH RULE picked them: the spread between the best and worst
+ * optimum within a single objective's own family is 67-566 points across the
+ * four seasons, against gaps of 77-155 between the two objectives the app
+ * actually builds on (sum-of-15 for "Balanced", slot-weighted for "Strong XI";
+ * across all three pairs the same experiment measures, including the XI-only
+ * objective, the range is 0-249 — 0 because in 2023-24 the slot-weighted and
+ * XI-only families land on the same median, 1770). In eleven of the twelve
+ * family-seasons measured the within-family
+ * spread is the larger of the two, and in the twelfth (2025-26's bench-aware
+ * family, which converged to only five distinct optima and a 67-point spread)
+ * it is not — so this is a strong tendency, not a law. It is
+ * still the reason "Strong XI" is offered as a choice and is deliberately not
+ * the default; see its own note above `buildBenchAwareSquad`.
  */
 export function buildLaunchVariants(
   bootstrap: Bootstrap,
@@ -678,26 +969,94 @@ export function buildLaunchVariants(
   }
   if (stars.length < 2 && premiums[1]) stars.push(premiums[1].id);
 
-  const variants: LaunchVariant[] = [
-    finalize(
+  const balanced = buildSquadWithinBudget(bootstrap.elements, xp, 1000);
+
+  // £8.5m normally; tightened only if £8.5m would not have bound. See the note
+  // on `valueCapOf` for why neither the constant nor the derived cap is right
+  // on its own. The cap that was applied is what the card says, so the two
+  // cannot drift apart.
+  const valueCap = valueCapOf(balanced.squad);
+  const valueBuilt = buildSquadWithinBudget(bootstrap.elements, xp, 1000, score, {
+    maxPlayerCost: valueCap,
+  });
+  const drafts: [string, string, string, { squad: Element[]; cost: number }][] = [
+    [
       "balanced",
       "Balanced",
-      "Highest projected points across the squad — the model's single best draft.",
-      buildSquadWithinBudget(bootstrap.elements, xp, 1000)
-    ),
-    finalize(
+      // Names the metric it wins on, deliberately. Each card also shows its
+      // starting XI's projected points, and "Strong XI" beats this one on that
+      // number — 47.9 against 49.9 on the current pool. Measured, not by
+      // construction: `benchAwareScore` maximises discounted xP over five
+      // gameweeks with no captain term, while the card prints next-GW xP with
+      // the captain doubled, so the two are not the same objective and nothing
+      // guarantees the ordering. It just happens to hold on both real-pool
+      // paths (42.6 against 45.0 on the no-history fallback). A card
+      // that called itself "the model's single best draft", which this one
+      // did, was therefore contradicted by the figure printed beside it.
+      "Highest projected points across all fifteen — best on the squad total, not on the eleven alone.",
+      balanced,
+    ],
+    [
       "stars",
       "Stars & scrubs",
       "Two premium picks locked in, budget enablers around them.",
-      buildSquadWithinBudget(bootstrap.elements, xp, 1000, score, { mustInclude: stars })
-    ),
-    finalize(
+      buildSquadWithinBudget(bootstrap.elements, xp, 1000, score, { mustInclude: stars }),
+    ],
+    [
       "value",
       "Value / balanced budget",
-      "No player above £8.5m — spreads money and risk across more mid-price picks.",
-      buildSquadWithinBudget(bootstrap.elements, xp, 1000, score, { maxPlayerCost: 85 })
-    ),
+      `No player above £${(valueCap / 10).toFixed(1)}m — spreads money and risk across more mid-price picks.`,
+      valueBuilt,
+    ],
+    // Offered, not preferred. Over four real seasons at 240 restarts each the
+    // unbounded search on this objective beat sum-of-15 in two and lost two
+    // (+155 / -77 / -104 / +80), and an earlier run under a different
+    // projection model had it losing three of four. The description below
+    // therefore describes the trade in the manager's own terms instead of
+    // selling it as an upgrade. It is here because "strong eleven, cheap
+    // bench" is a structure managers deliberately play, and because the
+    // £4.0m-backup-keeper half of it IS measured positive (+1.74 discounted xP
+    // over five gameweeks, `scripts/ytcompare.test.ts`).
+    [
+      "strongxi",
+      "Strong XI, cheap bench",
+      "Prices the bench at what it actually returns through autosubs, then spends the savings on the eleven. A stronger starting team with less cover if someone is dropped.",
+      buildBenchAwareSquad(bootstrap.elements, xp, 1000),
+    ],
   ];
+
+  // A build can come back short of fifteen — a `maxPlayerCost` tight enough to
+  // empty a position does it — and a short "squad" is not a draft: its card
+  // would price a partial team at full budget and `pickBestXi` has no legal
+  // formation to find. Drop it here, BEFORE `finalize`, rather than aliasing it
+  // to the balanced squad and letting the dedupe below quietly swallow it. The
+  // difference matters: aliasing produced a card whose description named a cap
+  // the squad it described did not obey, and left "why are there three cards?"
+  // with no answer anywhere in the code.
+  //
+  // The budget half of the guard is here for the same reason and has never
+  // fired: `buildSquadWithinBudget` is supposed to return a squad inside the
+  // budget it was handed, so `cost > 1000` would be a bug in the builder, not
+  // a legitimate outcome. But the comment above claims this filter stops a
+  // card that misprices a team, and a fifteen costing £101m is exactly that,
+  // so the check has to be here or the comment is a lie.
+  //
+  // And it is NOT unreachable, which an earlier draft of this comment claimed.
+  // `buildSquadWithinBudget`'s downgrade loop is `while (cost > budget && ...)`
+  // with a `break` when no legal swap is left, and it never downgrades a locked
+  // pick — so a `mustInclude` build with two forced premiums and a thin pool
+  // can legitimately return over budget. The "Stars & scrubs" draft is exactly
+  // that shape. What this filter changes for that case is that the card
+  // disappears instead of appearing with an illegal price on it, which is the
+  // better of the two, and the four-key assertions in `optimizer.test.ts` and
+  // `ytcompare.test.ts` are what stop it disappearing unnoticed.
+  //
+  // No fixture currently drives it: deleting `&& built.cost <= 1000` leaves the
+  // whole suite green.
+  const variants = drafts
+    .filter(([, , , built]) => built.squad.length === 15 && built.cost <= 1000)
+    .map(([key, label, description, built]) => finalize(key, label, description, built));
+
   // Drop a variant if it came out identical to another (dedupe by squad ids).
   const seen = new Set<string>();
   const unique = variants.filter((v) => {

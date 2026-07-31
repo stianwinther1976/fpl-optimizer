@@ -5,14 +5,61 @@ import {
   pickBestXi,
   buildLaunchSquad,
   buildLaunchVariants,
+  buildSquadWithinBudget,
+  buildBenchAwareSquad,
+  benchAwarePool,
+  benchAwareScore,
+  valueCapOf,
+  VALUE_CAP,
+  BENCH_SLOT_WEIGHTS,
   planHorizon,
 } from "../optimizer";
-import { MAX_FREE_TRANSFERS, VALID_FORMATIONS, validateSquad } from "../rules";
+import { MAX_FREE_TRANSFERS, MAX_PER_CLUB, VALID_FORMATIONS, validateSquad } from "../rules";
+// Explicitly the FPL `Element`, not the DOM one. Without it the global
+// `Element` from lib.dom wins and the `as Element` casts below fail to
+// compile (TS2352, insufficient overlap) — loudly, not silently, but the
+// error names two types both called "Element" and reads like nonsense.
+import type { Element } from "../types";
 import { projectAll } from "../xp";
 
 const bootstrap = makeMockBootstrap();
 const fixtures = makeMockFixtures();
 const owned = makeMockOwned(bootstrap);
+
+/**
+ * Printable ASCII plus the typographic characters the card copy legitimately
+ * uses. One shared constant, because this change was on its way to shipping
+ * two: the strongxi assertions already carried `/^[\x20-\x7E£]+$/`, and the
+ * new loop over all four variants needed `—` for the descriptions that use
+ * one. Two charsets for one rule is how you get a test that goes red over an
+ * em dash it has nothing to say about, so they were merged before that could
+ * happen rather than after.
+ *
+ * BE HONEST ABOUT WHAT THIS CATCHES. It is a non-ASCII guard, not a language
+ * detector. The risk it exists for is Norwegian leaking into the UI — I am
+ * written to in Norwegian and reply in Norwegian, and the app must be English
+ * — and it only catches the Norwegian that carries æ, ø or å, plus mojibake
+ * from a bad copy-paste. A label reading "Beste laget ditt" is pure ASCII and
+ * sails through. Nothing automatic here can do better; the actual guard is
+ * reading the strings.
+ */
+const ENGLISH_ONLY = /^[\x20-\x7E£—–…]+$/;
+
+/**
+ * The "value" card announces a price ceiling in its own copy. Whatever number
+ * it announces, the fifteen it describes must obey — a card that says "no
+ * player above £7.5m" over a squad containing an £8.0m player is the single
+ * most visible way this feature can be wrong, and it is wrong in a way no
+ * assertion phrased in terms of `valueCapOf` can catch, because those compute
+ * the expectation from the code they are checking.
+ */
+function expectDescribedCapHolds(v: { key: string; description: string; squad: { now_cost: number }[] }) {
+  const m = v.description.match(/£(\d+\.\d)m/);
+  expect(m, `${v.key} description names no price ceiling: ${v.description}`).not.toBeNull();
+  const capTenths = Math.round(parseFloat(m![1]) * 10);
+  const dearest = Math.max(...v.squad.map((e) => e.now_cost));
+  expect(dearest, `${v.key} says £${m![1]}m but fields a £${(dearest / 10).toFixed(1)}m player`).toBeLessThanOrEqual(capTenths);
+}
 
 describe("mock universe sanity", () => {
   it("mock squad is legal", () => {
@@ -507,14 +554,338 @@ describe("buildLaunchVariants (multiple GW1 drafts)", () => {
       expect(v.cost).toBeLessThanOrEqual(1000);
       expect(v.xi.starters.length).toBe(11);
     }
-    // The "value" variant caps player price; it must differ from balanced.
-    const value = variants.find((v) => v.key === "value");
-    if (value) expect(Math.max(...value.squad.map((e) => e.now_cost))).toBeLessThanOrEqual(85);
-    // Variants aren't all identical.
-    const sigs = new Set(
-      variants.map((v) => v.squad.map((e) => e.id).sort((a, b) => a - b).join(","))
+    // All four drafts, by name. `>= 2` above is a floor on legality, not on
+    // completeness, and an `if (value)` guard here — which is what used to
+    // stand — passes just as happily when the variant has vanished as when it
+    // is right. The cap must BIND: the value draft's dearest player strictly
+    // below the balanced draft's.
+    expect(variants.map((v) => v.key)).toEqual(["balanced", "stars", "value", "strongxi"]);
+    const value = variants.find((v) => v.key === "value")!;
+    const bal = variants.find((v) => v.key === "balanced")!;
+    expect(Math.max(...value.squad.map((e) => e.now_cost))).toBeLessThan(
+      Math.max(...bal.squad.map((e) => e.now_cost))
     );
-    expect(sigs.size).toBe(variants.length);
+    expectDescribedCapHolds(value);
+    // Every card is read by a human, and the UI is English-only — no Norwegian
+    // may reach it. The `value` description is the one that matters most here
+    // because it is the only one built by string interpolation.
+    for (const v of variants) {
+      expect(v.label, `${v.key} label`).toMatch(ENGLISH_ONLY);
+      expect(v.description, `${v.key} description`).toMatch(ENGLISH_ONLY);
+    }
+    // Structurally distinct, not merely non-identical. `sigs.size ===
+    // variants.length` used to stand here and is a tautology: production
+    // dedupes by exactly that signature two lines before returning, so the
+    // assertion cannot fail whatever the builders do. What is NOT guaranteed
+    // is that each draft differs in the direction its name promises — the
+    // dedupe is happy with four squads that differ by one £4.0m reserve each.
+    // Value's cap is checked above; here, "Strong XI, cheap bench" has to
+    // actually field a cheaper bench than the balanced draft, or the card is
+    // selling a structure it did not build.
+    const benchCost = (v: (typeof variants)[number]) =>
+      v.xi.bench.reduce((s, slot) => s + slot.element.now_cost, 0);
+    const strongxi = variants.find((v) => v.key === "strongxi")!;
+    expect(benchCost(strongxi)).toBeLessThan(benchCost(bal));
+  });
+
+  it("offers the bench-aware draft as a fourth option", () => {
+    const b = makeMockBootstrap();
+    b.events.forEach((e) => {
+      e.finished = false;
+      e.is_current = false;
+      e.is_next = e.id === 1;
+    });
+    const fx = makeMockFixtures().map((f) => ({ ...f, event: (f.event ?? 11) - 10, finished: false }));
+    const { variants, xp } = buildLaunchVariants(b, fx, 1, 5);
+    // Not conditional. `if (!strong) return` used to stand here, which meant
+    // deleting the variant outright turned the test green and took the four
+    // assertions below with it — a test named for a feature is worthless if
+    // removing the feature satisfies it.
+    const strong = variants.find((v) => v.key === "strongxi")!;
+    expect(strong).toBeDefined();
+    expect(
+      validateSquad(strong.squad.map((e) => ({ id: e.id, elementType: e.element_type, teamId: e.team })))
+    ).toEqual([]);
+    expect(strong.cost).toBeLessThanOrEqual(1000);
+    // The label and description are user-facing and must stay English-only:
+    // no Norwegian ever reaches the UI.
+    expect(strong.label).toMatch(ENGLISH_ONLY);
+    expect(strong.description).toMatch(ENGLISH_ONLY);
+    // And it must actually be built on the objective it is named for: the
+    // squad it returns has to score at least as well under `benchAwareScore`
+    // as the balanced draft does, or the search is decorative.
+    const score = (id: number) => xp.get(id)?.totalDiscounted ?? 0;
+    const balanced = variants.find((v) => v.key === "balanced")!;
+    expect(benchAwareScore(strong.squad, score)).toBeGreaterThanOrEqual(
+      benchAwareScore(balanced.squad, score) - 1e-9
+    );
+  });
+
+  it("keeps the value draft alive when the £8.5m cap would not have bound", () => {
+    const b = makeMockBootstrap();
+    b.events.forEach((e) => {
+      e.finished = false;
+      e.is_current = false;
+      e.is_next = e.id === 1;
+    });
+    // Squeeze every price under the headline cap. This is the exact shape of
+    // the real regression — the 2026-27 pool does it on the fallback path
+    // where last-season minutes could not be fetched and the balanced draft's
+    // dearest pick comes out at £8.0m — and it is the only way to reproduce it
+    // deterministically, because the unclamped mock still has £8.5m+ players.
+    b.elements.forEach((e) => {
+      e.now_cost = Math.min(e.now_cost, 80);
+    });
+    const fx = makeMockFixtures().map((f) => ({ ...f, event: (f.event ?? 11) - 10, finished: false }));
+    const { variants } = buildLaunchVariants(b, fx, 1, 5);
+    const value = variants.find((v) => v.key === "value");
+    const balanced = variants.find((v) => v.key === "balanced")!;
+    // This is the regression the adaptive cap exists for. With a fixed £8.5m
+    // cap and a balanced draft whose dearest player is £8.0m, the two builds
+    // were byte-identical and `value` was silently dropped by the dedupe.
+    expect(value).toBeDefined();
+    // The card the manager reads must name the cap that was actually applied,
+    // not a constant that has drifted away from the code. Note the limit of
+    // this line: the expectation is computed from the function under test, so
+    // it pins the description against the CODE and cannot tell you the code's
+    // RULE is right. (It is not vacuous — hardcoding `£8.5m` back into the
+    // template literal turns it red — it is just narrower than it reads. The
+    // rule itself is pinned by the `valueCapOf` cases below.)
+    expect(value!.description).toContain(`£${(valueCapOf(balanced.squad) / 10).toFixed(1)}m`);
+    // Independent of `valueCapOf` entirely: whatever number the card prints,
+    // the squad it describes has to obey it. This is the property a manager
+    // would notice being broken, and it survives any bug in the cap rule.
+    expectDescribedCapHolds(value!);
+    expect(value!.squad.map((e) => e.id).sort((a, b) => a - b)).not.toEqual(
+      balanced.squad.map((e) => e.id).sort((a, b) => a - b)
+    );
+  });
+
+  it("never ships a short squad when the value cap starves the build", () => {
+    const b = makeMockBootstrap();
+    b.events.forEach((e) => {
+      e.finished = false;
+      e.is_current = false;
+      e.is_next = e.id === 1;
+    });
+    // Flat-price everyone at £4.5m. The cap then derives to £4.0m and the pool
+    // it filters on is empty at every position, so the value build comes back
+    // with nothing. A degenerate pool, but the failure it provokes is not: a
+    // variant card rendering an 0-man "squad" is worse than one card fewer,
+    // and `pickBestXi` on an empty squad is not something the UI survives.
+    b.elements.forEach((e) => {
+      e.now_cost = 45;
+    });
+    const fx = makeMockFixtures().map((f) => ({ ...f, event: (f.event ?? 11) - 10, finished: false }));
+    const { variants } = buildLaunchVariants(b, fx, 1, 5);
+    // The value draft is GONE, not silently replaced by the balanced one: a
+    // card headed "no player above £4.0m" over a squad of £4.5m players is a
+    // lie, and one card fewer is the honest outcome. `> 0` would be
+    // unfalsifiable here — balanced always survives — so name the key.
+    expect(variants.map((v) => v.key)).not.toContain("value");
+    expect(variants.map((v) => v.key)).toContain("balanced");
+    for (const v of variants) {
+      expect(v.squad.length, `${v.key} is not a fifteen`).toBe(15);
+      expect(v.xi.starters.length).toBe(11);
+    }
+  });
+});
+
+describe("valueCapOf", () => {
+  const el = (now_cost: number) => ({ now_cost }) as Element;
+
+  it("stays at the headline £8.5m when £8.5m already binds", () => {
+    // The normal case, and the one the product name depends on. On the real
+    // 2026-27 pool the balanced draft's dearest player is £12.0m; deriving the
+    // cap from him would give £11.5m, and measured on that pool an £11.5m cap
+    // returns a squad BYTE-IDENTICAL to the £8.5m one (both share 12 of 15
+    // with balanced, both top out at £8.5m) — the greedy build never wanted
+    // anyone in between. So the derived cap would cost nothing in squad terms
+    // and everything in honesty: the card would announce an £11.5m ceiling for
+    // a draft whose dearest player is £8.5m.
+    expect(valueCapOf([el(45), el(120), el(85)])).toBe(85);
+  });
+
+  it("stays at £8.5m for a dearest pick just above it", () => {
+    // The case that actually pins the rule, and the reason the £12.0m case
+    // above does not. `Math.min(VALUE_CAP, dearest - 5)` — the first
+    // implementation — tightens whenever `dearest - 5 < 85`, i.e. for every
+    // `dearest` below £9.0m, so it answered 82 here. £8.5m excludes the £8.7m
+    // player perfectly well; there is nothing to fix and no reason to move the
+    // headline number off the constant the card is named for.
+    //
+    // £8.6m-£8.9m is not a corner. In-season prices move in £0.1m steps, so
+    // the balanced draft's dearest pick lands in that strip routinely; only
+    // the pre-season pool, where everything is on a £0.5m grid, makes it look
+    // unreachable.
+    expect(valueCapOf([el(45), el(87)])).toBe(85);
+    expect(valueCapOf([el(45), el(86)])).toBe(85);
+    expect(valueCapOf([el(45), el(89)])).toBe(85);
+    // The far side of the boundary: £8.5m exactly, which excludes nobody.
+    expect(valueCapOf([el(45), el(85)])).toBe(80);
+  });
+
+  it("tightens below the dearest pick when £8.5m would not bind", () => {
+    // The failure case: nobody in the balanced draft is above £8.5m, so the
+    // constant excludes nobody and the variant dedupes itself out of the app.
+    expect(valueCapOf([el(45), el(80), el(75)])).toBe(75);
+  });
+
+  it("stops at £4.0m rather than deriving a cap nobody can meet", () => {
+    // A squad of £4.0m players would otherwise produce a £3.5m cap and the
+    // build would starve. £4.0m is the cheapest price in the 2026-27 pool, and
+    // FPL's floor has been £4.0m for several seasons — but it HAS been lower
+    // (£3.8m/£3.9m players existed), so this is a floor chosen against the
+    // current game, not a law. If the game ever ships cheaper players the
+    // starvation guard in `buildLaunchVariants`, not this constant, is what
+    // keeps a short squad off the screen.
+    expect(valueCapOf([el(40), el(40)])).toBe(40);
+  });
+
+  it("falls back to the headline cap when there is no draft to derive from", () => {
+    // Math.max() of an empty list is -Infinity; deriving from nothing has to
+    // be handled explicitly rather than producing a cap that excludes everyone.
+    // Spelled against the constant, not against 85, so that moving the headline
+    // ceiling moves this with it — the property is "falls back to the headline
+    // cap", and nothing here cares what the headline cap is.
+    expect(valueCapOf([])).toBe(VALUE_CAP);
+  });
+});
+
+describe("benchAwareScore (bench priced at its measured autosub value)", () => {
+  const xp = projectAll({ bootstrap, fixtures, nextEvent: 11 });
+  const score = (id: number) => xp.get(id)?.totalDiscounted ?? 0;
+  const squad = owned.map((o) => o.element);
+
+  it("applies the measured weights in FPL bench order", () => {
+    // The literals are repeated here on purpose rather than imported: this
+    // test exists to catch a change to BENCH_SLOT_WEIGHTS, and a test that
+    // imports the thing it is checking cannot catch a change to it.
+    const W = [0.072, 0.513, 0.283, 0.046];
+    expect([...BENCH_SLOT_WEIGHTS]).toEqual(W);
+    const xi = pickBestXi(squad, score);
+    // Bench slot 1 is the substitute keeper by FPL convention; the remaining
+    // three are outfielders in the order they would be autosubbed.
+    expect(xi.bench[0].element.element_type).toBe(1);
+    expect(xi.bench.length).toBe(4);
+    const expected =
+      xi.starters.reduce((a, s) => a + score(s.element.id), 0) +
+      xi.bench.reduce((a, s, i) => a + W[i] * score(s.element.id), 0);
+    expect(benchAwareScore(squad, score)).toBeCloseTo(expected, 9);
+  });
+
+  it("lands strictly between the two extremes it was built to sit between", () => {
+    const xi = pickBestXi(squad, score);
+    const xiOnly = xi.starters.reduce((a, s) => a + score(s.element.id), 0);
+    const sum15 = squad.reduce((a, e) => a + score(e.id), 0);
+    const mid = benchAwareScore(squad, score);
+    // Every weight is in (0, 1), so pricing the bench cannot reach either end.
+    expect(mid).toBeGreaterThan(xiOnly);
+    expect(mid).toBeLessThan(sum15);
+    // And the bench must be worth something, or the guard above is vacuous.
+    expect(sum15 - xiOnly).toBeGreaterThan(0);
+  });
+});
+
+describe("buildBenchAwareSquad", () => {
+  const b = makeMockBootstrap();
+  b.events.forEach((e) => {
+    e.finished = false;
+    e.is_current = false;
+    e.is_next = e.id === 1;
+  });
+  const fx = makeMockFixtures().map((f) => ({ ...f, event: (f.event ?? 11) - 10, finished: false }));
+  const xp = projectAll({ bootstrap: b, fixtures: fx, nextEvent: 1, horizon: 5 });
+  const score = (id: number) => xp.get(id)?.totalDiscounted ?? 0;
+
+  it("returns a legal fifteen inside the budget", () => {
+    const built = buildBenchAwareSquad(b.elements, xp, 1000);
+    expect(built.squad.length).toBe(15);
+    expect(
+      validateSquad(built.squad.map((e) => ({ id: e.id, elementType: e.element_type, teamId: e.team })))
+    ).toEqual([]);
+    expect(built.cost).toBeLessThanOrEqual(1000);
+  });
+
+  it("can reach the cheapest player at every position", () => {
+    // This is the property the whole function depends on and the one that is
+    // silently easy to lose: a pool of "the best 40 by projected points" looks
+    // perfectly sensible and cannot build a cheap bench, because the cheap
+    // players are precisely the ones that ranking excludes. Asserted on the
+    // pool rather than on the search result so it fails for the right reason.
+    const pools = benchAwarePool(b.elements, xp);
+    let outsideTop40 = 0;
+    for (const t of [1, 2, 3, 4] as const) {
+      const eligible = b.elements.filter(
+        (e) => e.element_type === t && e.status !== "u" && (xp.get(e.id)?.total ?? 0) > 0
+      );
+      const cheapest = eligible.reduce((a, e) => (e.now_cost < a.now_cost ? e : a));
+      expect(pools.get(t)!.some((e) => e.id === cheapest.id)).toBe(true);
+      const top40 = new Set(
+        [...eligible].sort((x, y) => score(y.id) - score(x.id)).slice(0, 40).map((e) => e.id)
+      );
+      if (!top40.has(cheapest.id)) outsideTop40++;
+    }
+    // ...and the guard above is only meaningful if the mock universe actually
+    // has cheap players the xP ranking would have thrown away. If a future
+    // change to the fixtures makes every position's cheapest player a top-40
+    // pick, the assertion above becomes free and this line says so out loud.
+    expect(outsideTop40).toBeGreaterThan(0);
+  });
+
+  it("never returns a squad the greedy seed already beat on its own objective", () => {
+    // The climb starts from `buildSquadWithinBudget` and only ever accepts a
+    // strict improvement, so this is the one guarantee it owes the caller. If
+    // it ever regresses, the search has a bug in how it applies a move.
+    const seed = buildSquadWithinBudget(b.elements, xp, 1000);
+    const built = buildBenchAwareSquad(b.elements, xp, 1000);
+    expect(benchAwareScore(built.squad, score)).toBeGreaterThanOrEqual(
+      benchAwareScore(seed.squad, score) - 1e-9
+    );
+  });
+
+  it("returns a squad no single legal swap can improve", () => {
+    // The climb is a loop, and a loop that runs once is indistinguishable from
+    // a loop that runs to convergence on every guard that only compares the
+    // result to the seed. This checks the thing the loop is FOR: that the
+    // squad handed back is a local optimum of the objective it optimises.
+    // The legality rules are re-implemented here on purpose rather than
+    // imported from the search — a bug shared by both would cancel out.
+    const built = buildBenchAwareSquad(b.elements, xp, 1000);
+    const pools = benchAwarePool(b.elements, xp);
+    const cur = benchAwareScore(built.squad, score);
+    let improvements = 0;
+    let considered = 0;
+    for (let i = 0; i < built.squad.length; i++) {
+      const out = built.squad[i];
+      for (const inEl of pools.get(out.element_type)!) {
+        if (inEl.id === out.id) continue;
+        if (built.squad.some((e, j) => j !== i && e.id === inEl.id)) continue;
+        if (built.cost - out.now_cost + inEl.now_cost > 1000) continue;
+        const sameClub = built.squad.filter((e, j) => j !== i && e.team === inEl.team).length;
+        if (sameClub >= MAX_PER_CLUB) continue;
+        considered++;
+        const trial = built.squad.map((e, j) => (j === i ? inEl : e));
+        if (benchAwareScore(trial, score) > cur + 1e-9) improvements++;
+      }
+    }
+    expect(considered).toBeGreaterThan(100); // the sweep must not be empty
+    expect(improvements).toBe(0);
+    // WHAT THIS DOES NOT COVER, said out loud so it is not mistaken for
+    // coverage: the paired bench-down/XI-up neighbourhood. On this mock
+    // universe the single-swap neighbourhood already reaches the local optimum
+    // by itself, so deleting the paired move entirely leaves every assertion
+    // in this file green — it is an equivalent mutant HERE. Its value is a
+    // real-data property (measured at 2.55 xP in scripts/ytcompare.test.ts)
+    // and it is guarded on real seasons in scripts/simulate.test.ts, not here.
+  });
+
+  it("respects a budget too small for the greedy seed to have used", () => {
+    const built = buildBenchAwareSquad(b.elements, xp, 900);
+    expect(built.cost).toBeLessThanOrEqual(900);
+    expect(
+      validateSquad(built.squad.map((e) => ({ id: e.id, elementType: e.element_type, teamId: e.team })))
+    ).toEqual([]);
   });
 });
 

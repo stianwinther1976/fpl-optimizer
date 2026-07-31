@@ -147,7 +147,9 @@ export default function OptimizePanel({
               <p className="mb-2 text-xs font-medium text-muted">
                 Choose an approach — tap to switch squad:
               </p>
-              <div className="grid gap-2 sm:grid-cols-3">
+              {/* Two columns from `sm` up, not three: with four drafts a
+                  three-wide grid leaves one card stranded on its own row. */}
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                 {launch.map((v, i) => {
                   const selected = i === launchPick;
                   return (

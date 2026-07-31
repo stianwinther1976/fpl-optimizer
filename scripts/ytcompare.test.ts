@@ -588,7 +588,24 @@ test("score the published squads and the app's drafts on live 2026/27 data", asy
   // Exactly the production call: same pool, same past-season map, same horizon.
   XP_DEBUG.minutes = new Map();
   const { xp, variants } = buildLaunchVariants(bootstrap, fixtures, nextEvent, 5, past.data);
-  expect(variants.length).toBeGreaterThanOrEqual(3);
+  // All FOUR drafts, on the real pool. `>= 3` used to stand here, which is a
+  // floor with no ceiling: the app showed three cards while claiming four and
+  // this line stayed green.
+  //
+  // Be clear about what this run does and does not cover. It asserts
+  // `past.failed === 0` above, so it is the path WITH last-season minutes, and
+  // on that path the balanced draft's dearest player is £12.0m — the old fixed
+  // £8.5m cap bound perfectly well and the bug was never reachable here. The
+  // regression lives on the fallback path (`pastSeason` undefined, which
+  // `OptimizePanel` passes when the history lookup comes back empty), where
+  // the dearest pick drops to £8.0m. That path is covered by the mock test in
+  // `src/lib/__tests__/optimizer.test.ts`. What THIS line is worth is the
+  // other half: that the four drafts stay four, and stay distinct, on the real
+  // pool the app actually ships against.
+  expect(variants.map((v) => v.key)).toEqual(["balanced", "stars", "value", "strongxi"]);
+  const maxPriceOf = (k: string) =>
+    Math.max(...variants.find((v) => v.key === k)!.squad.map((e) => e.now_cost));
+  expect(maxPriceOf("value")).toBeLessThan(maxPriceOf("balanced"));
   const mmOf = (id: number) => XP_DEBUG.minutes?.get(id) ?? null;
   const one = (id: number): PlayerXp | undefined => xp.get(id);
   const nextOf = (id: number) => one(id)?.next ?? 0;

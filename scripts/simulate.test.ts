@@ -21,7 +21,14 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { projectAll, XP_CONFIG } from "../src/lib/xp";
-import { pickBestXi, optimize, buildLaunchSquad } from "../src/lib/optimizer";
+import {
+  pickBestXi,
+  optimize,
+  buildLaunchSquad,
+  buildBenchAwareSquad,
+  benchAwareScore,
+  BENCH_SLOT_WEIGHTS,
+} from "../src/lib/optimizer";
 import { isValidFormation, MAX_PER_CLUB, SQUAD_COMPOSITION, VALID_FORMATIONS } from "../src/lib/rules";
 import { launchPool, LAUNCH_QUOTA } from "../src/lib/pool";
 
@@ -1071,20 +1078,32 @@ describe(`${SEASON} full-season simulation`, () => {
     // the xP/price curve, and NOTHING here measures it. The +4 to +10 figure
     // was produced in conversation and this block does not support it.
     //
-    // NOT IMPLEMENTED, DELIBERATELY. The next step is a squad objective of the
-    // form sum(XI) + sum_j w_j * xp(bench slot j), which is the generalisation
-    // of the flat-weight experiment recorded above `buildSquadWithinBudget`
-    // with the guessed constant replaced by the profile above. It is worth
-    // trying precisely because the shape is new. It is NOT worth shipping on
-    // the strength of a better-motivated shape: the flat version lost 8729 ->
-    // 8516 managed, the extreme version came out -58 over four seasons, and
-    // `objVsRealSpearman` in the experiment below found that among squads the
-    // model rates as near-equivalent a higher projection does not buy more real
-    // points. Every one of those says the projections and not the objective are
-    // the binding constraint. When it is tried it must be measured on the
-    // 240-restart family medians that experiment uses, not on one squad per
-    // objective — one squad per objective is what produced the wrong answer
-    // there, and the family spread is 230-626 points against gaps of tens.
+    // SINCE IMPLEMENTED, AND OFFERED RATHER THAN PREFERRED. The objective this
+    // paragraph described as "the next step" — sum(XI) + sum_j w_j * xp(bench
+    // slot j) with the guessed flat constant replaced by the profile above — is
+    // `buildBenchAwareSquad`, and it ships as the fourth launch draft. It is
+    // not the default, and the reason is the same reason this paragraph
+    // originally said not to ship it, only better measured: see the pinned
+    // four-season table in the BENCH experiment below.
+    //
+    // What has NOT changed is the warning about how to measure it. It must be
+    // judged on 240-restart family medians, not on one squad per objective —
+    // one squad per objective is what produced the wrong answer below, and the
+    // within-family spread is 67 to 566 points against between-objective gaps
+    // of 0 to 249 across all three pairs — 0 because in 2023-24 the
+    // slot-weighted and XI-only families land on the same median, 1770.
+    //
+    // What HAS changed, and is the sharpest single fact in this file, is that
+    // the sign of the between-objective gap is not stable across projection
+    // models. Every number quoted here for the "punt the bench" extreme was
+    // -58 over four seasons before commit 77099ab (the pre-season minutes
+    // model) and is +270 after it, with no change to the objective, the search,
+    // the slot weights or this harness. That is not a refinement, it is the
+    // opposite conclusion — and it is the strongest available evidence for what
+    // the flat experiment (8729 -> 8516 managed) and `objVsRealSpearman` both
+    // suggested: the projections, not the objective, are the binding
+    // constraint. An effect that flips sign when you improve the minutes model
+    // was never an effect of the objective.
     //
     // Run: SEASON=2024-25 SLOTW=1 npx vitest run --config vitest.sim.config.ts \
     //        -t "plays the season" --disable-console-intercept
@@ -1183,63 +1202,93 @@ describe(`${SEASON} full-season simulation`, () => {
   // every distinct optimum played out — the medians are:
   //
   //                          2022-23  2023-24  2024-25  2025-26   total
-  //   sum-of-15    median       1806     1840     1474     1292    6412
-  //   XI+captain   median       1812     1762     1393     1387    6354
-  //   delta                       +6      -78      -81      +95     -58
-  //   (family size)             5/9    12/26     4/45     7/21
+  //   sum-of-15    median       1746     1847     1474     1264    6331
+  //   XI+captain   median       1995     1770     1442     1394    6601
+  //   delta                     +249      -77      -32     +130    +270
+  //   (family size)            17/27     9/21     6/25     8/20
   //
-  // -58 points over four seasons, worse in two of four. The effect this
-  // experiment was built to find is not there. Punting the bench is not
-  // measurably wrong.
+  // +270 points over four seasons, better in two of four.
   //
-  // What IS there, and is robust, is the size of everything else. Within a
+  // AND THE FIRST THING TO SAY ABOUT +270 IS THAT IT USED TO BE -58. The table
+  // above previously read 1806/1840/1474/1292 against 1812/1762/1393/1387, and
+  // the paragraph under it said "the effect this experiment was built to find
+  // is not there". Same harness, same restarts, same objectives, same archive.
+  // The one thing that changed is `src/lib/xp.ts` at commit 77099ab, the
+  // pre-season minutes model — verified as the only commit in that stretch to
+  // touch model code (bf2483c, 2e4f41d and 916077f touch scripts/ only).
+  //
+  // So the honest reading of +270 is NOT "punting the bench gains 68 points a
+  // season". It is that this experiment measures the projection model at least
+  // as much as it measures the objective, and a quantity that swings 328 points
+  // on a minutes-model change is not a property of the objective at all. Do not
+  // quote either number as a result about benches. Quote the swing.
+  //
+  // What IS stable across both runs is the size of everything else. Within a
   // single objective's family — squads that score the SAME on the thing they
   // were built to maximise — set-and-forget totals span:
   //
-  //   sum-of-15    1683-1969   1351-1977   1379-1636   1206-1502
-  //   XI+captain   1738-1968   1614-1843   1252-1751   1208-1578
+  //   sum-of-15    1576-1934   1780-1977   1379-1636   1206-1493
+  //   XI+captain   1633-2199   1589-1857   1286-1681   1208-1564
+  //   slot-weighted 1572-2012  1458-1847   1295-1625   1310-1377
   //
-  // 230 to 626 points of spread, against a 6-to-95 point gap between the
-  // objectives. WHICH players you buy outweighs WHAT RULE you bought them by,
-  // by roughly an order of magnitude. Any conclusion drawn from one squad per
-  // objective — which is what the first version of this comment was, and what
-  // most published squad comparisons are — is reading noise.
+  // 67 to 566 points of spread across the three rows above, against a gap
+  // between objectives of 32 to 249 for the pair this table compares
+  // (sum-of-15 vs XI+captain) and 0 to 249 once the slot-weighted objective is
+  // included — 0 because in 2023-24 slot-weighted and XI-only both land on
+  // 1770. WHICH players you buy outweighs WHAT RULE you bought them by,
+  // and in eleven of twelve family-seasons the spread is the larger of the two
+  // — the exception being 2025-26's slot-weighted family, which converged to
+  // five distinct optima and a 67-point spread. Any conclusion drawn from one
+  // squad per objective — which is what the first version of this comment was,
+  // and what most published squad comparisons are — is reading noise.
   //
   // The bench mechanism is real even though the bottom line is not. Points
   // entering the total THROUGH an auto-sub, median per family:
   //
-  //   sum-of-15     179      111       45       96     = 431
-  //   XI+captain    131       52        9       71     = 263
+  //   sum-of-15     201      136       47       91     = 475
+  //   XI+captain    146       54        8       59     = 267
   //
-  // A punted bench really does forfeit ~40% of the auto-sub route, and at the
+  // A punted bench really does forfeit ~44% of the auto-sub route, and at the
   // £17.5m floor the reserves are not merely cheap but non-playing (2024-25:
-  // 9 points from the bench across an entire season). It is just that the money
-  // saved buys a better eleven, and the two effects very nearly cancel. The
-  // actionable version is therefore neither extreme: buy a bench that PLAYS,
-  // not a bench that SCORES — cheap nailed-on starters, not third-choice
-  // £4.0m reserves. That is roughly where the shipped builder already sits.
+  // 8 points from the bench across an entire season). It is just that the money
+  // saved buys a better eleven. The actionable version is therefore neither
+  // extreme: buy a bench that PLAYS, not a bench that SCORES — cheap nailed-on
+  // starters, not third-choice £4.0m reserves. That is roughly where the
+  // shipped builder already sits, and exactly what `buildBenchAwareSquad`
+  // formalises by pricing each bench slot at its measured autosub weight.
   //
   // `objVsRealSpearman` is the finding that limits all of this. Within a family,
   // ranking by the objective against ranking by real points scored comes out
-  // -0.60/+0.43/-0.40/+0.64 for sum-of-15 and -0.17/-0.18/-0.02/+0.15 for
-  // XI+captain: at or below zero in six of eight. Among squads the model
-  // considers near-equivalent, a HIGHER projection does not buy more real
-  // points. Both objectives are estimating through the same noise, which is why
-  // choosing between them changes so little.
+  // +0.05/+0.43/-0.09/+0.55 for sum-of-15 and +0.50/-0.17/-0.24/+0.09 for
+  // XI+captain. Positive in five of eight and negative in three, ranging from
+  // -0.24 to +0.55 — no consistent sign, and n is 6 to 27 squads per cell, so
+  // several of these are not distinguishable from zero. (The previous run gave
+  // -0.60/+0.43/-0.40/+0.64 and -0.17/-0.18/-0.02/+0.15, i.e. at or below zero
+  // in six of eight; that this moved too is the same instability as above.)
+  // Among squads the model considers near-equivalent, a higher projection does
+  // not reliably buy more real points. Both objectives are estimating through
+  // the same noise, which is why choosing between them is not the lever it
+  // looks like.
   //
-  // Consistent with that: the shipped GREEDY builder scores 1806/1853/1445/1574
-  // = 6678, ahead of both hill-climbed families' medians. A sharper search on a
-  // noisy estimate concentrates the budget on whichever players the model is
-  // most wrong about — the same conclusion the note above
-  // `buildSquadWithinBudget` reached from the opposite direction.
+  // Consistent with that: the shipped GREEDY builder scores 1746/1853/1445/1574
+  // = 6618, ahead of the two hill-climbed families in this table (6331 and
+  // 6601; the slot-weighted family, reported separately, is 6385) — but
+  // ahead of the XI-only family by only 17 points, which is a rounding error at
+  // this spread and should not be read as the greedy build beating the search.
+  // The defensible version of the claim is the weaker one: a sharper search on
+  // a noisy estimate does not reliably pay, because it concentrates the budget
+  // on whichever players the model is most wrong about — the same conclusion
+  // the note above `buildSquadWithinBudget` reached from the opposite
+  // direction.
   //
   // Caveats that stay: n=4 seasons; set-and-forget only, which is the harshest
   // regime for a punted bench because it cannot transfer away from a dead one
   // (the managed run for a MILDER version of this objective was measured
   // separately at 8729 -> 8516, and carries the same one-draw caveat this
-  // rewrite was needed to fix). `benchFloorTrue` is 165 against the 175 this
-  // experiment can reach, so a real punt is cheaper than anything built here —
-  // which flatters the punt, and points the residual the same way.
+  // rewrite was needed to fix). `benchFloorTrue` is 165 in all four seasons
+  // against a `benchFloorPool` of 175 — 185 in 2022-23 — so a real punt is
+  // £1.0m to £2.0m cheaper than anything this experiment's top-40 pool can
+  // build, which flatters the punt and points the residual the same way.
   //
   // Run: SEASON=2024-25 BENCH=1 npx vitest run --config vitest.sim.config.ts \
   //        -t "cheapest bench" --disable-console-intercept
@@ -1407,6 +1456,94 @@ describe(`${SEASON} full-season simulation`, () => {
        * is a real part of what an eleven returns; only the label was wrong. */
       const xiPlusCaptain = (squad: Element[]) => pickBestXi(squad, value).totalXp;
 
+      /** The middle of the ladder, and the one this experiment was missing.
+       *
+       * `sum-of-15` prices every bench slot at 1.0; `XI+captain` prices them all
+       * at 0.0. Neither is what a bench is worth. The measured per-slot autosub
+       * NEEDED probabilities (SLOTW=1, 152 managed gameweeks, table above the
+       * print block below) are 0.072 / 0.513 / 0.283 / 0.046 in bench order —
+       * an eleven-to-one spread inside a bench both incumbents treat as uniform.
+       *
+       * NO CAPTAIN TERM, deliberately, even though `xiPlusCaptain` has one. The
+       * comparison that decides anything here is against `sum-of-15`, which is
+       * what the app ships and which has no captain term either — so written
+       * this way the two objectives differ in EXACTLY ONE THING, the bench
+       * weights, and any gap between them is that and nothing else. Adding the
+       * captain would make it a two-variable comparison against the incumbent in
+       * order to make it a one-variable comparison against a rejected extreme.
+       * It is also precisely the objective `scripts/ytcompare.test.ts` measures
+       * the second keeper on, and precisely what `buildLaunchVariants` ships, so
+       * what is measured here is what runs.
+       *
+       * MEASURED, four seasons, 240 restarts each, set-and-forget medians.
+       * Slot-weighted minus sum-of-15, by season:
+       *
+       *   2022-23  1901 vs 1746  +155
+       *   2023-24  1770 vs 1847   -77
+       *   2024-25  1370 vs 1474  -104
+       *   2025-26  1344 vs 1264   +80
+       *   -------------------------------
+       *   total                   +54, split two seasons each way
+       *
+       * A WASH, and that is the finding. It is not "the bench weights are
+       * right" either: the +54 sits inside a within-family spread of 67-566
+       * points, which is to say inside the noise of WHICH fifteen you happen
+       * to land on. What it refutes is the claim worth refuting — that
+       * re-pricing the bench is an IMPROVEMENT. It is not. It is a different
+       * structure that costs nothing on average.
+       *
+       * The shipped bounded climb (`shippedBenchAware` in the print block) is
+       * a separate and slightly kinder number: +64 / +19 / +40 / -51, total
+       * +72 against the shipped greedy draft, better in three seasons of four.
+       * Its bench always falls (£22.5m -> £18.5m in 2022-23) and its autosub
+       * route usually falls with it — 133->88, 96->80, 158->124 — but NOT
+       * always: 2024-25 goes 48->61, the route going UP in the same season the
+       * table credits with +40. So "cheaper bench, less cover" is the tendency
+       * and not the mechanism. A cheap bench of nailed-on starters can out-earn
+       * a dear bench of rotation risks, which is the whole point of pricing
+       * slots by how often they are NEEDED rather than by what they cost.
+       *
+       * THESE NUMBERS MOVE WITH THE PROJECTION MODEL, AND THAT IS MEASURED,
+       * NOT INFERRED. The identical experiment run against the pre-2026-07
+       * model gave -13 for the family and -174 for the shipped climb — the
+       * opposite sign on both.
+       *
+       * The attribution was checked directly rather than argued, because it is
+       * easy to get wrong: the earlier run was made from commit 9b1aec0, whose
+       * parent is 088fce7 and which therefore predates 77099ab; the rebase
+       * onto 916077f is what pulled 77099ab in. Re-running 2022-23 from a
+       * worktree at 9b1aec0 reproduces the old number exactly — shipped greedy
+       * 1806, shipped bench-aware 1666, delta -140, against 1746 / 1810 / +64
+       * here. `src/lib/optimizer.ts` is byte-identical between 9b1aec0 and
+       * HEAD (so the objective, the search and the slot weights are all
+       * unchanged), and 77099ab is the only commit between the two bases that
+       * touches model code at all — bf2483c, 2e4f41d and 916077f touch
+       * scripts/ only.
+       *
+       * (Beware the obvious shortcut here, which does not work: checking out
+       * HEAD and running it does NOT reproduce the old numbers, because HEAD
+       * is the post-rebase commit. You have to go to 9b1aec0. Two of the four
+       * seasons — 2023-24 at +19 and 2025-26 at -51 — are unchanged across the
+       * two runs, which looks like evidence that nothing changed until you
+       * notice the other two moved by 204 and 42 points.)
+       *
+       * So the honest reading of any single run is
+       * "this objective is not distinguishable from sum-of-15 under the
+       * current model", and the table above is a dated observation, not a
+       * constant. Re-run `BENCH=1` after any change to `xp.ts` and update it.
+       * It is also exactly why the app offers this as a fourth OPTION and does
+       * not make it the default: a result whose sign flips when the model
+       * moves is not a result you impose on a manager. */
+      const SLOT_W = [0.072, 0.513, 0.283, 0.046];
+      const slotWeighted = (squad: Element[]) => {
+        const xi = pickBestXi(squad, value);
+        let t = xi.starters.reduce((a, s) => a + value(s.element.id), 0);
+        xi.bench.forEach((s, i) => {
+          t += (SLOT_W[i] ?? 0) * value(s.element.id);
+        });
+        return t;
+      };
+
       // A deliberately bench-punting seed, so the XI-only climb starts from the
       // structure it is supposed to find rather than having to walk there.
       const cheapBenchSeed = (() => {
@@ -1478,9 +1615,11 @@ describe(`${SEASON} full-season simulation`, () => {
 
       const sum15Family = family(sum15);
       const xiFamily = family(xiPlusCaptain);
+      const slotFamily = family(slotWeighted);
       expect(sum15Family.length, "sum-of-15 family is empty").toBeGreaterThan(0);
       expect(xiFamily.length, "XI-only family is empty").toBeGreaterThan(0);
-      for (const f of [...sum15Family, ...xiFamily])
+      expect(slotFamily.length, "slot-weighted family is empty").toBeGreaterThan(0);
+      for (const f of [...sum15Family, ...xiFamily, ...slotFamily])
         expect(isLegal(f.squad), "a family member is not a legal squad").toBe(true);
 
       // The true bench floor, over ALL elements rather than the top-40 pool.
@@ -1526,8 +1665,30 @@ describe(`${SEASON} full-season simulation`, () => {
       // four seasons, so looking it up by id inside the family returned null
       // there and the reference point silently vanished from the report.
       const shippedRow = prep({ squad: launch.squad, obj: sum15(launch.squad) });
-      const played = { sum15: sum15Family.map(prep), xi: xiFamily.map(prep) };
-      const everyone = [...played.sum15, ...played.xi, shippedRow];
+      // The SHIPPED bench-aware draft — the app's "Strong XI, cheap bench"
+      // variant, not the unbounded family search. These are different things
+      // and the difference matters: the family above is a 240-restart global
+      // search over the slot-weighted objective, while what the manager
+      // actually clicks is a 120-iteration bounded climb that has to finish in
+      // a browser. Reporting only the family would be reporting a squad nobody
+      // can get. This row is the artifact.
+      const shippedSlotSquad = buildBenchAwareSquad(s1.bootstrap.elements, xp, 1000);
+      const shippedSlotRow = prep({
+        squad: shippedSlotSquad.squad,
+        obj: slotWeighted(shippedSlotSquad.squad),
+      });
+      const played = {
+        sum15: sum15Family.map(prep),
+        xi: xiFamily.map(prep),
+        slot: slotFamily.map(prep),
+      };
+      const everyone = [
+        ...played.sum15,
+        ...played.xi,
+        ...played.slot,
+        shippedRow,
+        shippedSlotRow,
+      ];
 
       // Play every family member through the real season, set-and-forget.
       //
@@ -1600,9 +1761,20 @@ describe(`${SEASON} full-season simulation`, () => {
               benchCost: shippedRow.benchCost,
               benchRoutePoints: shippedRow.acc.subPoints,
             },
+            shippedBenchAware: {
+              setAndForget: Math.round(shippedSlotRow.total),
+              slotWeighted: +slotWeighted(shippedSlotSquad.squad).toFixed(2),
+              sum15: +sum15(shippedSlotSquad.squad).toFixed(2),
+              benchCost: shippedSlotRow.benchCost,
+              benchRoutePoints: shippedSlotRow.acc.subPoints,
+            },
             benchFloorPool: floorBench(MIN_PRICE),
             benchFloorTrue: floorBench(trueMin),
-            families: [summary("sum-of-15", played.sum15), summary("XI+captain only", played.xi)],
+            families: [
+              summary("sum-of-15", played.sum15),
+              summary("slot-weighted bench", played.slot),
+              summary("XI+captain only", played.xi),
+            ],
           },
           null,
           1
@@ -1619,6 +1791,50 @@ describe(`${SEASON} full-season simulation`, () => {
       // the restarts did nothing and we are back to reporting one draw.
       expect(played.xi.length, "XI-only search found a single optimum").toBeGreaterThan(2);
       expect(played.sum15.length, "sum-of-15 search found a single optimum").toBeGreaterThan(2);
+      expect(played.slot.length, "slot-weighted search found a single optimum").toBeGreaterThan(2);
+      // The slot-weighted objective must land BETWEEN the two extremes on the
+      // thing it was built to move — bench spend. Non-strict on BOTH sides,
+      // and the first version of this guard was wrong to be strict against the
+      // punt, and a tie is live TODAY: on the current model the slot-weighted
+      // and XI-only families post the same median bench cost in 2025-26,
+      // £19.5m against £19.5m. (The season that originally forced the
+      // non-strictness was 2022-23 under the pre-77099ab model, where both sat
+      // at £18.5m; that season now separates them at £20.5m against £19.5m.
+      // The tie moved seasons, it did not go away — do not tighten this to a
+      // strict `<` on the strength of one season's data.) That is not a bug,
+      // it is what the
+      // weights say. The only slot a positive weight buys over the punt is the
+      // substitute keeper, at 0.072 — far too little to outbid an extra £0.5m
+      // spent on the eleven, so in a season where the cheap-keeper bench is
+      // already optimal under both, the two objectives agree. What keeps this
+      // sandwich from being vacuous is the STRICT guard above: the two extremes
+      // must differ from each other, or there is no interval to land in.
+      expect(medBench(played.slot)).toBeLessThanOrEqual(medBench(played.sum15));
+      expect(medBench(played.slot)).toBeGreaterThanOrEqual(medBench(played.xi));
+      // The weights must be the ones that were measured, in bench order, and
+      // the local `slotWeighted` must be the SAME function the app ships. If
+      // these two ever drift apart the experiment stops measuring the feature
+      // and starts measuring a private copy of it that nobody can click.
+      expect(SLOT_W).toEqual([0.072, 0.513, 0.283, 0.046]);
+      expect([...BENCH_SLOT_WEIGHTS]).toEqual(SLOT_W);
+      for (const sq of [launch.squad, shippedSlotSquad.squad, played.slot[0].squad])
+        expect(slotWeighted(sq)).toBeCloseTo(benchAwareScore(sq, value), 9);
+      // The shipped bounded climb must at least beat the shipped greedy draft
+      // on the objective it optimises — it starts from that draft and only
+      // accepts strict improvements, so anything else is a bug in the search.
+      expect(slotWeighted(shippedSlotSquad.squad)).toBeGreaterThanOrEqual(
+        slotWeighted(launch.squad) - 1e-9
+      );
+      expect(shippedSlotSquad.cost).toBeLessThanOrEqual(1000);
+      // And it must be a real member of the structure it claims: a cheaper
+      // bench than the greedy draft it was built from, and — the guard that
+      // actually catches a decorative search — a DIFFERENT fifteen. A climb
+      // whose pool contained no cheap keeper would return the seed unchanged
+      // and every other guard here would still be green.
+      expect(shippedSlotRow.benchCost).toBeLessThanOrEqual(shippedRow.benchCost);
+      expect([...shippedSlotRow.ids].sort((a, b) => a - b)).not.toEqual(
+        [...shippedRow.ids].sort((a, b) => a - b)
+      );
     }
   );
 });
