@@ -25,7 +25,7 @@
 
 import { readFileSync } from "node:fs";
 import { test, expect } from "vitest";
-import { projectAll, XP_DEBUG, type PlayerXp } from "../src/lib/xp";
+import { projectAll, XP_CONFIG, XP_DEBUG, type PlayerXp } from "../src/lib/xp";
 import {
   pickBestXi,
   buildLaunchVariants,
@@ -1315,6 +1315,86 @@ test.runIf(process.env.HAALAND)(
         `     he displaces: ${out.map((e) => `${e.web_name} ${money(e.now_cost)}`).join(", ")}` +
           `\n     replaced by:  ${inn.map((e) => `${e.web_name} ${money(e.now_cost)}`).join(", ")}`
       );
+
+      // --- 2b. the armband objection ----------------------------------------
+      // The obvious objection to the 5.45 above, and the first one a reader
+      // will raise: the app's squad objective is a plain sum of fifteen
+      // discounted projections, with NO captain term (see the default
+      // `scoreOf` in `buildSquadWithinBudget`). Haaland is the most-captained
+      // player in the game. So of course a captain-blind objective leaves him
+      // out — measure it again with the armband priced in and he comes back.
+      //
+      // He does not, and that is the point of this block. `horizonWithCaptain`
+      // is the private `horizonScore` reproduced here from its two ingredients
+      // — `pickBestXi`, whose `totalXp` already doubles the captain, and
+      // `XP_CONFIG.gwDecay`, imported rather than typed as a literal so the
+      // replica cannot silently drift from the shipped decay.
+      //
+      // AS MEASURED on the 2026-07-26 snapshot: 182.83 for the app's squad
+      // against 177.60 for the forced-Haaland squad, i.e. -5.23, against -5.45
+      // on the captain-blind objective. The armband is worth 0.22 of the 5.45
+      // and no more, and the printed line below says why — but NOT the way the
+      // first draft of this comment guessed. It claimed the armband never
+      // moves to Haaland; it does. In the forced squad he takes it at 5.50 GW1
+      // xP. The catch is WHO he displaces to get there: B.Fernandes, who was
+      // captaining the other squad at 5.60. So the doubling follows him in and
+      // is applied to a slightly WORSE captain than the one it was applied to
+      // before. Pricing the armband correctly does not rescue a premium whose
+      // arrival removes the better armband from the squad.
+      //
+      // (The point generalises past this snapshot and is the reason to keep
+      // measuring rather than reasoning: the captain term is not free value
+      // attached to a premium, it is value attached to the squad's BEST
+      // player, and buying the premium is often how you lose the previous
+      // one.)
+      //
+      // This is not an argument that captaincy never matters to squad
+      // selection. It is the narrower claim that on THIS snapshot the missing
+      // captain term is not what excludes Haaland — which is the claim that
+      // was being asserted in conversation without a measurement behind it.
+      const horizonEvents = Array.from({ length: 5 }, (_, i) => nextEvent + i);
+      const horizonWithCaptain = (squad: Element[]) =>
+        horizonEvents.reduce(
+          (sum, gw, i) =>
+            sum +
+            pickBestXi(squad, (id) => xp.get(id)?.perGw.get(gw) ?? 0).totalXp *
+              Math.pow(XP_CONFIG.gwDecay, i),
+          0
+        );
+      const capBase = horizonWithCaptain(base.squad);
+      const capForced = horizonWithCaptain(forced.squad);
+      // The replica must actually double somebody, or this whole block is a
+      // second copy of the captain-blind measurement dressed up as a check on
+      // it — which would agree with step 2 for the wrong reason and read as
+      // corroboration. Kills the mutation that drops `.totalXp`'s captain term.
+      const horizonNoCaptain = (squad: Element[]) =>
+        horizonEvents.reduce((sum, gw, i) => {
+          const xi = pickBestXi(squad, (id) => xp.get(id)?.perGw.get(gw) ?? 0);
+          return sum + (xi.totalXp - (xi.captain?.xp ?? 0)) * Math.pow(XP_CONFIG.gwDecay, i);
+        }, 0);
+      expect(capBase, "the captain-aware replica is not doubling anybody").toBeGreaterThan(
+        horizonNoCaptain(base.squad)
+      );
+      const gw1Captain = (squad: Element[]) =>
+        pickBestXi(squad, (id) => xp.get(id)?.perGw.get(nextEvent) ?? 0).captain;
+      console.log(
+        `  with the captain DOUBLED: ${fmt(capBase)} without him, ${fmt(capForced)} with him` +
+          ` => ${fmt(capForced - capBase)}`
+      );
+      console.log(
+        `     GW1 armband goes to ${gw1Captain(base.squad)?.element.web_name}` +
+          ` (${fmt(gw1Captain(base.squad)?.xp ?? 0)}) without him, and to` +
+          ` ${gw1Captain(forced.squad)?.element.web_name}` +
+          ` (${fmt(gw1Captain(forced.squad)?.xp ?? 0)}) in the squad that has him`
+      );
+      // If this ever fails, the finding is real and the fix is not to relax the
+      // assertion: it means the armband HAS become the thing that decides
+      // Haaland, and `buildSquadWithinBudget`'s captain-blind default objective
+      // is then understating a premium the app should be drafting.
+      expect(
+        capForced - capBase,
+        "the captain double now rescues Haaland — the squad objective needs a captain term"
+      ).toBeLessThan(0);
 
       // --- 3. the threshold --------------------------------------------------
       // Bracket by doubling the uplift, then bisect. The Haaland-containing
