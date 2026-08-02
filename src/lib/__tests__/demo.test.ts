@@ -536,14 +536,46 @@ describe("the demo squad, ledger and team value are legal", () => {
 
   it("starts the season on the budget every manager starts on", () => {
     const u = universe();
+    /*
+     * £100.0m exactly in GW1, because that is what the game issues and
+     * `entry_history.value` counts the bank inside it. This is the one figure
+     * in the whole season that is not a matter of degree.
+     */
     expect(u.rows[0].value).toBe(INITIAL_BUDGET);
     expect(u.rows[u.rows.length - 1].value).toBe(u.entry.last_deadline_value);
-    for (let i = 1; i < u.rows.length; i++) {
-      expect({ gw: u.rows[i].event, rose: u.rows[i].value >= u.rows[i - 1].value }).toEqual({
+
+    /*
+     * THIS USED TO ASSERT THAT TEAM VALUE NEVER FALLS, and it passed for the
+     * worst possible reason: the value was interpolated toward a fixed
+     * endpoint, so it could not fall, and the test was measuring the
+     * interpolation rather than the squad. Team value in FPL falls all the
+     * time — every owner of a player who drops 0.1 loses 0.1 — and a fixture
+     * that cannot express that cannot exercise the red arrow the dashboard
+     * draws for it.
+     *
+     * What is actually true, and what is asserted instead: a manager cannot
+     * spend money he does not have, and a week's price movement across fifteen
+     * players is small. A jump of more than £3.0m in one gameweek is not a
+     * price movement, it is the walk having lost the thread.
+     */
+    for (let i = 0; i < u.rows.length; i++) {
+      expect({ gw: u.rows[i].event, negative: u.rows[i].bank < 0 }).toEqual({
         gw: u.rows[i].event,
-        rose: true,
+        negative: false,
+      });
+      if (i === 0) continue;
+      const step = Math.abs(u.rows[i].value - u.rows[i - 1].value);
+      expect({ gw: u.rows[i].event, wild: step > 30 }).toEqual({
+        gw: u.rows[i].event,
+        wild: false,
       });
     }
+
+    // And it has to MOVE, in both directions, or the fixture is still the old
+    // straight line under a new name.
+    const steps = u.rows.slice(1).map((r, i) => r.value - u.rows[i].value);
+    expect(steps.some((d) => d > 0)).toBe(true);
+    expect(steps.some((d) => d < 0)).toBe(true);
   });
 
   it("keeps a transfer ledger that matches the history rows it is counted from", () => {
@@ -1466,5 +1498,152 @@ describe("the mini-league's two ranks answer two different questions", () => {
       rivals: rivals.length,
       differ: rivals.length,
     });
+  });
+});
+
+describe("every price and every name in the demo is one FPL could have issued", () => {
+  it("gives no two players the same name", () => {
+    const u = universe();
+    /*
+     * `web_name` was built as `TEAM_NAMES[team - 1].slice(0, 3)`, and Manchester
+     * City and Manchester United both slice to "Man" — so two different players
+     * were both called "Man. Back 1", and both clubs answered to "MAN".
+     *
+     * That is not a cosmetic collision. The player search, the squad list, the
+     * transfer planner and every comparison table identify a man to the reader
+     * by this string and nothing else, so a ledger entry selling one and buying
+     * the other read as selling and buying the SAME PLAYER in the same
+     * gameweek — an apparently nonsensical transfer that the app was reporting
+     * perfectly faithfully.
+     */
+    const names = u.bootstrap.elements.map((e) => e.web_name);
+    const dupes = names.filter((n, i) => names.indexOf(n) !== i);
+    expect(dupes).toEqual([]);
+    const shorts = u.bootstrap.teams.map((t) => t.short_name);
+    expect(new Set(shorts).size).toBe(shorts.length);
+    for (const t of u.bootstrap.teams) {
+      expect({ id: t.id, len: t.short_name.length }).toEqual({ id: t.id, len: 3 });
+    }
+  });
+
+  it("prices every player inside the range the game issues prices in", () => {
+    const u = universe();
+    /*
+     * FPL's cheapest player is £3.9m and its dearest is around £15.0m, and the
+     * demo used to issue midfielders at £0.8m. Anything that DIVIDES BY PRICE —
+     * the optimizer's points-per-million, the value table, the "best value in
+     * the game" list — treats a sub-floor price as free points, so the app's
+     * value ranking was a ranking of the generator's worst players.
+     *
+     * The start price matters as much as the current one: `purchasePriceFor`
+     * falls back to `now_cost - cost_change_start` for a player the manager has
+     * always owned, so an impossible start price becomes an impossible purchase
+     * price and then an impossible selling price.
+     */
+    for (const e of u.bootstrap.elements) {
+      const start = e.now_cost - e.cost_change_start;
+      const label = `${e.web_name} (${e.id})`;
+      expect({ label, ok: e.now_cost >= 38 && e.now_cost <= 150 }).toEqual({ label, ok: true });
+      expect({ label, ok: start >= 38 && start <= 150 }).toEqual({ label, ok: true });
+    }
+    // And the range has to be USED, or the shape is a constant wearing a bound.
+    const costs = u.bootstrap.elements.map((e) => e.now_cost);
+    expect(Math.max(...costs) - Math.min(...costs)).toBeGreaterThan(50);
+    const moves = u.bootstrap.elements.map((e) => e.cost_change_start);
+    expect(moves.some((m) => m > 0)).toBe(true);
+    expect(moves.some((m) => m < 0)).toBe(true);
+  });
+
+  it("gives every manager in the demo a squad he could have paid for", () => {
+    const u = universe();
+    /*
+     * The budget used to bind the demo manager ALONE. The rivals and the field
+     * were built by taking the best man at each club with no budget at all, so
+     * they fielded roughly £115m of talent while he played by the rules — and
+     * every rank on the front page was a measurement of that asymmetry rather
+     * than of anything he did. One budget, applied to everyone.
+     */
+    for (const r of u.league.standings.results) {
+      const p = u.picksFor(r.entry, CURRENT_GW);
+      const spend = p.picks.reduce((s, x) => s + u.byId.get(x.element)!.now_cost, 0);
+      expect({ entry: r.entry, over: spend > INITIAL_BUDGET }).toEqual({
+        entry: r.entry,
+        over: false,
+      });
+    }
+    /*
+     * And the manager's own fifteen must not be WELL under it either. The
+     * repair loop's first version took the best points-per-tenth downgrade on
+     * every pass including the last, so it would give up £2.0m of striker to
+     * close a £0.3m gap and leave the change sitting in an unspendable bank: a
+     * £98.5m squad that came out at £95.2m. Money left on the table is quality
+     * left on the bench.
+     */
+    const mine = u.picks.picks.reduce((s, x) => s + u.byId.get(x.element)!.now_cost, 0);
+    expect(mine).toBeGreaterThan(INITIAL_BUDGET - 30);
+  });
+});
+
+describe("the demo measures the manager against a field that plays the same game", () => {
+  it("derives the field's average from squads rather than from the gameweek number", () => {
+    const u = universe();
+    /*
+     * `average_entry_score` was `42 + ((gw * 13) % 25)`: a sawtooth with no
+     * relationship to the players this universe says were on the pitch. It is
+     * load-bearing for four separate things — every gameweek rank, every
+     * overall rank, the dashboard's "vs average" line and the season planner's
+     * field comparison — and none of them checked it.
+     *
+     * The tell that it was authored rather than derived is that it depends on
+     * the gameweek NUMBER. A derived average moves with the fixtures; an
+     * authored one repeats on a cycle. So: assert it is not that formula, and
+     * assert it behaves like a measurement.
+     */
+    const played = u.bootstrap.events.filter((e) => e.id <= CURRENT_GW);
+    for (const ev of played) {
+      const label = `gw ${ev.id}`;
+      expect({ label, formula: ev.average_entry_score === 42 + ((ev.id * 13) % 25) }).toEqual({
+        label,
+        formula: false,
+      });
+      expect({ label, sane: ev.average_entry_score > 10 && ev.average_entry_score < 90 }).toEqual({
+        label,
+        sane: true,
+      });
+    }
+    // A week nobody has played has no average. FPL reports 0 until it kicks off.
+    for (const ev of u.bootstrap.events.filter((e) => e.id > CURRENT_GW)) {
+      expect({ gw: ev.id, avg: ev.average_entry_score }).toEqual({ gw: ev.id, avg: 0 });
+    }
+    // It has to vary, and not on a period the gameweek number could supply.
+    const vals = played.map((e) => e.average_entry_score);
+    expect(new Set(vals).size).toBeGreaterThan(4);
+  });
+
+  it("puts the demo manager where the demo says it puts him", () => {
+    const u = universe();
+    /*
+     * The front page opens on a rank. With an invented average of ~53.5 a week
+     * against a squad that scores ~47, the demo manager finished twenty
+     * gameweeks 10,624,861st of 11,000,000 — the bottom three per cent — while
+     * the pitch above the number showed a squad any reader can see is a good
+     * one. The rank was not wrong about the manager. It was wrong about the
+     * field.
+     *
+     * A greedy-optimal budget-legal fifteen, playing against sampled managers
+     * who reach two or three men down each club's list, should finish well
+     * ahead of them. That is the claim the whole demo rests on, so it is
+     * asserted rather than assumed.
+     */
+    const field = u.bootstrap.events
+      .filter((e) => e.id <= CURRENT_GW)
+      .reduce((s, e) => s + e.average_entry_score, 0);
+    const mine = u.history.current[CURRENT_GW - 1].total_points;
+    expect(mine).toBeGreaterThan(field);
+    // Top decile, but not first in the world: a demo that opens on rank 1 is
+    // advertising a bug, not a good season.
+    const rank = u.history.current[CURRENT_GW - 1].overall_rank;
+    expect(rank).toBeGreaterThan(1_000);
+    expect(rank).toBeLessThan(u.bootstrap.total_players / 10);
   });
 });
