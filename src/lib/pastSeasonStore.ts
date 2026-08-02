@@ -20,6 +20,16 @@ let cached: PastSeasonFetch | null = null;
 /** Key of the load in flight — or, if none is, of the last one requested. */
 let cachedIds: string | null = null;
 /*
+ * Serial number of the most recently STARTED load. A key cannot do this job:
+ * keys repeat. Switch feed and switch back, or let the pool shrink and grow
+ * again, and the load that has just been overtaken is carrying the same key as
+ * the one that overtook it — so the "is this still mine?" test below waved it
+ * through, and the size comparison after it could let a stale answer beat the
+ * fresher one it was supposed to be superseded by. Nothing cancels (no caller
+ * passes an `AbortSignal`), so those four hundred requests really do land.
+ */
+let loadSeq = 0;
+/*
  * Key of the records actually SITTING IN `cached`, which is not the same thing.
  * `cachedIds` moves the moment a new load starts; the records it describes do
  * not arrive until that load lands. One variable was doing both jobs, so during
@@ -147,6 +157,7 @@ export function loadPastSeason(
   if (cached && cachedKey === key && cached.failed === 0) return Promise.resolve(cached);
   if (inflight && cachedIds === key) return inflight;
   cachedIds = key;
+  const seq = ++loadSeq;
   const p: Promise<PastSeasonFetch> = fetchPastSeason(ids, 10, onProgress)
     .then((r) => {
       /*
@@ -162,12 +173,18 @@ export function loadPastSeason(
        * feed prefix then correctly refused to show them — leaving the demo with
        * nothing at all and no second load coming.
        *
-       * `cachedIds` names the load that started most recently, so this is the
-       * one test that distinguishes "mine" from "overtaken". It also makes
-       * `resetPastSeasonStore` real: reset nulls `cachedIds`, so a fetch still
-       * in the air when a test tears down can no longer seed the next test.
+       * `loadSeq` names the load that started most recently, so this is the one
+       * test that distinguishes "mine" from "overtaken". It was `cachedIds !==
+       * key`, which is the same idea addressed to the wrong identity: two
+       * different loads can share a key (K1 → K2 → K1, which is what a
+       * demo/real/demo round trip is), and then the first K1 settles, finds its
+       * own key still parked in `cachedIds`, and commits over the third. A
+       * serial number cannot repeat, so it cannot be mistaken for a successor.
+       * It also makes `resetPastSeasonStore` real: reset bumps the counter, so a
+       * fetch still in the air when a test tears down can no longer seed the
+       * next test.
        */
-      if (cachedIds !== key) return r;
+      if (seq !== loadSeq) return r;
       // Never trade a fuller result for a thinner one: a retry that goes worse
       // (offline, say) must not blank out records already on screen. On an exact
       // tie the newer result wins, which is unobservable — equal `data.size`
@@ -208,6 +225,9 @@ export function resetPastSeasonStore(): void {
   cached = null;
   cachedIds = null;
   cachedKey = null;
+  // A load already in the air is now nobody's, which is what "forget
+  // everything" has to mean if it is going to hold between tests.
+  loadSeq++;
   // Bumping the version without telling the listeners was a half-measure that
   // read like a whole one: `subscribePastSeason` promises a callback whenever
   // the held records change, and this changes them to nothing. No production

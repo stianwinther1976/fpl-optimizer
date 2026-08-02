@@ -1491,6 +1491,28 @@ describe("the demo bootstrap is a bootstrap the app can read", () => {
     // both absent every player sat at exactly net zero and the panel drew rows
     // of blanks.
     expect(new Set(net).size).toBeGreaterThan(u.bootstrap.elements.length / 2);
+    /*
+     * AND THE DIRECTION HAS TO MATCH THE BAR PRINTED BESIDE IT. `PlayerModal`
+     * draws `price_change_percent` as a signed progress bar and the net flow as
+     * its cause, one above the other, so a man travelling toward a price FALL
+     * with more managers buying him than selling is the panel contradicting
+     * itself in a single glance.
+     *
+     * The two used to be built from independent noise terms of up to 40,000 a
+     * side, which swamps the directional part for anyone who is not near the
+     * threshold: eight of the three hundred came out pointing the wrong way, and
+     * the only reason nobody saw it is that the badge is gated at ±25,000 and
+     * the worst offender landed about 1,500 transfers short of it.
+     */
+    const wrongWay = u.bootstrap.elements.filter((e, i) => {
+      const p = parseFloat(e.price_change_percent!);
+      return p !== 0 && Math.sign(net[i]) !== Math.sign(p);
+    });
+    expect(wrongWay.map((e) => e.id)).toEqual([]);
+    // Non-vacuous: the pressures are not all one sign, and hardly any are zero.
+    const pressures = u.bootstrap.elements.map((e) => parseFloat(e.price_change_percent!));
+    expect(pressures.filter((p) => p > 0).length).toBeGreaterThan(100);
+    expect(pressures.filter((p) => p < 0).length).toBeGreaterThan(100);
   });
 
   it("counts a season's saves and cards back onto the player who made them", () => {
@@ -2205,7 +2227,6 @@ describe("the demo answers about the manager who was asked about", () => {
 describe("the demo's availability flags describe the same player its match feed does", () => {
   const u = makeDemoUniverse(NOW) as unknown as DemoUniverse;
   const els = u.bootstrap.elements;
-  const lastRounds = (id: number, n: number) => u.elementHistory(id)!.history.slice(-n);
 
   it("does not flag a man out while its own team sheets keep naming him", () => {
     /*
@@ -2221,13 +2242,36 @@ describe("the demo's availability flags describe the same player its match feed 
      */
     const out = els.filter((e) => e.status === "i" || e.chance_of_playing_next_round === 0);
     expect(out.length).toBeGreaterThan(2);
+    /*
+     * MEASURE THE ABSENCE, DON'T PEEK AT THE LAST WEEK. This asked for
+     * `lastRounds(e.id, 1)` — the gameweek on screen — under a variable called
+     * `playedSinceBeingRuledOut`, and the two are not the same question. The
+     * treatment room lands its injuries one to three gameweeks back, so a window
+     * of one covers none of the ground the flag claims: the whole of it could
+     * have been playing ninety minutes in GW17, 18 and 19 and this stayed green.
+     *
+     * It cost the demo a real defect. `injuredFrom` was `CURRENT_GW - (id % 3)`,
+     * which runs ZERO to two back, so a third of the flagged men were "out" only
+     * from the week still being played and had a completed, unbroken history
+     * behind them — the exact training example the treatment room's own comment
+     * says not to publish. That shows up here as a trailing run of exactly one
+     * blank gameweek, and two is the shallowest a real injury can be.
+     */
+    const blankRun = (id: number) => {
+      const h = u.elementHistory(id)!.history;
+      let n = 0;
+      for (let i = h.length - 1; i >= 0 && h[i].minutes === 0; i--) n++;
+      return n;
+    };
     for (const e of out) {
-      const recent = lastRounds(e.id, 1);
-      expect({ id: e.id, playedSinceBeingRuledOut: recent.some((r) => r.minutes > 0) }).toEqual({
-        id: e.id,
-        playedSinceBeingRuledOut: false,
-      });
+      expect({ id: e.id, absentFor: blankRun(e.id) >= 2 }).toEqual({ id: e.id, absentFor: true });
     }
+    // Not all bunched at the shallow end either — the `id % 3` spread is
+    // supposed to give some of them a longer absence than others.
+    expect(out.some((e) => blankRun(e.id) >= 4)).toBe(true);
+    // And the absence has to BE an absence. A man who never played all season is
+    // not evidence that a flag means anything; at least one was a starter first.
+    expect(out.some((e) => u.elementHistory(e.id)!.history.some((r) => r.minutes > 0))).toBe(true);
   });
 
   it("keeps the three availability fields telling one story", () => {

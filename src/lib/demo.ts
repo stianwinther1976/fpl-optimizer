@@ -175,6 +175,13 @@ function makeElements() {
        * on screen changes (anything under ±85 reads "unlikely to change"), but a
        * demo in which every unflagged player is drifting upward gives the whole
        * league net transfers IN, which is not a market.
+       *
+       * THE MULTIPLIER MUST BE COPRIME TO THE MODULUS or the cycle is not the
+       * width it looks. `(id * 11) % 121` reads like a 121-wide spread and is
+       * not one: 11 squared IS 121, so the expression collapses to
+       * `11 * (id mod 11)` and three hundred players share eleven distinct
+       * values. 37 against 121 has no common factor, so the residues really do
+       * cover 0..120.
        */
       const pricePressure =
         id % 23 === 0
@@ -185,7 +192,18 @@ function makeElements() {
               ? -103
               : id % 13 === 0
                 ? -88
-                : ((id * 11) % 121) - 60;
+                : ((id * 37) % 121) - 60;
+      /*
+       * The traffic this man sees in a week REGARDLESS of direction — the tens
+       * of thousands of managers who move him either way — so that both flows
+       * below sit on the same floor and the net between them is the direction
+       * alone. Splitting the floor into two independent noise terms was the bug
+       * this replaces: each side wandered by up to 40,000 on its own, which
+       * swamps the directional surplus for any ordinary player and left eight
+       * of the three hundred with a net flow pointing the opposite way to the
+       * progress bar printed beside it.
+       */
+      const churn = 3_000 + Math.round(60_000 * q) + ((id * 7_919) % 40_000);
       elements.push({
         id,
         web_name: `${TEAM_CODES[team - 1]} ${["Keeper", "Back", "Mid", "Striker"][t - 1]} ${i}`,
@@ -262,9 +280,16 @@ function makeElements() {
          * flow to compare it against, so every player in the demo sat at
          * exactly net zero and the panel drew twenty blank rows.
          *
-         * The surplus is `pricePressure` itself, so the net flow and the
-         * progress bar beside it always point the same way and cannot drift
-         * apart again. The comment here used to claim they agreed in sign with
+         * Both sides start from the same `churn`, and the only thing that
+         * separates them is `pricePressure` at 2,500 managers a percentage
+         * point. So for anyone with a direction at all the net flow carries that
+         * direction's sign, exactly, and the progress bar beside it cannot
+         * disagree: the remaining jitter is capped at 1,200 either way, well
+         * under the 2,500 a single point of pressure is worth. (A player at
+         * pressure zero nets whatever the jitter says, which is the honest
+         * answer for a man who is going nowhere.)
+         *
+         * The comment here used to claim these agreed in sign with
          * `cost_change_event` instead, and they did not: `cost_change_event` is
          * `round(cost_change_start / 20)`, one twentieth of a whole season's
          * drift, which rounds to zero for everyone but the very best and is
@@ -273,15 +298,9 @@ function makeElements() {
          * numbers belong beside is the one the predictor pairs them with.
          */
         transfers_in_event:
-          3_000 +
-          Math.round(60_000 * q) +
-          ((id * 7_919) % 40_000) +
-          (pricePressure > 0 ? 2_500 * pricePressure : 0),
+          churn + ((id * 31) % 1_200) + (pricePressure > 0 ? 2_500 * pricePressure : 0),
         transfers_out_event:
-          3_000 +
-          Math.round(60_000 * q) +
-          ((id * 104_729) % 40_000) +
-          (pricePressure < 0 ? -2_500 * pricePressure : 0),
+          churn + ((id * 104_729) % 1_200) + (pricePressure < 0 ? -2_500 * pricePressure : 0),
         // Generation inputs, not display fields. `_quality` drives how often the
         // man returns; `_nailed` decides whether he starts or is a rotation
         // risk. Both are stripped before the bootstrap is served.
@@ -2067,9 +2086,10 @@ export function makeDemoUniverse(now: number) {
      * up rather than that he keeps sharp company.
      */
     const fifteen = rivalSquad(id, [4, 1, 2, 1, 5, 1, 5, 1, 2][i]);
-    // A chip apiece for two of them in the current week, so the badge and the
-    // bench-boost scoring path are both exercised by something other than the
-    // demo manager.
+    // Four of the nine play a chip in the current week — 999900 and 999905 the
+    // triple captain, 999901 and 999908 the bench boost — so the badge and the
+    // bench-boost scoring path are both exercised by somebody other than the
+    // demo manager, and by more than one somebody.
     const chipAt = (gw: number) =>
       gw !== CURRENT_GW ? null : id % 7 === 0 ? "bboost" : id % 5 === 0 ? "3xc" : null;
     /*
@@ -2630,10 +2650,16 @@ export function makeDemoUniverse(now: number) {
   /*
    * The manager card, per id. `entry/{id}/` returned the demo manager's own
    * document whatever was asked for — his name, his points, his rank, his
-   * leagues — so the two endpoints that HAD been taught to honour the id
-   * (`picks` and `history`) now disagreed with the one that had not: a rival
-   * card could open on "Demo Manager", 1,152 points and a top-2% badge above a
-   * pitch and a season that belonged to somebody else.
+   * leagues — so it disagreed with the two endpoints that HAD been taught to
+   * honour the id, `picks` and `history`.
+   *
+   * NO SCREEN REACHES THAT TODAY, and it would be dishonest to describe this as
+   * a bug the reader was seeing. `MiniLeague` sets `canOpenRivals` false in demo
+   * mode, so the rows are not clickable, and typing `/team/999901` by hand calls
+   * `setDemoMode(id === DEMO_ENTRY_ID)`, which turns the demo feed off before
+   * anything is fetched. The fix stands anyway: a stub that answers one question
+   * about a manager correctly and the next one with somebody else's document is
+   * a trap laid for whoever wires up the next screen, and it costs a lookup.
    */
   const entryFor = (id: number) => {
     if (id === DEMO_ENTRY_ID) return entry;

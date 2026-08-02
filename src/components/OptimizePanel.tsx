@@ -453,6 +453,10 @@ export default function OptimizePanel({
       setChipView(scen);
     } finally {
       setChipLoading(null);
+      // Whoever sets `phase` clears it. This did not, so a chip preview left
+      // "Checking last season… 400/400" standing in the panel's state, and the
+      // next tap on Optimize opened its spinner on the previous job's caption.
+      setPhase(null);
     }
   }
 
@@ -574,7 +578,15 @@ export default function OptimizePanel({
         </div>
       )}
 
-      {(running || planning) && (
+      {/*
+       * `chipLoading` belongs in this condition. A chip preview can be the first
+       * thing the reader taps, and since it started awaiting the past-season
+       * load it is the SLOWEST thing in the panel — four hundred requests behind
+       * a badge that says "…" and nothing else. The progress text was already
+       * being written by `ensurePastSeason`; there was simply nowhere on screen
+       * that would show it.
+       */}
+      {(running || planning || chipLoading) && (
         <div className="card flex items-center gap-3 p-6 text-sm text-muted">
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
           {phase ?? "Working…"}
