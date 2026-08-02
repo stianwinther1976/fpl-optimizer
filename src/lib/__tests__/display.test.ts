@@ -8,6 +8,8 @@ import {
   averageFdr,
   fdrSortKey,
   signedPrice,
+  teamValue,
+  valueDelta,
   type BenchRow,
 } from "../display";
 
@@ -217,5 +219,89 @@ describe("signedPrice", () => {
 
   it("renders an unknown price as a dash", () => {
     expect(signedPrice(null, fmt)).toBe("–");
+  });
+});
+
+describe("teamValue", () => {
+  it("does not add the bank to a value that already contains it", () => {
+    // The whole content of the bug: `value` is squad PLUS bank, so the obvious
+    // sum returns the bank twice. A card reading £115.4m opened into a table
+    // reading £116.9m for the same gameweek.
+    expect(teamValue({ value: 1154, bank: 15 })).toBe(1154);
+    expect(teamValue({ value: 1154, bank: 15 })).not.toBe(1154 + 15);
+  });
+
+  it("reconciles with the squad-derived figure the Team value card shows", () => {
+    // The card computes Σ sellPrice + bank from the squad; the history table
+    // reads the row. FPL's definition makes those the same number, and the
+    // point of the helper is that they cannot drift apart again.
+    //
+    // THE EXPECTATION IS THE CARD'S SIDE OF THE IDENTITY, NOT THE ROW'S. An
+    // earlier draft built `row.value` as `Σ sellPrice + bank` and then asserted
+    // `teamValue(row)` equalled that same expression — true for `r.value`, and
+    // equally true for `r.value + r.bank`, `r.value * 1`, or anything else that
+    // happens to be handed the number it was given. A test that passes for the
+    // bug it was written to catch is worse than no test: it reports coverage.
+    // So the two sides are computed independently and only the squad total plus
+    // the bank appears on the right.
+    const sellPrices = [130, 95, 80, 75, 70, 65, 60, 55, 50, 50, 45, 45, 45, 40, 40];
+    const squad = sellPrices.reduce((a, b) => a + b, 0);
+    const bank = 15;
+    expect(teamValue({ value: squad + bank, bank })).toBe(squad + bank);
+    // The positive control: the same row, read the buggy way, is 15 too high.
+    // If this ever stops being a distinct number the test above has gone vacuous.
+    expect(teamValue({ value: squad + bank, bank })).not.toBe(squad + bank + bank);
+  });
+
+  it("is the row's own value whatever the bank happens to be", () => {
+    // The bank must not reach the answer at all — not scaled, not conditional
+    // on being zero, not added back under some other name. Holding `value`
+    // fixed and sweeping `bank` is the cheapest way to say that: any
+    // implementation that reads `bank` produces a different number somewhere in
+    // the sweep, and every one of these rows is one FPL could really serve.
+    for (const bank of [0, 1, 5, 15, 47, 300]) {
+      expect({ bank, v: teamValue({ value: 1154, bank }) }).toEqual({ bank, v: 1154 });
+    }
+  });
+
+  it("leaves a season that started on budget starting on budget", () => {
+    // Every manager's GW1 team value is exactly 1000 whatever they left
+    // unspent. Adding the bank made a manager who banked £1.5m look as though
+    // he had begun the season £1.5m over the £100.0m everyone gets.
+    expect(teamValue({ value: 1000, bank: 15 })).toBe(1000);
+  });
+
+});
+
+describe("valueDelta", () => {
+  it("points the sign at the later gameweek", () => {
+    // The card renders `good: diff > 0` and an up/down arrow off this number,
+    // so an inverted subtraction is not a rounding error — it paints a squad
+    // that has LOST £2.0m green and pointing upward. The argument order is the
+    // whole content of the function and it needs saying out loud.
+    expect(valueDelta({ value: 1174, bank: 5 }, { value: 1154, bank: 15 })).toBe(20);
+    expect(valueDelta({ value: 1134, bank: 5 }, { value: 1154, bank: 15 })).toBe(-20);
+  });
+
+  it("counts a bank movement once", () => {
+    // Selling £1.0m of squad into the bank moves nothing: team value is flat.
+    // The rows differ in `bank` ALONE — under the double-counting reading this
+    // returns +10 and the card reports a £1.0m gain for a sale. The earlier
+    // version of this test gave both rows the same bank as well as the same
+    // value, so it subtracted a number from itself and could not fail.
+    expect(valueDelta({ value: 1100, bank: 15 }, { value: 1100, bank: 5 })).toBe(0);
+    expect(valueDelta({ value: 1100, bank: 5 }, { value: 1100, bank: 15 })).toBe(0);
+  });
+
+  it("reports no movement across a gameweek nothing happened in", () => {
+    expect(valueDelta({ value: 1154, bank: 15 }, { value: 1154, bank: 15 })).toBe(0);
+  });
+
+  it("agrees with reading the two rows separately", () => {
+    // The helper replaced an inline subtraction; it must not have changed the
+    // number, only made it reachable.
+    const later = { value: 1183, bank: 2 };
+    const earlier = { value: 1154, bank: 15 };
+    expect(valueDelta(later, earlier)).toBe(teamValue(later) - teamValue(earlier));
   });
 });

@@ -70,6 +70,40 @@ export function netGwDelta(later: GwScore, earlier: GwScore): number {
 }
 
 /**
+ * A gameweek row's team value in tenths, as FPL means the phrase.
+ *
+ * `entry_history.value` ALREADY INCLUDES the bank. That is why every manager's
+ * team value is exactly 1000 after GW1 however much they left unspent: the game
+ * defines team value as squad plus bank, not squad alone. Adding `bank` on top
+ * of it — which the KPI history table and the month-over-month delta both did —
+ * counted the bank twice, so a card reading "£115.4m (£113.9m squad + £1.5m
+ * bank)" opened into a table claiming £116.9m for the very same gameweek.
+ *
+ * The squad-derived side of the app must therefore compare against this, not
+ * against `value + bank`: `Σ sellPrice + bank === value`.
+ */
+export function teamValue(r: { value: number; bank: number }): number {
+  return r.value;
+}
+
+/**
+ * Change in team value between two gameweeks, `later` minus `earlier`.
+ *
+ * Here rather than open-coded in the card for the same reason `netGwDelta` is:
+ * a difference of two `teamValue` calls is still display arithmetic, and while
+ * it lived inside JSX its SIGN was unassertable. That matters more than it
+ * looks — the card renders `good: diff > 0` and `direction: diff >= 0`, so an
+ * inverted subtraction would paint a squad that had lost £2m green and
+ * upward-pointing, which is exactly the sort of wrong a reader trusts.
+ */
+export function valueDelta(
+  later: { value: number; bank: number },
+  earlier: { value: number; bank: number }
+): number {
+  return teamValue(later) - teamValue(earlier);
+}
+
+/**
  * Mean fixture difficulty over a window, or null when there are no fixtures.
  *
  * NULL RATHER THAN A NUMBER, and that is the whole point. The obvious guard

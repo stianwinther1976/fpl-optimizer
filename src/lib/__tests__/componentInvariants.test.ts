@@ -410,3 +410,56 @@ describe("UpdateToast can be declined", () => {
     expect(src).toContain("v !== dismissed.current");
   });
 });
+
+describe("team value is read the way FPL defines it", () => {
+  // `entry_history.value` ALREADY INCLUDES the bank — that is why every
+  // manager's team value is exactly 1000 after GW1 however much they left
+  // unspent. Two screens nonetheless wrote `value + bank`, so the Team value
+  // card ("£115.4m — £113.9m squad + £1.5m bank", derived from the squad)
+  // opened into a history table claiming £116.9m for the same gameweek, and
+  // the month-over-month delta counted every bank movement twice.
+  //
+  // The definition now lives once, in `display.ts:teamValue`, which is tested
+  // properly. This guard is only here to stop the open-coded sum coming back.
+  const offenders = componentFiles.filter((f) =>
+    /\.value\s*\+\s*\w*\.?bank|\.bank\s*\+\s*\w*\.?value/.test(read(f))
+  );
+
+  it("never adds the bank to a history row's value", () => {
+    expect(offenders).toEqual([]);
+  });
+
+  it("does not add the bank back on the far side of the helper", () => {
+    // The guard above only forbids the sum written on the ROW. Routing through
+    // `teamValue` and then writing `teamValue(r) + r.bank` reinstates the exact
+    // same double-count while satisfying every other check in this block — the
+    // file mentions the helper, and the forbidden `.value + .bank` shape never
+    // appears. Name the shape rather than trusting the mention.
+    const reAdders = componentFiles.filter((f) =>
+      /teamValue\([^)]*\)\s*\+|\+\s*teamValue\(/.test(read(f))
+    );
+    expect(reAdders).toEqual([]);
+  });
+
+  it("routes both readers through the single definition", () => {
+    // The card is squad-derived (Σ sellPrice + bank) and needs no helper; the
+    // two row-derived readers do. Dashboard reads a DIFFERENCE of two rows, so
+    // its helper is `valueDelta` — accepting either name here, rather than
+    // demanding the literal string `teamValue`, is what stops the guard from
+    // pushing the subtraction back inline to satisfy itself.
+    for (const f of ["KpiHistoryModal.tsx", "Dashboard.tsx"]) {
+      expect({ f, routed: /\b(teamValue|valueDelta)\s*\(/.test(read(f)) }).toEqual({
+        f,
+        routed: true,
+      });
+    }
+  });
+
+  it("does not difference two team values by hand", () => {
+    // `valueDelta` exists so the SIGN of the month-over-month movement is
+    // assertable; an inline `teamValue(a) - teamValue(b)` puts it back out of
+    // reach of every test, and an inverted one paints a falling squad green.
+    const inline = componentFiles.filter((f) => /teamValue\([^)]*\)\s*-\s*teamValue\(/.test(read(f)));
+    expect(inline).toEqual([]);
+  });
+});

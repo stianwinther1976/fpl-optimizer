@@ -8,7 +8,7 @@ import type { Element, EntryEventPicks, EventLive } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
 import { projectAutoSubs } from "@/lib/live";
-import { netEventPoints, netGwDelta, netGwPoints } from "@/lib/display";
+import { netEventPoints, netGwDelta, netGwPoints, valueDelta } from "@/lib/display";
 import { saveRecentTeam } from "@/lib/recent";
 import { launchPool } from "@/lib/pool";
 import { cachedPastSeason, loadPastSeason } from "@/lib/pastSeasonStore";
@@ -413,11 +413,11 @@ export default function Dashboard({
     };
   }
 
-  // Team value (squad + bank), month over month.
-  let valueDelta: StatDelta | null = null;
+  // Team value (squad + bank, which is what `value` already is), month over month.
+  let valueStat: StatDelta | null = null;
   if (comparable) {
-    const diff = curr.value + curr.bank - (past.value + past.bank);
-    valueDelta = {
+    const diff = valueDelta(curr, past);
+    valueStat = {
       text: `${fmtSigned(diff / 10, 1)}m`,
       period,
       good: diff === 0 ? null : diff > 0,
@@ -558,7 +558,7 @@ export default function Dashboard({
               ? `£${fmtPrice(squad.players.reduce((s, p) => s + p.sellPrice, 0))}m squad + £${fmtPrice(squad.bank)}m bank`
               : undefined
           }
-          delta={valueDelta}
+          delta={valueStat}
           onClick={() => setKpiModal("value")}
         />
         <Stat

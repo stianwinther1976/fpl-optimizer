@@ -2,7 +2,7 @@
 
 import type { TeamData } from "@/lib/fpl";
 import { CHIP_LABELS, fmtPrice, remainingChips } from "@/lib/rules";
-import { netGwPoints, signedPrice } from "@/lib/display";
+import { netGwPoints, signedPrice, teamValue } from "@/lib/display";
 import Sheet, { SheetClose } from "./Sheet";
 
 export type KpiMetric = "points" | "rank" | "gw" | "value" | "transfers" | "chips";
@@ -319,8 +319,8 @@ export default function KpiHistoryModal({
 
                     {metric === "value" &&
                       (() => {
-                        const cur = r.value + r.bank;
-                        const prevVal = prev ? prev.value + prev.bank : null;
+                        const cur = teamValue(r);
+                        const prevVal = prev ? teamValue(prev) : null;
                         const diff = prevVal != null ? cur - prevVal : null;
                         return (
                           <>

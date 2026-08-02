@@ -305,6 +305,17 @@ export interface LiveExplainStat {
 
 export interface LiveElement {
   id: number;
+  /**
+   * FPL's live stat block. These are the counting stats for the gameweek in
+   * progress; the season equivalents live on `Element`.
+   *
+   * The optional ones are optional because a stub feed may not send them, not
+   * because FPL omits them — the real endpoint sends every field for every
+   * player. Declaring them at all is the point: this interface listed six
+   * fields, so the demo feed satisfied the type while sending nothing a keeper
+   * could be rendered from, and there was no way to say in a test that a clean
+   * sheet or a booking had been recorded.
+   */
   stats: {
     minutes: number;
     total_points: number;
@@ -312,6 +323,14 @@ export interface LiveElement {
     bps: number;
     goals_scored: number;
     assists: number;
+    clean_sheets?: number;
+    goals_conceded?: number;
+    saves?: number;
+    yellow_cards?: number;
+    red_cards?: number;
+    own_goals?: number;
+    penalties_saved?: number;
+    penalties_missed?: number;
   };
   explain?: { fixture: number; stats: LiveExplainStat[] }[];
 }
