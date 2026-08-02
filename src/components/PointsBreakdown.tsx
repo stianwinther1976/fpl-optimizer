@@ -235,11 +235,28 @@ export default function PointsBreakdown({
               const el = elementById.get(r.elementId);
               if (!el) return null;
               const rowTotal = gwView ? (r.byGw.get(gwFilter as number) ?? 0) : r.total;
+              // The row below carries the same role/tabIndex/Enter-Space
+              // handling `StatsTable` and `MiniLeague` already have for the
+              // identical interaction. Without it this was the one table in the
+              // app whose player sheets could not be opened from a keyboard,
+              // and a screen reader announced an ordinary row.
               return (
                 <tr
                   key={r.elementId}
                   className="cursor-pointer hover:bg-panel-2/60"
                   onClick={() => onSelect?.(el)}
+                  role={onSelect ? "button" : undefined}
+                  tabIndex={onSelect ? 0 : undefined}
+                  onKeyDown={
+                    onSelect
+                      ? (ev) => {
+                          if (ev.key === "Enter" || ev.key === " ") {
+                            ev.preventDefault();
+                            onSelect(el);
+                          }
+                        }
+                      : undefined
+                  }
                 >
                   <td className="sticky left-0 z-10 bg-[var(--panel)] px-3 py-2">
                     <div className="flex items-center gap-2">

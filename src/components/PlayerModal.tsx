@@ -188,9 +188,14 @@ export default function PlayerModal({
               )}
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
+              {/* `round` is NOT unique: a double gameweek gives one player two
+                  history rows in the same round, and keying on it alone made
+                  React reconcile the two chips as one. The opponent is the real
+                  discriminator — a club cannot play the same opponent twice in
+                  one gameweek — so this is an identity, not a position. */}
               {recent.map((r) => (
                 <div
-                  key={r.round}
+                  key={`${r.round}-${r.opponent_team}`}
                   className="flex items-center gap-1.5 rounded-lg bg-panel-2 px-2 py-1.5 text-xs"
                 >
                   <span className="text-muted">GW{r.round}</span>

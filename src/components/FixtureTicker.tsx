@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { TeamData } from "@/lib/fpl";
 import type { Element, Team } from "@/lib/types";
 import { teamFixtures } from "@/lib/xp";
+import { averageFdr, fdrSortKey } from "@/lib/display";
 import ClubModal from "./ClubModal";
 
 const FDR_COLORS: Record<number, string> = {
@@ -50,11 +51,16 @@ export default function FixtureTicker({
             return { label: `${opp?.short_name ?? "?"} (${home ? "H" : "A"})`, fdr };
           });
         });
-        const avgFdr =
-          cells.flat().reduce((s, c) => s + c.fdr, 0) / Math.max(1, cells.flat().length);
+        // A club with NO fixture in the window has no average difficulty, and
+        // that is different from having an easy one. Dividing by `max(1, 0)`
+        // avoided the NaN but put a real number — zero — where the missing
+        // value belongs, and zero beats every legal FDR (1..5), so a club
+        // playing nothing at all sorted to the top of a table headed "easiest
+        // first" and advertised itself as `0.0`. Null instead, sorted last.
+        const avgFdr = averageFdr(cells.flat().map((c) => c.fdr));
         return { team, cells, avgFdr };
       })
-      .sort((a, b) => a.avgFdr - b.avgFdr);
+      .sort((a, b) => fdrSortKey(a.avgFdr) - fdrSortKey(b.avgFdr));
   }, [data, gws]);
 
   if (nextEvent == null) {
@@ -109,7 +115,9 @@ export default function FixtureTicker({
                   )}
                 </td>
               ))}
-              <td className="px-2 py-2 text-right font-mono text-muted">{avgFdr.toFixed(1)}</td>
+              <td className="px-2 py-2 text-right font-mono text-muted">
+                {avgFdr == null ? "–" : avgFdr.toFixed(1)}
+              </td>
             </tr>
           ))}
         </tbody>

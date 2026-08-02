@@ -11,6 +11,7 @@ import {
   ReferenceDot,
 } from "recharts";
 import type { TeamData } from "@/lib/fpl";
+import { netGwPoints } from "@/lib/display";
 import { CHIP_LABELS } from "@/lib/rules";
 import { SectionTitle } from "./ui";
 import PastSeasons from "./PastSeasons";
@@ -18,7 +19,11 @@ import PastSeasons from "./PastSeasons";
 export default function HistoryChart({ data, entryId }: { data: TeamData; entryId: number }) {
   const rows = data.history.current.map((r) => ({
     gw: r.event,
-    points: r.points,
+    // Net of hits. `average` on the other line is FPL's own average score for
+    // the week, and plotting a gross score against it flattered every week the
+    // manager took a hit — by exactly the size of the hit, on the one chart
+    // whose whole job is "did I beat the average".
+    points: netGwPoints(r),
     average: data.bootstrap.events.find((e) => e.id === r.event)?.average_entry_score ?? null,
     total: r.total_points,
     rank: r.overall_rank,

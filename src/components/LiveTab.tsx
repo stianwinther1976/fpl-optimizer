@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type TeamData } from "@/lib/fpl";
 import type { EventLive, Fixture, Pick } from "@/lib/types";
 import { matchMinute, projectAutoSubs, provisionalBonus } from "@/lib/live";
+import { autoSubView, benchPoints } from "@/lib/display";
 import { ErrorBox, Skeleton, Badge } from "./ui";
 import MatchModal from "./MatchModal";
 
@@ -205,19 +206,32 @@ export default function LiveTab({
   const statById = new Map(live.elements.map((e) => [e.id, e.stats]));
   const bboost = data.squad.activeChip === "bboost";
   const hits = data.picks?.entry_history.event_transfers_cost ?? 0;
-  const effXi = new Set(
-    autoSubs?.effectiveXi ??
-      data.squad.players.filter((p) => p.pickPosition <= 11).map((p) => p.element.id)
+  // Chip-aware: a Bench Boost week has no substitutions to project, so the
+  // effective eleven is simply the eleven that were picked. See `autoSubView`.
+  const { xi: effXi, subbedIn, subbedOut } = autoSubView(
+    data.squad.players.filter((p) => p.pickPosition <= 11).map((p) => p.element.id),
+    autoSubs,
+    bboost
   );
-  const subbedIn = new Set(autoSubs?.in ?? []);
-  const subbedOut = new Set(autoSubs?.out ?? []);
+  // Read straight off the RAW projection, which is chip-blind on purpose:
+  // Bench Boost cancels the substitution but not the vice-captain rule, which
+  // FPL applies in every week regardless of chip.
+  //
+  // Precisely: this is "starters who blanked AND for whom a legal replacement
+  // was found" — `projectAutoSubs` only pushes to `out` once it has a partner
+  // to push to `in`. A blanking starter with no legal sub (bench all blanked
+  // too, or no formation-valid swap) is therefore ABSENT here, so the vice
+  // takeover is not triggered until the gameweek finishes and `gwDone` covers
+  // it. That is the pre-existing behaviour, kept deliberately: the narrower
+  // set never fires the takeover early, it only fires it late.
+  const blankedStarters = new Set(autoSubs?.out ?? []);
 
   // Effective captain: vice takes over once the captain can no longer play
   // (GW final, or all of the captain's matches finished on 0 minutes).
   const capMult = data.squad.activeChip === "3xc" ? 3 : 2;
   const cap = data.squad.players.find((p) => p.isCaptain);
   const vice = data.squad.players.find((p) => p.isViceCaptain);
-  const capGone = cap != null && (gwDone || subbedOut.has(cap.element.id));
+  const capGone = cap != null && (gwDone || blankedStarters.has(cap.element.id));
   const effCapId =
     capGone &&
     (statById.get(cap.element.id)?.minutes ?? 0) === 0 &&
@@ -245,9 +259,14 @@ export default function LiveTab({
     .sort((a, b) => a.p.pickPosition - b.p.pickPosition);
 
   const total = rows.reduce((sum, r) => sum + r.points, 0) - hits;
-  const benchTotal = rows
-    .filter((r) => r.p.pickPosition > 11 && !r.counts)
-    .reduce((s, r) => s + r.display, 0);
+  const benchTotal = benchPoints(
+    rows.map((r) => ({
+      elementId: r.p.element.id,
+      pickPosition: r.p.pickPosition,
+      display: r.display,
+    })),
+    effXi
+  );
   const gwAvg =
     data.bootstrap.events.find((e) => e.id === currentEvent)?.average_entry_score ?? null;
 

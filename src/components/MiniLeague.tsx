@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, DEMO_ENTRY_ID, fmtNum, type TeamData } from "@/lib/fpl";
 import type { EventLive, LeagueStandings } from "@/lib/types";
@@ -34,6 +34,16 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
   const [ownership, setOwnership] = useState<LeagueOwnership | null>(null);
   const [loading, setLoading] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState(false);
+  /**
+   * Latest-wins guard for `loadDetails`. Fetching one league's rivals takes up
+   * to MAX_RIVAL_DETAILS `picks` calls, and nothing stops a second league being
+   * picked while the first is still in flight. Without a sequence number the
+   * two runs race and the SLOWER one writes last, so league A's rivals and
+   * ownership can land under league B's heading. (`LiveTab` guards its refresh
+   * the same way.)
+   */
+  const detailsSeq = useRef(0);
   const [error, setError] = useState<string | null>(null);
 
   const currentEvent =
@@ -104,7 +114,21 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
 
   async function loadDetails(s: LeagueStandings) {
     if (currentEvent == null) return;
+    const seq = ++detailsSeq.current;
+    /** True once a newer `loadDetails` has started; this run must write nothing. */
+    const superseded = () => seq !== detailsSeq.current;
     setDetailsLoading(true);
+    setDetailsError(false);
+    // DROP THE OUTGOING LEAGUE'S NUMBERS BEFORE FETCHING THE NEW ONE'S. The
+    // standings and the heading swap the instant a different league is picked,
+    // but these two were only ever overwritten at the END of a fetch that makes
+    // up to MAX_RIVAL_DETAILS sequential `picks` calls — seconds on a phone —
+    // so league A's effective ownership sat under league B's name the whole
+    // time. Worse when the new league is too small to sample: `setOwnership`
+    // then only fires in the else-branch at the very end, so the stale panel
+    // was the only thing the user ever saw.
+    setDetails(new Map());
+    setOwnership(null);
     try {
       const rivals = s.standings.results.slice(0, MAX_RIVAL_DETAILS);
       const live: EventLive = await api.live(currentEvent);
@@ -150,6 +174,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
           }
         })
       );
+      if (superseded()) return;
       setDetails(new Map(results.filter((x): x is NonNullable<typeof x> => x != null)));
       if (eoSample >= 3) {
         const eo = new Map<number, number>();
@@ -158,8 +183,15 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
       } else {
         setOwnership(null);
       }
+    } catch {
+      // THIS CATCH IS NOT OPTIONAL. `loadDetails` is fired un-awaited from
+      // `load`, so a rejection here escapes that function's try entirely and
+      // surfaces as an unhandled rejection. The state above has already been
+      // cleared by then, so without this the user is left staring at an empty
+      // rivals column with no explanation and nothing to press.
+      if (!superseded()) setDetailsError(true);
     } finally {
-      setDetailsLoading(false);
+      if (!superseded()) setDetailsLoading(false);
     }
   }
 
@@ -254,8 +286,17 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
         <div className="card overflow-hidden">
           <div className="flex items-center justify-between border-b border-border-c px-4 py-3">
             <span className="font-semibold">{standings.league.name}</span>
-            {detailsLoading && (
+            {detailsLoading ? (
               <span className="text-xs text-muted">Loading rival details…</span>
+            ) : (
+              detailsError && (
+                <button
+                  onClick={() => standings && loadDetails(standings)}
+                  className="text-xs text-danger underline underline-offset-2"
+                >
+                  Live scores unavailable — retry
+                </button>
+              )
             )}
           </div>
           <table className="w-full text-sm">

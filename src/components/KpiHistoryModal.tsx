@@ -2,6 +2,7 @@
 
 import type { TeamData } from "@/lib/fpl";
 import { CHIP_LABELS, fmtPrice, remainingChips } from "@/lib/rules";
+import { netGwPoints, signedPrice } from "@/lib/display";
 import Sheet, { SheetClose } from "./Sheet";
 
 export type KpiMetric = "points" | "rank" | "gw" | "value" | "transfers" | "chips";
@@ -153,7 +154,7 @@ export default function KpiHistoryModal({
                         <span className="text-xs text-muted">
                           GW{c.event}
                           {row && (
-                            <span className="ml-1.5 font-mono text-foreground">{row.points} pts</span>
+                            <span className="ml-1.5 font-mono text-foreground">{netGwPoints(row)} pts</span>
                           )}
                         </span>
                       </div>
@@ -249,7 +250,9 @@ export default function KpiHistoryModal({
 
                     {metric === "points" && (
                       <>
-                        <td className="px-1.5 py-1.5 text-right font-mono">{r.points}</td>
+                        {/* Net, so the column actually reconciles with the
+                            cumulative Total beside it. */}
+                        <td className="px-1.5 py-1.5 text-right font-mono">{netGwPoints(r)}</td>
                         <td className="px-1.5 py-1.5 text-right font-mono font-bold">
                           {num(r.total_points)}
                         </td>
@@ -285,10 +288,17 @@ export default function KpiHistoryModal({
                     {metric === "gw" &&
                       (() => {
                         const avg = avgOf(r.event);
-                        const diff = avg != null ? r.points - avg : null;
+                        // NET on both sides of the comparison. `points` here is
+                        // gross (the week's hit sits in `event_transfers_cost`,
+                        // rendered as the red badge in the GW column), while
+                        // FPL's `average_entry_score` is what the average
+                        // manager actually scored. Comparing one to the other
+                        // credited a −4 week with four points it never had.
+                        const mine = netGwPoints(r);
+                        const diff = avg != null ? mine - avg : null;
                         return (
                           <>
-                            <td className="px-1.5 py-1.5 text-right font-mono font-bold">{r.points}</td>
+                            <td className="px-1.5 py-1.5 text-right font-mono font-bold">{mine}</td>
                             <td className="px-1.5 py-1.5 text-right font-mono text-muted">
                               {avg ?? "–"}
                             </td>
@@ -324,7 +334,7 @@ export default function KpiHistoryModal({
                                     : "text-danger"
                               }`}
                             >
-                              {diff == null ? "–" : `${diff > 0 ? "+" : "−"}£${fmtPrice(Math.abs(diff))}m`}
+                              {signedPrice(diff, fmtPrice)}
                             </td>
                           </>
                         );

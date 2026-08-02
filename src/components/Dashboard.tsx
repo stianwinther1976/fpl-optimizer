@@ -8,6 +8,7 @@ import type { Element, EntryEventPicks, EventLive } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
 import { projectAutoSubs } from "@/lib/live";
+import { netEventPoints, netGwDelta, netGwPoints } from "@/lib/display";
 import { saveRecentTeam } from "@/lib/recent";
 import { launchPool } from "@/lib/pool";
 import { cachedPastSeason, loadPastSeason } from "@/lib/pastSeasonStore";
@@ -392,9 +393,18 @@ export default function Dashboard({
   }
 
   // Latest GW score vs the comparison GW's score.
+  //
+  // NET OF HITS ON BOTH SIDES. `history.current[].points` is gross — the cost
+  // of the week's hits sits beside it in `event_transfers_cost` — and a
+  // manager's gameweek score is the number after that cost, which is what the
+  // gameweek time machine below, the live tab's header, and the points
+  // breakdown's "Net" line all print. Differencing the gross figure made a −4
+  // week read four points better than it was and disagreed with all three.
+  // The headline this delta hangs under is reconciled to the same convention
+  // by `netEventPoints` further down.
   let gwDelta: StatDelta | null = null;
   if (comparable) {
-    const diff = curr.points - past.points;
+    const diff = netGwDelta(curr, past);
     gwDelta = {
       text: `${fmtSigned(diff)} pts`,
       period,
@@ -415,7 +425,20 @@ export default function Dashboard({
     };
   }
 
-  const pointsTrend = rows.slice(-8).map((r) => r.points);
+  // The headline for the "Latest GW" card, reconciled to the same net
+  // convention as the delta printed under it. The history row is only handed
+  // over when it is unambiguously the SAME gameweek the summary describes —
+  // otherwise (a live week the history has not caught up with) a numeric
+  // coincidence with the previous week's gross score could subtract a hit that
+  // belongs to a different gameweek.
+  const latestGwPoints = netEventPoints(
+    entry.summary_event_points ?? null,
+    curr != null && curr.event === entry.current_event ? curr : null
+  );
+
+  // Net, like every other gameweek figure in the app: a sparkline of gross
+  // scores puts a spike on the very week a hit turned into a loss.
+  const pointsTrend = rows.slice(-8).map((r) => netGwPoints(r));
 
   // "Chips left" shows everything still available this season; the subtitle
   // notes how many are usable right now (windows can open later).
@@ -512,7 +535,9 @@ export default function Dashboard({
         />
         <Stat
           label="Latest GW"
-          value={entry.summary_event_points != null ? `${entry.summary_event_points} pts` : "–"}
+          value={
+            latestGwPoints != null ? `${latestGwPoints} pts` : "–"
+          }
           delta={gwDelta}
           sub={
             entry.summary_event_rank != null

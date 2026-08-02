@@ -40,6 +40,13 @@ html.light {
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  /* `text-fg` / `hover:text-fg` are used in several components and, without
+     this alias, Tailwind emitted NOTHING for them — the classes were silently
+     dead, so a `text-muted` control with `hover:text-fg` simply never changed
+     colour on hover. */
+  --color-fg: var(--foreground);
+  /* Same defect, same fix: `active:text-ink` in Sheet.tsx emitted nothing. */
+  --color-ink: var(--foreground);
   --color-panel: var(--panel);
   --color-panel-2: var(--panel-2);
   --color-border-c: var(--border);

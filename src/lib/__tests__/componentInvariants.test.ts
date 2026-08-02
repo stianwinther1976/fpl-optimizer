@@ -1,0 +1,412 @@
+import { describe, it, expect } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+
+/**
+ * SOURCE-LEVEL GUARDS, AND WHAT THEY ARE AND ARE NOT WORTH.
+ *
+ * The project has no render harness — no jsdom, no testing-library — and
+ * adding one to a deployed app is a bigger change than the defects below
+ * justify. The arithmetic that could be extracted has been, into
+ * `src/lib/display.ts`, where it is tested properly. What is left here is four
+ * fixes that are structural rather than computational: a piece of state that
+ * has to be cleared, a React key that has to be unique, a keyboard handler
+ * that has to exist, a dismiss control that has to exist. None of those is a
+ * function you can call.
+ *
+ * So these read the component source and assert a property of it. That is a
+ * weaker guard than a behavioural test and it is worth being explicit about
+ * how: it catches the exact regression coming back, and it catches nothing
+ * else. A rewrite that keeps the token and loses the behaviour passes. Each
+ * assertion below therefore states the behaviour in prose, so the next reader
+ * knows what the token is standing in for.
+ *
+ * The first test is different in kind and is the one that earns its keep: it
+ * is a rule over EVERY component, so a new clickable table row inherits it
+ * without anyone remembering to.
+ */
+const DIR = path.resolve(__dirname, "../../components");
+const read = (f: string) => fs.readFileSync(path.join(DIR, f), "utf8");
+const componentFiles = fs.readdirSync(DIR).filter((f) => f.endsWith(".tsx"));
+
+describe("clickable table rows are reachable from a keyboard", () => {
+  // A `<tr onClick>` that opens a detail sheet is a button wearing a table
+  // row. Mouse and touch find it; Tab does not, and a screen reader announces
+  // an ordinary row. `StatsTable` and `MiniLeague` already did this correctly
+  // and `PointsBreakdown` did not, which is how the inconsistency was found.
+  // Stated as a rule over the whole directory so the next such row is covered
+  // whether or not anyone thinks to add a test for it.
+  /**
+   * The opening `<tr ...>` tags in one file, attribute list included.
+   *
+   * Scanned rather than matched with a regex, and the reason is the bug this
+   * whole block is about: a keyboard handler is `onKeyDown={(ev) => {...}}`,
+   * which CONTAINS a `>`. A lazy `/<tr[\s\S]*?>/` therefore stops inside the
+   * arrow function, truncating away the very attributes being asserted on —
+   * and it truncates them for the files that HAVE the handler, so the test
+   * fails on the correct code and passes on the broken code. Depth counting
+   * over the JSX braces is what makes the extraction honest.
+   *
+   * Quoted strings are skipped for the same reason one level down: a
+   * `title="Rank > 100"` would otherwise end the tag mid-attributes and
+   * reintroduce exactly the false failure the depth counter exists to prevent.
+   */
+  const openingTrTags = (src: string): string[] => {
+    const out: string[] = [];
+    for (let i = src.indexOf("<tr"); i >= 0; i = src.indexOf("<tr", i + 3)) {
+      // Guard against matching a longer tag name that happens to start "tr".
+      if (/[A-Za-z0-9_-]/.test(src[i + 3] ?? "")) continue;
+      let depth = 0;
+      let quote: string | null = null;
+      for (let j = i + 3; j < src.length; j++) {
+        const c = src[j];
+        if (quote) {
+          if (c === "\\") j++;
+          else if (c === quote) quote = null;
+          continue;
+        }
+        if (c === '"' || c === "'" || c === "`") quote = c;
+        else if (c === "{") depth++;
+        else if (c === "}") depth--;
+        else if (c === ">" && depth === 0) {
+          out.push(src.slice(i, j + 1));
+          break;
+        }
+      }
+    }
+    return out;
+  };
+
+  it("the tag scanner survives a `>` inside a quoted attribute", () => {
+    // The exact false failure this guards against: without quote handling the
+    // block below is cut after `Rank ` and `onKeyDown=` vanishes from it, so
+    // correct code is reported as missing its keyboard handler.
+    const [block] = openingTrTags(
+      `<tr title="Rank > 100" onKeyDown={(ev) => { if (ev.key > "a") {} }}>`
+    );
+    expect(block).toContain("onKeyDown=");
+    expect(block.endsWith(">")).toBe(true);
+  });
+
+  const rowsWithClick: { file: string; block: string }[] = [];
+  for (const f of componentFiles) {
+    for (const block of openingTrTags(read(f))) {
+      if (block.includes("onClick")) rowsWithClick.push({ file: f, block });
+    }
+  }
+
+  it("finds the clickable rows it means to check", () => {
+    // Without this the suite passes vacuously the moment the regex drifts.
+    expect(rowsWithClick.length).toBeGreaterThanOrEqual(3);
+    expect(rowsWithClick.map((r) => r.file)).toContain("PointsBreakdown.tsx");
+  });
+
+  it.each(["role=", "tabIndex=", "onKeyDown="])("every one declares %s", (attr) => {
+    const missing = rowsWithClick.filter((r) => !r.block.includes(attr));
+    expect(missing.map((m) => m.file)).toEqual([]);
+  });
+
+  it("every one handles Enter and Space", () => {
+    const missing = rowsWithClick.filter(
+      (r) => !(r.block.includes('"Enter"') && r.block.includes('" "'))
+    );
+    expect(missing.map((m) => m.file)).toEqual([]);
+  });
+});
+
+describe("the display arithmetic is called, not re-inlined", () => {
+  // `src/lib/display.ts` is only a fix if the components actually go through
+  // it. Extracting the arithmetic and leaving the old expression at the call
+  // site would pass every test in `display.test.ts` while shipping the
+  // original bug, so each site is pinned to the helper and, where the old
+  // expression is recognisable, to NOT containing it.
+  it("LiveTab totals the bench with benchPoints, not with the counts flag", () => {
+    const src = read("LiveTab.tsx");
+    expect(src).toContain("benchPoints(");
+    // The original: `.filter((r) => r.p.pickPosition > 11 && !r.counts)`. Under
+    // Bench Boost `counts` is true for all fifteen, so this emptied the bench.
+    expect(src).not.toMatch(/!r\.counts/);
+  });
+
+  it("Dashboard's gameweek delta goes through netGwDelta", () => {
+    const src = read("Dashboard.tsx");
+    expect(src).toContain("netGwDelta(");
+    expect(src).not.toMatch(/curr\.points\s*-\s*past\.points/);
+  });
+
+  it("FixtureTicker averages difficulty through averageFdr", () => {
+    const src = read("FixtureTicker.tsx");
+    expect(src).toContain("averageFdr(");
+    expect(src).toContain("fdrSortKey(");
+    // The original divisor guard, which substituted 0 for "no fixtures".
+    expect(src).not.toMatch(/Math\.max\(1,\s*cells\.flat\(\)\.length\)/);
+  });
+
+  it("KpiHistoryModal signs price moves through signedPrice", () => {
+    const src = read("KpiHistoryModal.tsx");
+    expect(src).toContain("signedPrice(");
+    expect(src).not.toMatch(/diff > 0 \? "\+" : "−"/);
+  });
+});
+
+describe("MiniLeague drops the previous league's numbers before fetching", () => {
+  const src = read("MiniLeague.tsx");
+  const body = src.slice(src.indexOf("async function loadDetails"));
+  const beforeTry = body.slice(0, body.indexOf("try {"));
+
+  it("clears details and ownership before the network calls, not after", () => {
+    // Rival details take up to MAX_RIVAL_DETAILS sequential `picks` calls.
+    // Both maps used to be written only at the END of that, so league A's
+    // effective ownership sat under league B's heading for the whole fetch —
+    // and if league B was too small to sample, the stale panel was all the
+    // user ever saw, because `setOwnership(null)` lives in an else-branch that
+    // only runs at the finish.
+    expect(beforeTry).toContain("setDetails(");
+    expect(beforeTry).toContain("setOwnership(null)");
+  });
+});
+
+describe("PlayerModal keys recent fixtures uniquely", () => {
+  const src = read("PlayerModal.tsx");
+
+  it("does not key the recent-fixture chips on round alone", () => {
+    // A double gameweek gives one player two history rows in the same round,
+    // so `key={r.round}` is not unique and React reconciles the two chips as
+    // one — stat values swap between them on re-render.
+    expect(src).not.toMatch(/key=\{r\.round\}/);
+    expect(src).toMatch(/key=\{`\$\{r\.round\}-\$\{r\.opponent_team\}`\}/);
+  });
+});
+
+describe("gameweek scores are net of transfer hits wherever they are shown", () => {
+  // `history.current[].points` is GROSS — the week's hit sits beside it in
+  // `event_transfers_cost` — while `total_points`, `average_entry_score`, the
+  // live tab's header and the points breakdown's "Net" line are all after the
+  // hit. Any screen that prints the raw `points` therefore flatters a −4 week
+  // by four and contradicts the screen one tap away from it. The three sites
+  // below are every remaining place a gameweek score is rendered.
+  it("the Latest GW card reconciles its headline with its delta", () => {
+    const src = read("Dashboard.tsx");
+    expect(src).toContain("netEventPoints(");
+    expect(src).toContain("netGwDelta(");
+    // The headline used to print the raw summary while the delta was net.
+    expect(src).not.toMatch(/\$\{entry\.summary_event_points\}\s*pts/);
+  });
+
+  it("the gameweek sparkline is net", () => {
+    const src = read("Dashboard.tsx");
+    expect(src).not.toMatch(/pointsTrend\s*=\s*rows\.slice\(-8\)\.map\(\(r\) => r\.points\)/);
+    expect(src).toMatch(/pointsTrend\s*=\s*rows\.slice\(-8\)\.map\(\(r\) => netGwPoints\(r\)\)/);
+  });
+
+  it("the KPI history modal is net in all three of its point sites", () => {
+    const src = read("KpiHistoryModal.tsx");
+    expect(src).not.toMatch(/font-mono">\{r\.points\}</);
+    expect(src).not.toMatch(/r\.points\s*-\s*avg/);
+    // EACH site pinned separately. One shared `toContain("netGwPoints(")` is
+    // satisfied by any single site alone, so it would let the others quietly
+    // go back to gross — which is exactly what happened: the sweep pinned two
+    // columns by hand, and the third, in the Chips panel, kept printing the
+    // gross figure for months because its variable is `row` rather than `r`.
+    expect(src).toContain('font-mono">{netGwPoints(r)}<'); // the "Pts" column
+    expect(src).toMatch(/const mine = netGwPoints\(r\);/); // the "± Avg" column
+    expect(src).not.toMatch(/const mine = r\.points;/);
+    expect(src).toContain("{netGwPoints(row)} pts"); // the Chips panel
+    expect(src).not.toMatch(/\{row\.points\}\s*pts/);
+  });
+
+  it("no component renders a raw history-row score anywhere", () => {
+    // The generalisation, and the reason the case above exists at all. Pinning
+    // sites by hand is how the Chips panel was missed: the list was written
+    // from the sites someone thought of. This is a rule over the directory, so
+    // the next `{someRow.points}` fails the moment it is written, whatever the
+    // variable happens to be called.
+    //
+    // `cornerTotal.points` is the one legitimate exception: it is not a
+    // history row but a caller-supplied figure, and both call sites are
+    // asserted net below.
+    const offenders: string[] = [];
+    for (const f of componentFiles) {
+      for (const m of read(f).matchAll(
+        />\s*\{\s*(\w+)\.points\s*\}|\{\s*(\w+)\.points\s*\}\s*pts/g
+      )) {
+        const name = m[1] ?? m[2];
+        if (name !== "cornerTotal") offenders.push(`${f}: ${name}.points`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("the pitch's corner total is net before it is handed over", () => {
+    // Justifies the exception above rather than merely asserting it.
+    const src = read("Dashboard.tsx");
+    expect(src).toContain("points: eh.points - eh.event_transfers_cost,");
+    expect(src).not.toMatch(/points:\s*eh\.points,/);
+  });
+
+  it("the points-per-gameweek chart is net", () => {
+    const src = read("HistoryChart.tsx");
+    expect(src).not.toMatch(/points:\s*r\.points/);
+    expect(src).toContain("points: netGwPoints(r)");
+  });
+});
+
+describe("Bench Boost cancels auto-substitutions", () => {
+  // FPL makes no substitutions in a Bench Boost week: all fifteen play, so
+  // there is no vacancy to fill. `projectAutoSubs` is computed from picks and
+  // minutes alone and cannot know that, so the chip has to be applied at the
+  // consuming end — otherwise the bench total silently loses the score of a
+  // player the projection "promoted", and the pitch draws arrows for a
+  // substitution that will never be processed.
+  const src = read("LiveTab.tsx");
+
+  it("LiveTab routes the projection through autoSubView with the chip", () => {
+    expect(src).toContain("autoSubView(");
+    expect(src).toMatch(/autoSubView\([\s\S]{0,200}bboost\s*\)/);
+  });
+
+  it("does not build the effective XI straight from the raw projection", () => {
+    expect(src).not.toMatch(/new Set\(\s*autoSubs\?\.effectiveXi/);
+    expect(src).not.toMatch(/subbedIn\s*=\s*new Set\(autoSubs\?\.in/);
+  });
+
+  it("still applies the vice-captain rule, which the chip does not cancel", () => {
+    // The vice takes over from a captain who did not play in EVERY week,
+    // Bench Boost included — so this one signal is read from the chip-blind
+    // projection on purpose.
+    expect(src).toContain("blankedStarters");
+    expect(src).not.toMatch(/gwDone \|\| subbedOut\.has\(cap/);
+  });
+});
+
+describe("MiniLeague's rival fetch is race-safe and fails visibly", () => {
+  const src = read("MiniLeague.tsx");
+
+  it("guards writes with a latest-wins sequence number", () => {
+    // Two leagues picked in quick succession leave two fetches in flight; the
+    // slower one writes last, so without this league A's rivals land under
+    // league B's heading.
+    expect(src).toMatch(/detailsSeq\s*=\s*useRef/);
+    expect(src).toContain("++detailsSeq.current");
+    // The guard has to sit BEFORE the write, which is the only place it does
+    // any good. Merely mentioning `superseded()` somewhere in the function —
+    // in the catch, in the finally — leaves the stale overwrite wide open.
+    const write = src.indexOf("setDetails(new Map(results");
+    const guard = src.indexOf("if (superseded()) return;");
+    expect(write).toBeGreaterThan(0);
+    expect(guard).toBeGreaterThan(0);
+    expect(guard).toBeLessThan(write);
+  });
+
+  it("catches its own failures instead of leaving a silent blank panel", () => {
+    // `loadDetails` is fired un-awaited from `load`, so its rejection cannot
+    // reach `load`'s catch; and the state is cleared before the fetch starts.
+    const body = src.slice(src.indexOf("async function loadDetails"));
+    expect(body.slice(0, body.indexOf("}\n\n"))).toContain("catch {");
+    expect(src).toContain("setDetailsError(true)");
+  });
+});
+
+describe("theme tokens used by components actually exist", () => {
+  // Tailwind emits nothing for a colour class with no matching `--color-*`
+  // entry, so a typo'd token is not a compile error and not a lint error — it
+  // is a class that silently does nothing. `hover:text-fg` was exactly that.
+  const css = fs.readFileSync(
+    path.resolve(__dirname, "../../app/globals.css"),
+    "utf8"
+  );
+  const start = css.indexOf("@theme inline");
+  const theme = css.slice(start, css.indexOf("}", start));
+  const themeTokens = new Set(
+    [...theme.matchAll(/--color-([a-z0-9-]+)\s*:/g)].map((m) => m[1])
+  );
+
+  // Every `text-…` / `bg-…` / `border-…` class the components use. The
+  // lookbehind matters: without it `divide-border-c` and `border-border-c`
+  // both also yield a phantom bare `c`, and a checker that has to be told to
+  // ignore its own noise is a checker nobody trusts.
+  const used = new Set<string>();
+  for (const f of componentFiles) {
+    for (const m of read(f).matchAll(
+      /(?<![\w-])(?:hover:|focus:|active:|group-hover:)?(?:text|bg|border)-([a-z][a-z0-9-]*)/g
+    )) {
+      used.add(m[1]);
+    }
+  }
+
+  // Tailwind ships these; only what is left over has to come from `@theme`.
+  const PALETTE =
+    "slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose";
+  const KEYWORD = /^(?:white|black|transparent|current|inherit|none)$/;
+  // `text-` also spells sizes and alignment, which share the prefix but are
+  // not colours at all.
+  const TEXT_UTIL =
+    /^(?:xs|sm|base|lg|[2-9]?xl|left|right|center|justify|start|end|wrap|nowrap|balance|pretty|ellipsis|clip)$/;
+  const builtIn = (t: string): boolean => {
+    // `border-b-2`, `border-t-transparent`: drop the side, judge the rest.
+    const side = /^([tblrxyse])-(.+)$/.exec(t);
+    if (side) return builtIn(side[2]);
+    if (/^[tblrxyse]$/.test(t)) return true; // border-t
+    if (/^\d+$/.test(t)) return true; // border-2
+    if (KEYWORD.test(t) || TEXT_UTIL.test(t)) return true;
+    return new RegExp(`^(?:${PALETTE})(?:-\\d{2,3})?$`).test(t);
+  };
+
+  it("finds both halves of the comparison it is about to make", () => {
+    // A check that silently scans nothing passes forever. Both sides have to
+    // be non-trivially populated before the assertion below means anything.
+    expect(used.size).toBeGreaterThan(20);
+    expect(themeTokens.size).toBeGreaterThan(8);
+    expect(themeTokens.has("fg")).toBe(true);
+    expect(themeTokens.has("no-such-token")).toBe(false);
+  });
+
+  it("classifies Tailwind's own utilities apart from project tokens", () => {
+    // The classifier is the load-bearing part: too greedy and it waves the
+    // real defect through, too strict and it fails on `text-sm`.
+    for (const t of ["zinc-500", "white", "transparent", "sm", "2xl", "b-2", "t-transparent", "t", "4"]) {
+      expect(builtIn(t), t).toBe(true);
+    }
+    for (const t of ["fg", "ink", "panel-2", "border-c", "accent-2", "muted"]) {
+      expect(builtIn(t), t).toBe(false);
+    }
+  });
+
+  it("defines every project colour token the components actually use", () => {
+    // THE REGRESSION, generalised. `hover:text-fg` and `active:text-ink` were
+    // both classes Tailwind emitted NOTHING for — no compile error, no lint
+    // error, just a hover state that never changed colour. Pinning a
+    // hand-written list of tokens could not catch them, because the whole
+    // failure mode is a token nobody remembered to write down.
+    const custom = [...used].filter((t) => !builtIn(t)).sort();
+    expect(custom).toContain("fg");
+    expect(custom).toContain("ink");
+    expect(custom.length).toBeGreaterThan(8);
+    expect(custom.filter((t) => !themeTokens.has(t))).toEqual([]);
+  });
+});
+
+describe("UpdateToast can be declined", () => {
+  const src = read("UpdateToast.tsx");
+
+  it("offers a dismiss control alongside the refresh", () => {
+    // A fixed, z-50 bar pinned to the bottom of the viewport with no way out
+    // but accepting a page reload.
+    expect(src).toContain('aria-label="Dismiss update notice"');
+  });
+
+  it("announces itself, so the dismiss control can be found at all", () => {
+    // The bar appears minutes after load, unprompted. Without a live region a
+    // screen-reader user is never told it exists, and therefore never learns
+    // there is anything to press.
+    expect(src).toContain('role="status"');
+    expect(src).toContain('aria-live="polite"');
+  });
+
+  it("remembers the dismissed build so a later deploy still announces itself", () => {
+    // Dismissing must silence THIS version, not the mechanism. The polling
+    // closure reads the value every tick, so it has to be a ref, not state.
+    expect(src).toMatch(/dismissed\s*=\s*useRef/);
+    expect(src).toContain("v !== dismissed.current");
+  });
+});
