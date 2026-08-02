@@ -869,6 +869,62 @@ export function makeDemoUniverse(now: number) {
     return held;
   };
 
+  /**
+   * Spend the bank, the way a manager of a given standard would spend it.
+   *
+   * `repairToBudget` only ever cuts, so a squad assembled from the cheap end of
+   * each club's list came out UNDER budget and stayed there: one demo rival sat
+   * on £14.5m of unspent money for twenty gameweeks. That is not a manager
+   * anybody has ever met, and team value is a headline figure on both the
+   * dashboard and the mini-league table, so the fiction was on screen.
+   *
+   * The upgrade is chosen at the SAME depth the squad was built at, which is
+   * the point. Investing on points alone would walk every squad back toward
+   * the greedy optimum and collapse the skill spread the depth argument exists
+   * to create — the good manager would be indistinguishable from the bad one
+   * the moment either had money. Instead each buys the `depth`-th best man he
+   * can afford, so the sharp manager converts his bank into points and the one
+   * who drafted on shirt numbers converts it into an expensive disappointment.
+   * Among the fifteen candidate swaps, the one that spends the most wins, so
+   * the bank actually drains rather than trickling.
+   */
+  const investBank = (held: any[], budget: number, depth: number): any[] => {
+    const ptsOf = pointsOf;
+    let cost = held.reduce((s, e) => s + e.now_cost, 0);
+    for (let pass = 0; budget - cost > 5; pass++) {
+      if (pass > 400) break;
+      const headroom = budget - cost;
+      let best: { i: number; e: any; spend: number } | null = null;
+      for (let i = 0; i < held.length; i++) {
+        const out = held[i];
+        const rest = held.filter((_, j) => j !== i);
+        const restIds = new Set(rest.map((e) => e.id));
+        const restClubs = new Map<number, number>();
+        for (const e of rest) restClubs.set(e.team, (restClubs.get(e.team) ?? 0) + 1);
+        const affordable = elements
+          .filter(
+            (c) =>
+              c.element_type === out.element_type &&
+              !restIds.has(c.id) &&
+              c.now_cost > out.now_cost &&
+              c.now_cost - out.now_cost <= headroom &&
+              (restClubs.get(c.team) ?? 0) < MAX_PER_CLUB
+          )
+          .sort((a, b) => ptsOf(b) - ptsOf(a) || b.now_cost - a.now_cost || a.id - b.id);
+        if (!affordable.length) continue;
+        const cand = affordable[Math.min(depth, affordable.length - 1)];
+        const spend = cand.now_cost - out.now_cost;
+        if (!best || spend > best.spend || (spend === best.spend && cand.id < best.e.id)) {
+          best = { i, e: cand, spend };
+        }
+      }
+      if (!best) break;
+      cost += best.spend;
+      held[best.i] = best.e;
+    }
+    return held;
+  };
+
   const fifteen: any[] = (() => {
     const ptsOf = pointsOf;
     const need: Record<number, number> = { ...QUOTA };
@@ -1329,7 +1385,7 @@ export function makeDemoUniverse(now: number) {
   {
     const blank = () => ({
       points: 0, minutes: 0, starts: 0, goals: 0, assists: 0,
-      cs: 0, conceded: 0, bonus: 0, yellow: 0, saves: 0, apps: 0, recent: [] as number[],
+      cs: 0, conceded: 0, bonus: 0, yellow: 0, saves: 0, bps: 0, apps: 0, recent: [] as number[],
     });
     const agg = new Map<number, ReturnType<typeof blank>>(elements.map((e) => [e.id, blank()]));
     for (let gw = 1; gw <= CURRENT_GW; gw++) {
@@ -1343,6 +1399,7 @@ export function makeDemoUniverse(now: number) {
         a.bonus += r.bonus;
         a.yellow += r.yellow;
         a.saves += r.saves;
+        a.bps += r.bps;
         if (r.cs) a.cs++;
         if (r.minutes > 0) a.apps++;
         if (r.minutes >= 60) a.starts++;
@@ -1367,6 +1424,7 @@ export function makeDemoUniverse(now: number) {
       // were absent from the demo bootstrap entirely, so those features had
       // nothing to render and silently showed nothing at all.
       e.saves = a.saves;
+      e.bps = a.bps;
       e.yellow_cards = a.yellow;
       e.red_cards = 0;
       e.own_goals = 0;
@@ -1382,6 +1440,85 @@ export function makeDemoUniverse(now: number) {
       e.points_per_game = (a.apps ? a.points / a.apps : 0).toFixed(1);
       e.form = (a.recent.length ? a.recent.reduce((s, v) => s + v, 0) / a.recent.length : 0).toFixed(1);
       e.ep_next = e.points_per_game;
+
+      /*
+       * ================ THE UNDERLYING NUMBERS, ALSO DERIVED ================
+       *
+       * `expected_goals`, `expected_assists`, `expected_goal_involvements`,
+       * `expected_goals_conceded`, `ict_index` and `selected_by_percent` were
+       * all written at generation time as functions of `q` — the CLUB's quality
+       * — and nothing else. So every one of a club's fifteen players published
+       * the same xG, the same ICT and the same ownership: a club's reserve
+       * keeper was advertised at the same 11.5% as its 163-point striker.
+       *
+       * These are not decoration. `statLine` in xp.ts feeds `xg`, `xa` and
+       * `ict` straight into the expected-points model, `StatsTable` sorts on
+       * xGI, `PlayerModal` prints it, and the differential/template split is a
+       * comparison of ownership against the field. A per-club constant told the
+       * model that fifteen very different footballers were the same footballer,
+       * which is precisely the signal the model exists to distinguish.
+       *
+       * So they are read off the season instead. xG is what he scored, pulled
+       * a little toward what a man with his minutes would be expected to score
+       * — that is what an expected-goals figure IS, a smoothed version of the
+       * finishing, and it keeps a striker on a hot run from publishing an xG
+       * identical to his goals. The over/under-performance factor is a stable
+       * function of the player's id, so the same man is the same finisher every
+       * time the demo is opened.
+       */
+      const per90 = (v: number) => (a.minutes > 0 ? (v * 90) / a.minutes : 0);
+      const nineties = a.minutes / 90;
+      // A stable ±20% finishing bias, so xG and goals are correlated without
+      // being the same column twice.
+      const bias = 0.8 + ((e.id * 37) % 41) / 100;
+      const baseG = [0, 0.01, 0.06, 0.16, 0.34][e.element_type];
+      const baseA = [0, 0.01, 0.08, 0.17, 0.13][e.element_type];
+      // Blended toward the positional baseline, more heavily the fewer minutes
+      // he has played: eight goals in thirty appearances is evidence about a
+      // striker, eight in three is mostly luck.
+      const w = Math.min(1, nineties / 12);
+      const xg = nineties * (w * per90(a.goals) * bias + (1 - w) * baseG);
+      const xa = nineties * (w * per90(a.assists) * bias + (1 - w) * baseA);
+      e.expected_goals = xg.toFixed(2);
+      e.expected_assists = xa.toFixed(2);
+      // xGI is the SUM, by definition. Computing it from the same inputs a
+      // third time invites the three to disagree in the last decimal, and
+      // `StatsTable` sorts on it while `PlayerModal` prints all three.
+      e.expected_goal_involvements = (xg + xa).toFixed(2);
+      // Goals conceded while he was on the pitch, smoothed the same way.
+      e.expected_goals_conceded = (a.conceded * (0.85 + ((e.id * 17) % 31) / 100)).toFixed(2);
+      /*
+       * ICT is FPL's own composite of influence, creativity and threat, and it
+       * runs on a scale of a few hundred over a season for the men who do
+       * things. Built from what he actually did rather than from his club's
+       * rating: goals and assists dominate it, bonus points and defensive work
+       * carry the rest, and a man who has not played has an index near zero
+       * rather than his club's.
+       */
+      /*
+       * THE COEFFICIENTS ARE CALIBRATED, NOT DECORATIVE. `statLine` divides
+       * this by nineties and `expectedPoints` multiplies the result by
+       * `bonusPerIct90` (0.045) to get a bonus-per-start expectation, so the
+       * SCALE of the index decides how much bonus the model hands out. Real
+       * ICT runs to roughly 450 over a full season for the best attacker —
+       * about 13 per 90. An earlier draft ran to 758 over twenty gameweeks
+       * (38 per 90), which asked the model for 1.7 bonus points a start and
+       * pinned every good player against `bonusCap`, flattening exactly the
+       * distinction the term exists to draw.
+       */
+      e.ict_index = (
+        a.goals * 12 + a.assists * 7.5 + a.bonus * 2 + a.saves * 0.8 + nineties
+      ).toFixed(1);
+      /*
+       * Ownership follows POINTS, because that is what managers chase. It was
+       * a function of the club, so the differential badge was a club badge.
+       * The curve is deliberately convex — FPL ownership is extremely
+       * top-heavy, a handful of players above 40% and a long tail under 1% —
+       * and the absolute level is fixed by the rescale below, so only the
+       * shape matters here.
+       */
+      e.selected_by_percent = Math.pow(Math.max(0, a.points), 3.4).toFixed(4);
+
       delete e._quality;
       delete e._nailed;
     }
@@ -1517,7 +1654,7 @@ export function makeDemoUniverse(now: number) {
      * the 1..15 ordering above survives it and slot 12 is still the reserve
      * keeper.
      */
-    return repairToBudget(shaped, SQUAD_BUDGET);
+    return investBank(repairToBudget(shaped, SQUAD_BUDGET), SQUAD_BUDGET, depth);
   };
 
   /*
@@ -1547,10 +1684,13 @@ export function makeDemoUniverse(now: number) {
    *
    * The depth argument is what makes it a FIELD rather than nine more experts
    * — see `rivalSquad`. At depth 2 the sampled managers reach two or three men
-   * down each club's list, which is what the eleven million actually look like,
-   * and the demo manager's greedy-optimal fifteen finishes the twenty weeks
-   * around 215,000th: the top two per cent, earned against a real distribution
-   * rather than asserted.
+   * down each club's list, which is what the eleven million actually look like.
+   * They average around 41 a week; the demo manager's greedy-optimal fifteen
+   * averages around 47 and finishes the twenty weeks around 615,000th of
+   * eleven million — the top six per cent, earned against a real distribution
+   * rather than asserted. (It was ~215,000th before these sampled managers
+   * learned to spend their bank; a field that sits on £14m does flatter the
+   * reader, but not honestly.)
    *
    * The result is an average that MOVES WITH THE FIXTURES — a blank week drags
    * the field down exactly as it drags the manager down — which is the property
@@ -1664,7 +1804,20 @@ export function makeDemoUniverse(now: number) {
   };
   const rivals = new Map<number, Rival>();
   rivalEntries.forEach((id, i) => {
-    const fifteen = rivalSquad(id);
+    /*
+     * A MINI-LEAGUE IS A SPREAD, NOT NINE COPIES OF THE SAME GOOD MANAGER.
+     * All nine were built at depth 0 — the best available man at every club —
+     * which is close to the greedy optimum the demo manager himself holds, so
+     * six of the nine outscored him and the front page showed a manager sitting
+     * seventh of ten in his own league while the card above it called him top
+     * 2%. Two true things that read as one contradiction.
+     *
+     * Depth is how far down each club's list a manager is willing to go, so it
+     * is exactly the dial for "how well does he pick": 0 is the sharp one, 3
+     * the friend who drafted on shirt numbers. Cycling it gives a league with a
+     * top, a middle and a tail, and puts the reader near but not at the top.
+     */
+    const fifteen = rivalSquad(id, i % 4);
     // A chip apiece for two of them in the current week, so the badge and the
     // bench-boost scoring path are both exercised by something other than the
     // demo manager.
@@ -1710,8 +1863,27 @@ export function makeDemoUniverse(now: number) {
   function historyRowsFor(r: Rival) {
     let total = 0;
     let avgTotal = 0;
+    /*
+     * A RIVAL'S MONEY IS HIS OWN. Every rival's every gameweek reported
+     * `bank: 5, value: 1000` — the same two constants for nine managers across
+     * twenty weeks — so the mini-league's team-value column was a column of
+     * £100.0m, nobody's squad ever appreciated, and the one figure a reader
+     * uses to judge whether a rival has been managing well said nothing at all.
+     *
+     * He holds this fifteen all season (that is what `picksAt` returns), so his
+     * ledger is exactly the game's arithmetic: he paid GW1 prices, his bank is
+     * what was left of the budget, and his team value is the sum of what he
+     * could sell for today — `purchase + floor((now - purchase) / 2)` on a
+     * rise, and the current price on a fall.
+     */
+    const paid = r.fifteen.map((e) => priceAt(e, 1));
+    const rivalBank = INITIAL_BUDGET - paid.reduce((s, v) => s + v, 0);
     return Array.from({ length: CURRENT_GW }, (_, i) => {
       const gw = i + 1;
+      const squadValue = r.fifteen.reduce(
+        (s, e, ix) => s + sellingPrice(paid[ix], priceAt(e, gw)),
+        0
+      );
       const chip = r.chipAt(gw);
       const { gross, bench } = scoreOf(r.picksAt(gw), chip, gw);
       const hit = r.hitAt(gw);
@@ -1729,8 +1901,10 @@ export function makeDemoUniverse(now: number) {
         // rank, and the mini-league's "overall" column was really nineteen
         // gameweeks of noise.
         overall_rank: rankFromZ((total - avgTotal) / (SEASON_SD * Math.sqrt(gw))),
-        bank: 5,
-        value: 1000,
+        // `value` is squad PLUS bank, which is why every manager reads exactly
+        // 1000 after GW1 however much he left unspent. See `display.teamValue`.
+        bank: rivalBank,
+        value: squadValue + rivalBank,
         event_transfers: hit / 4 + 1,
         event_transfers_cost: hit,
         points_on_bench: bench,
@@ -1893,7 +2067,41 @@ export function makeDemoUniverse(now: number) {
    * GW20's scoring up nineteen times and reconciled the season to a total the
    * dashboard had never heard of.
    */
-  const liveFor = (gw: number) => (gwData.get(gw) ?? gwData.get(CURRENT_GW)!).live;
+  const liveFor = (gw: number) => {
+    const built = gwData.get(gw);
+    if (built) return built.live;
+    /*
+     * A GAMEWEEK THAT HAS NOT BEEN PLAYED IS NOT THIS GAMEWEEK. The fallback
+     * here was `gwData.get(CURRENT_GW)`, so asking for GW25 — which the Team
+     * tab's forward navigation and any stale client cache will do — got GW20's
+     * scores back under a GW25 heading, complete with itemised goals for
+     * matches that have not kicked off. FPL answers an unplayed week with the
+     * full element list and every stat at zero, and so does this: the shape
+     * the client parses is identical, and the numbers are honest.
+     */
+    return {
+      elements: elements.map((e) => ({
+        id: e.id,
+        stats: {
+          minutes: 0,
+          total_points: 0,
+          bonus: 0,
+          bps: 0,
+          goals_scored: 0,
+          assists: 0,
+          clean_sheets: 0,
+          goals_conceded: 0,
+          saves: 0,
+          yellow_cards: 0,
+          red_cards: 0,
+          own_goals: 0,
+          penalties_saved: 0,
+          penalties_missed: 0,
+        },
+        explain: [] as { fixture: number; stats: { identifier: string; points: number; value: number }[] }[],
+      })),
+    };
+  };
 
   /**
    * Picks for ANY entry in the demo league in ANY gameweek. Both halves were
@@ -1986,7 +2194,15 @@ export function makeDemoUniverse(now: number) {
    * contradicted both the player's own minutes and every live score he had.
    */
   const elementHistory = (id: number) => ({
-    history: Array.from({ length: CURRENT_GW - 1 }, (_, i) => {
+    /*
+     * THROUGH THE CURRENT GAMEWEEK, not up to it. This was `CURRENT_GW - 1`,
+     * which stopped at GW19 — so `fetchRecentForm`, whose whole job is to
+     * answer "has he started recently", never saw the most recent week the
+     * demo has. Every GW20 fixture in this universe has kicked off (most have
+     * finished, two are in play), and FPL publishes the round as soon as it
+     * starts, so the row belongs here.
+     */
+    history: Array.from({ length: CURRENT_GW }, (_, i) => {
       const r = gwData.get(i + 1)!.byId.get(id);
       if (!r) return null;
       return {
@@ -2006,7 +2222,115 @@ export function makeDemoUniverse(now: number) {
         was_home: r.wasHome,
       };
     }).filter(Boolean),
+    /*
+     * ======================= AND LAST SEASON =======================
+     *
+     * `history_past` was absent entirely, so `fetchPastSeason` returned an
+     * empty map for every player in the demo. That is not a missing nicety:
+     * it is the STRONGEST pre-season signal the model has, and the one field
+     * that survives FPL's summer reset of the bootstrap. With it empty, the
+     * whole `fromPast` branch of `statLine` — the branch that decides who is
+     * nailed on and who is a rotation risk before a ball is kicked — was
+     * unreachable in demo mode, and the pre-season pipeline the app ships
+     * could not be demonstrated at all.
+     *
+     * A previous season is not a second copy of this one. It is scaled to a
+     * full 38 games and given a stable per-player wobble, because a
+     * footballer's last season resembles his current one without repeating it
+     * — and a demo in which every man reproduces himself exactly would make
+     * the shrinkage in xp.ts look far more confident than it is.
+     */
+    history_past: (() => {
+      const e = elementById.get(id);
+      if (!e) return [];
+      // Two seasons, the older one a little further from the player he is now.
+      return [2, 1].map((back) => {
+        /*
+         * A PAST SEASON IS STILL ONE SEASON, and the wobble is what decides
+         * whether it stays one. Scaling twenty gameweeks up to thirty-eight and
+         * then multiplying by a factor that reaches 1.26 hands an ever-present
+         * 4,300 minutes and 47 starts — figures no season can contain, and
+         * precisely the two `statLine` divides by to get per-90 rates and the
+         * start rate it reads as "nailed on". So the factor tops out just below
+         * 1: at the ceiling a man who played every minute of every gameweek
+         * this season played every minute of all 38 last season, and nobody
+         * plays more than that.
+         *
+         * Clamping the OUTPUTS instead would have been the obvious fix and is
+         * the wrong one — an ever-present would hit the same cap in both past
+         * seasons and so report them identically, which is exactly the "two
+         * independent observations that are really one" that the shrinkage in
+         * xp.ts must not be fed.
+         *
+         * The older season is then a strict further step down from the newer:
+         * a footballer's last season resembles his current one more closely
+         * than the one before it does.
+         */
+        const near = 0.72 + ((id * 29) % 28) / 100; // 0.72 .. 0.99
+        const wobble = back === 1 ? near : near * (0.7 + ((id * 47) % 20) / 100);
+        const scale = (38 / CURRENT_GW) * wobble;
+        const mins = Math.round(e.minutes * scale);
+        const r2 = (v: number | undefined) => Math.round((v ?? 0) * scale);
+        return {
+          season_name: seasonLabel(thisSeasonStart - back),
+          total_points: r2(e.total_points),
+          minutes: mins,
+          starts: r2(e.starts),
+          goals_scored: r2(e.goals_scored),
+          assists: r2(e.assists),
+          clean_sheets: r2(e.clean_sheets),
+          goals_conceded: r2(e.goals_conceded),
+          saves: r2(e.saves),
+          bonus: r2(e.bonus),
+          bps: r2(e.bps),
+          yellow_cards: r2(e.yellow_cards),
+          red_cards: 0,
+          own_goals: 0,
+          penalties_saved: 0,
+          penalties_missed: 0,
+          defensive_contribution: r2(e.defensive_contribution),
+          ict_index: (parseFloat(e.ict_index) * scale).toFixed(1),
+          expected_goals: (parseFloat(e.expected_goals) * scale).toFixed(2),
+          expected_assists: (parseFloat(e.expected_assists) * scale).toFixed(2),
+          expected_goal_involvements: (
+            parseFloat(e.expected_goal_involvements) * scale
+          ).toFixed(2),
+          expected_goals_conceded: (
+            parseFloat(e.expected_goals_conceded) * scale
+          ).toFixed(2),
+          // A past season's price, in the units FPL publishes it in.
+          start_cost: e.now_cost - e.cost_change_start,
+          end_cost: e.now_cost,
+          element_code: id,
+        };
+      });
+    })(),
   });
+
+  /**
+   * A manager's season, for ANY manager in the demo league.
+   *
+   * `entry/{id}/history/` threw the id away and served the demo manager's own
+   * season to every caller, which is the same defect `picksFor` was built to
+   * fix one endpoint over: a rival's card opened on the demo manager's points,
+   * his ranks and his chips, so nine managers had one identical season and the
+   * mini-league's history was a mirror. The rows already exist per rival —
+   * `rivalRows` — so this is a lookup, not a computation.
+   */
+  const historyFor = (id: number) => {
+    if (id === DEMO_ENTRY_ID) return history;
+    const rows = rivalRows.get(id);
+    if (!rows) return null;
+    return {
+      current: rows,
+      // A rival's chips are the ones his own season used, read off his own
+      // rows rather than copied from the demo manager's list.
+      chips: rows
+        .filter((r) => r.active_chip)
+        .map((r) => ({ name: r.active_chip as string, time: deadlineFor(r.event), event: r.event })),
+      past: [] as { season_name: string; total_points: number; rank: number }[],
+    };
+  };
 
   return {
     bootstrap,
@@ -2015,6 +2339,7 @@ export function makeDemoUniverse(now: number) {
     picks: picksFor(DEMO_ENTRY_ID, CURRENT_GW),
     picksFor,
     history,
+    historyFor,
     transfers,
     live: liveFor(CURRENT_GW),
     liveFor,

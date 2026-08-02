@@ -83,11 +83,53 @@ describe("the demo API route", () => {
   it("gives a player's season the length his season actually has", async () => {
     const { status, body } = await call("element-summary/1");
     expect(status).toBe(200);
-    const rows = (body as { history: { round: number }[] }).history;
-    // Every finished gameweek, in order, and no invented twentieth.
-    expect(rows.map((r) => r.round)).toEqual(
-      Array.from({ length: NOW_GW - 1 }, (_, i) => i + 1)
+    const summary = body as {
+      history: { round: number }[];
+      history_past: { season_name: string; minutes: number }[];
+    };
+    // Every gameweek that has kicked off, in order, and no invented
+    // twenty-first. This asserted `NOW_GW - 1` and so enshrined a summary that
+    // stopped a week short of the season it was describing.
+    expect(summary.history.map((r) => r.round)).toEqual(
+      Array.from({ length: NOW_GW }, (_, i) => i + 1)
     );
+    // And the previous seasons the pre-season model reads, which the route
+    // served none of.
+    expect(summary.history_past.length).toBe(2);
+    expect(summary.history_past.every((s) => /^\d{4}\/\d{2}$/.test(s.season_name))).toBe(true);
+  });
+
+  it("honours the entry id in the history path", async () => {
+    // THE SAME REGRESSION, ONE ENDPOINT OVER. This matched `entry/{id}/history/`
+    // and then returned the demo manager's season whatever id was asked for, so
+    // every rival card in the mini-league opened on the reader's own points,
+    // his ranks and his chips.
+    const { body: league } = (await call("leagues-classic/900001/standings")) as {
+      body: { standings: { results: { entry: number; total: number }[] } };
+    };
+    const rival = league.standings.results.find((r) => r.entry !== DEMO_ENTRY_ID)!;
+    const mine = await call(`entry/${DEMO_ENTRY_ID}/history`);
+    const theirs = await call(`entry/${rival.entry}/history`);
+    expect(theirs.status).toBe(200);
+    const total = (b: unknown) => {
+      const rows = (b as { current: { total_points: number }[] }).current;
+      return rows[rows.length - 1].total_points;
+    };
+    expect(total(theirs.body)).toBe(rival.total);
+    expect(total(theirs.body)).not.toBe(total(mine.body));
+  });
+
+  it("404s a manager it has no season for", async () => {
+    const { status } = await call("entry/12345/history");
+    expect(status).toBe(404);
+  });
+
+  it("404s a gameweek that is not a gameweek", async () => {
+    // `liveFor` answered anything it did not have with the current week's
+    // scores, so GW99 came back as GW20 under a GW99 heading.
+    expect((await call("event/99/live")).status).toBe(404);
+    expect((await call("event/0/live")).status).toBe(404);
+    expect((await call("event/38/live")).status).toBe(200);
   });
 
   it("404s an endpoint it does not serve rather than answering with something else", async () => {

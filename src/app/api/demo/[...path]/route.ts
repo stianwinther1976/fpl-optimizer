@@ -28,11 +28,22 @@ export async function GET(
   else if (/^entry\/\d+\/event\/\d+\/picks\/$/.test(joined)) {
     const seg = joined.split("/");
     body = u.picksFor(parseInt(seg[1], 10), parseInt(seg[3], 10));
-  } else if (/^entry\/\d+\/history\/$/.test(joined)) body = u.history;
+  }
+  // Per-entry too. This served the demo manager's own season — his points, his
+  // ranks, his chips — to every id that asked, so the nine rivals in the
+  // mini-league shared one identical history and any rival card opened on the
+  // reader's own numbers.
+  else if (/^entry\/\d+\/history\/$/.test(joined))
+    body = u.historyFor(parseInt(joined.split("/")[1], 10));
   else if (/^entry\/\d+\/transfers\/$/.test(joined)) body = u.transfers;
   else if (/^entry\/\d+\/$/.test(joined)) body = u.entry;
-  else if (/^event\/\d+\/live\/$/.test(joined))
-    body = u.liveFor(parseInt(joined.split("/")[1], 10));
+  // A season has 38 gameweeks and no more. Outside that the request is not for
+  // a week the demo declines to describe, it is not for a week at all, and a
+  // 404 says so — `liveFor` used to answer GW99 with GW20's scores.
+  else if (/^event\/\d+\/live\/$/.test(joined)) {
+    const gw = parseInt(joined.split("/")[1], 10);
+    if (gw >= 1 && gw <= 38) body = u.liveFor(gw);
+  }
   else if (/^leagues-classic\/\d+\/standings\/$/.test(joined))
     body = u.leagueFor(parseInt(joined.split("/")[1], 10));
   // The per-GW history now comes off the same match feeds that produced the

@@ -108,6 +108,15 @@ interface DemoUniverse {
   leagueFor: (id: number) => { league: { id: number; name: string }; standings: { results: Standing[] } };
   elementHistory: (id: number) => {
     history: { round: number; minutes: number; total_points: number; goals_scored: number }[];
+    history_past: {
+      season_name: string;
+      total_points: number;
+      minutes: number;
+      starts: number;
+      expected_goals: string;
+      expected_assists: string;
+      expected_goal_involvements: string;
+    }[];
   };
   history: {
     current: Row[];
@@ -843,18 +852,84 @@ describe("the demo says the same thing about every gameweek, not just this one",
     const sampled = u.bootstrap.elements.filter((e) => e.id % 37 === 1);
     expect(sampled.length).toBeGreaterThan(5);
     for (const el of sampled) {
-      const past = u.elementHistory(el.id).history;
-      const thisWeek = u.live.elements.find((e) => e.id === el.id);
-      const pts = past.reduce((s, r) => s + r.total_points, 0) + (thisWeek?.stats.total_points ?? 0);
-      const mins = past.reduce((s, r) => s + r.minutes, 0) + (thisWeek?.stats.minutes ?? 0);
+      const rows = u.elementHistory(el.id).history;
+      /*
+       * THROUGH the current gameweek, not up to it. The summary used to stop
+       * at GW19, so `fetchRecentForm` — whose entire question is "has he
+       * started RECENTLY" — could never see the most recent week the demo has.
+       * Every GW20 fixture here has kicked off, and FPL publishes a round as
+       * soon as it starts.
+       */
+      expect(rows.map((r) => r.round)).toEqual(
+        Array.from({ length: CURRENT_GW }, (_, i) => i + 1)
+      );
+      const pts = rows.reduce((s, r) => s + r.total_points, 0);
+      const mins = rows.reduce((s, r) => s + r.minutes, 0);
       expect({ id: el.id, pts, mins }).toEqual({
         id: el.id,
         pts: el.total_points,
         mins: el.minutes,
       });
-      expect(past.map((r) => r.round)).toEqual(
-        Array.from({ length: CURRENT_GW - 1 }, (_, i) => i + 1)
-      );
+      // The current week's row and the live feed are the same week, so they
+      // have to agree — that is the join the season total is built on.
+      const live = u.live.elements.find((e) => e.id === el.id);
+      const last = rows[rows.length - 1];
+      expect({ id: el.id, round: last.round, pts: last.total_points }).toEqual({
+        id: el.id,
+        round: CURRENT_GW,
+        pts: live?.stats.total_points ?? 0,
+      });
+    }
+  });
+
+  it("gives every player the previous seasons the pre-season model runs on", () => {
+    const u = universe();
+    /*
+     * `history_past` was absent from the demo entirely, so `fetchPastSeason`
+     * returned an empty map for all 300 players and the `fromPast` branch of
+     * `statLine` — the branch that decides who is nailed on before a ball is
+     * kicked — was unreachable in demo mode. The pre-season pipeline the app
+     * ships could not be demonstrated at all.
+     */
+    const sampled = u.bootstrap.elements.filter((e) => e.id % 41 === 3);
+    expect(sampled.length).toBeGreaterThan(4);
+    /*
+     * This season's label, derived rather than written down. `history.past`
+     * ends on the season BEFORE this one — that is what makes it past — so the
+     * current label is the year after it. Reading the last entry as "now" is
+     * the off-by-one this comment exists to stop being made again.
+     */
+    const lastPast = u.history.past[u.history.past.length - 1].season_name;
+    const thisStart = parseInt(lastPast.slice(0, 4), 10) + 1;
+    const thisSeason = `${thisStart}/${String((thisStart + 1) % 100).padStart(2, "0")}`;
+    for (const el of sampled) {
+      const past = u.elementHistory(el.id).history_past;
+      expect({ id: el.id, n: past.length }).toEqual({ id: el.id, n: 2 });
+      for (const s of past) {
+        const label = `${el.id} ${s.season_name}`;
+        // A past season is a PAST season: never this one, and in order.
+        expect({ label, isThis: s.season_name === thisSeason }).toEqual({ label, isThis: false });
+        // 38 games, not 20 — the scale is a full season, which is what makes
+        // per-90 rates off it comparable with a real feed's.
+        expect({ label, over: s.minutes > 38 * 90 }).toEqual({ label, over: false });
+        // And the start count that `statLine` reads as "nailed on" cannot
+        // exceed the games there were to start.
+        expect({ label, over: s.starts > 38 }).toEqual({ label, over: false });
+        expect({ label, neg: s.total_points < 0 || s.minutes < 0 }).toEqual({ label, neg: false });
+        // xGI is the sum of its parts here too, to two decimals.
+        const gi = parseFloat(s.expected_goals) + parseFloat(s.expected_assists);
+        expect({ label, gi: Math.abs(gi - parseFloat(s.expected_goal_involvements)) < 0.02 }).toEqual(
+          { label, gi: true }
+        );
+      }
+      expect(past[0].season_name < past[1].season_name).toBe(true);
+      // And it must not be a carbon copy of this season, or the shrinkage in
+      // xp.ts is being handed the same evidence twice and told it is two
+      // independent observations.
+      expect({
+        id: el.id,
+        older: past[0].total_points < past[1].total_points || el.total_points === 0,
+      }).toEqual({ id: el.id, older: true });
     }
   });
 
@@ -1645,5 +1720,242 @@ describe("the demo measures the manager against a field that plays the same game
     const rank = u.history.current[CURRENT_GW - 1].overall_rank;
     expect(rank).toBeGreaterThan(1_000);
     expect(rank).toBeLessThan(u.bootstrap.total_players / 10);
+  });
+});
+
+describe("the demo's underlying numbers describe the player, not his club", () => {
+  /*
+   * xG, xA, xGI, xGC, ICT and ownership were all written at generation time as
+   * functions of `q` — the CLUB's quality rating — and of nothing else. So a
+   * club's reserve keeper published the same 11.5% ownership, the same ICT and
+   * the same xG as its 163-point striker, and every consumer that reads them
+   * turned into a club ranking: `statLine` feeds xG/xA/ICT straight into the
+   * expected-points model, `StatsTable` sorts on xGI, and the
+   * differential/template split is a comparison against the ownership total.
+   *
+   * These tests pin the two things that were wrong: that the numbers VARY
+   * WITHIN a club, and that they land on the SCALE the model was tuned for.
+   */
+  const u = makeDemoUniverse(NOW) as unknown as DemoUniverse;
+  const els = u.bootstrap.elements;
+  const num = (v: string | undefined) => parseFloat(v ?? "0");
+
+  it("varies every derived stat inside a single club", () => {
+    // Take a club with a full complement and check its men are not clones.
+    const byClub = new Map<number, typeof els>();
+    for (const e of els) byClub.set(e.team, [...(byClub.get(e.team) ?? []), e]);
+    let checked = 0;
+    for (const [team, squad] of byClub) {
+      if (squad.length < 10) continue;
+      checked++;
+      for (const field of [
+        "expected_goals",
+        "expected_assists",
+        "expected_goal_involvements",
+        "ict_index",
+      ] as const) {
+        const distinct = new Set(squad.map((e) => e[field]));
+        /*
+         * Not "more than one" — a club whose fifteen publish three values is
+         * still a club ranking with rounding on top. Half the squad is the
+         * bar: the bug being guarded published ONE value per club, and the
+         * measured floor across all twenty clubs is nine of fifteen, so this
+         * has real headroom without licensing a regression toward the club.
+         * It is not "every man distinct", because ties at 0.00 among the men
+         * who have not played are correct and a real feed has them too.
+         */
+        expect({ team, field, distinct: distinct.size * 2 >= squad.length }).toEqual({
+          team,
+          field,
+          distinct: true,
+        });
+      }
+      /*
+       * Ownership is asserted differently and deliberately. FPL publishes it
+       * to one decimal and a real bootstrap has dozens of players sitting on
+       * the same 0.1%, so counting distinct values would fail on a demo that
+       * is behaving correctly. What must hold is the ORDERING: inside one
+       * club, the man who has scored the points is the man who is owned.
+       */
+      const ranked = [...squad].sort((a, b) => b.total_points - a.total_points);
+      const best = num(ranked[0].selected_by_percent);
+      const worst = num(ranked[ranked.length - 1].selected_by_percent);
+      expect({ team, ordered: best > worst }).toEqual({ team, ordered: true });
+    }
+    expect(checked).toBeGreaterThan(15);
+  });
+
+  it("puts ICT on the scale the bonus model divides by", () => {
+    /*
+     * `statLine` computes ict90 and `expectedPoints` multiplies it by
+     * `bonusPerIct90` to get an expected bonus per start, so the SCALE of this
+     * index is a scale on bonus points. Real ICT runs to about 13 per 90 for
+     * the best attacker in the league. A draft that ran to 38 per 90 asked the
+     * model for 1.7 bonus a start and pinned everyone good against `bonusCap`.
+     */
+    const played = els.filter((e) => e.minutes > 400);
+    expect(played.length).toBeGreaterThan(50);
+    const per90 = played.map((e) => (num(e.ict_index) * 90) / e.minutes);
+    expect(Math.max(...per90)).toBeLessThan(20);
+    expect(Math.max(...per90)).toBeGreaterThan(8);
+    expect(Math.min(...per90)).toBeGreaterThan(0);
+    // A man who has not played has an index near zero rather than his club's.
+    for (const e of els.filter((x) => x.minutes === 0)) {
+      expect({ id: e.id, ict: num(e.ict_index) }).toEqual({ id: e.id, ict: 0 });
+    }
+  });
+
+  it("keeps ownership adding up to fifteen picks a manager", () => {
+    const own = els.map((e) => num(e.selected_by_percent));
+    const sum = own.reduce((s, v) => s + v, 0);
+    // Every manager picks fifteen, so the playerbase sums to 1500% and no
+    // more. The raw curve summed to ~6,100% — four squads each — and the
+    // differential badge is a comparison against that total, so in demo mode
+    // almost nothing ever read as a differential.
+    expect(Math.abs(sum - 1500)).toBeLessThan(25);
+    const sorted = [...own].sort((a, b) => b - a);
+    // Top-heavy the way FPL is: a premium above 35%, and a long tail.
+    expect(sorted[0]).toBeGreaterThan(35);
+    expect(sorted[0]).toBeLessThan(75);
+    expect(sorted[Math.floor(sorted.length / 2)]).toBeLessThan(6);
+    // And ownership follows points, not the club badge.
+    const top = [...els].sort((a, b) => b.total_points - a.total_points)[0];
+    expect(num(top.selected_by_percent)).toBeGreaterThan(sorted[20]);
+  });
+
+  it("makes the expected numbers agree with the actual ones", () => {
+    for (const e of els) {
+      const gi = num(e.expected_goals) + num(e.expected_assists);
+      expect({ id: e.id, gi: Math.abs(gi - num(e.expected_goal_involvements)) < 0.02 }).toEqual({
+        id: e.id,
+        gi: true,
+      });
+      // Nobody is expected to have done anything in minutes he did not play.
+      if (e.minutes === 0) {
+        expect({ id: e.id, xgi: num(e.expected_goal_involvements) }).toEqual({ id: e.id, xgi: 0 });
+      }
+    }
+    // Across the league, expected goals track scored goals: a demo whose xG
+    // says half as many goals as the scoreboard makes every value judgement
+    // the model draws off xG a systematic one.
+    const xg = els.reduce((s, e) => s + num(e.expected_goals), 0);
+    const goals = els.reduce((s, e) => s + e.goals_scored, 0);
+    expect(goals).toBeGreaterThan(200);
+    expect(Math.abs(xg - goals) / goals).toBeLessThan(0.25);
+  });
+});
+
+describe("the demo answers about the manager who was asked about", () => {
+  const u = makeDemoUniverse(NOW) as unknown as DemoUniverse & {
+    historyFor: (id: number) => {
+      current: {
+        event: number;
+        total_points: number;
+        value: number;
+        bank: number;
+        active_chip: string | null;
+      }[];
+      chips: { name: string; event: number }[];
+    } | null;
+  };
+
+  it("gives every rival his own season rather than the reader's", () => {
+    /*
+     * `entry/{id}/history/` threw the id away. Nine rivals therefore shared one
+     * history — the demo manager's points, his ranks, his chips — which is the
+     * same defect `picksFor` was written to fix one endpoint over, and it makes
+     * the mini-league a mirror rather than a league.
+     */
+    const rivals = u.leagueFor(900001).standings.results.filter((r) => r.entry !== DEMO_ENTRY_ID);
+    expect(rivals.length).toBeGreaterThan(5);
+    const mine = u.historyFor(DEMO_ENTRY_ID)!;
+    const totals = new Set<number>();
+    for (const r of rivals) {
+      const h = u.historyFor(r.entry);
+      expect({ entry: r.entry, got: h != null }).toEqual({ entry: r.entry, got: true });
+      const last = h!.current[h!.current.length - 1];
+      expect({ entry: r.entry, n: h!.current.length }).toEqual({ entry: r.entry, n: CURRENT_GW });
+      // His own total, and the one the standings table publishes for him.
+      expect({ entry: r.entry, total: last.total_points }).toEqual({
+        entry: r.entry,
+        total: r.total,
+      });
+      expect(last.total_points).not.toBe(mine.current[mine.current.length - 1].total_points);
+      totals.add(last.total_points);
+      // His own chips, read off his own season.
+      const used = h!.current.filter((c) => c.active_chip).map((c) => c.active_chip);
+      expect(h!.chips.map((c) => c.name)).toEqual(used);
+    }
+    expect(totals.size).toBe(rivals.length);
+  });
+
+  it("does not invent a season for a manager it has never heard of", () => {
+    expect(u.historyFor(1)).toBeNull();
+    expect(u.historyFor(424242)).toBeNull();
+  });
+
+  it("gives every rival a bank and a team value that move", () => {
+    /*
+     * Every rival's every gameweek reported `bank: 5, value: 1000` — two
+     * constants, nine managers, twenty weeks — so the mini-league's team-value
+     * column was a column of £100.0m and nobody's squad ever appreciated.
+     */
+    const rivals = u.leagueFor(900001).standings.results.filter((r) => r.entry !== DEMO_ENTRY_ID);
+    const finals = new Set<number>();
+    for (const r of rivals) {
+      const rows = u.historyFor(r.entry)!.current;
+      // The invariant the whole game rests on: everybody starts on £100.0m,
+      // squad plus bank, however much they left unspent.
+      expect({ entry: r.entry, gw1: rows[0].value }).toEqual({ entry: r.entry, gw1: 1000 });
+      // A bank is money, so it is not negative — and it is not a fortune
+      // either. One rival sat on £14.5m for the whole season because the
+      // squad builder only ever cut and never spent.
+      for (const row of rows) {
+        expect({ entry: r.entry, gw: row.event, ok: row.bank >= 0 && row.bank <= 60 }).toEqual({
+          entry: r.entry,
+          gw: row.event,
+          ok: true,
+        });
+      }
+      const values = rows.map((row) => row.value);
+      expect(new Set(values).size).toBeGreaterThan(2);
+      finals.add(values[values.length - 1]);
+    }
+    // And the nine of them do not all land on the same number.
+    expect(finals.size).toBeGreaterThan(3);
+  });
+
+  it("spreads the mini-league across managers of different standards", () => {
+    /*
+     * All nine rivals were built at depth 0 — the best available man at every
+     * club — which is close to the greedy optimum the demo manager holds, so
+     * six of the nine outscored him and the front page showed a reader seventh
+     * of ten in his own league beside a card calling him top few per cent.
+     */
+    const results = u.leagueFor(900001).standings.results;
+    const totals = results.map((r) => r.total).sort((a, b) => b - a);
+    expect(totals[0] - totals[totals.length - 1]).toBeGreaterThan(150);
+    const mine = results.find((r) => r.entry === DEMO_ENTRY_ID)!;
+    const place = totals.indexOf(mine.total) + 1;
+    // Near the top, but beaten: a demo that opens on first place is a demo
+    // nobody believes, and one that opens on last contradicts the rank card.
+    expect(place).toBeGreaterThan(1);
+    expect(place).toBeLessThan(6);
+  });
+
+  it("answers an unplayed gameweek with an unplayed gameweek", () => {
+    /*
+     * `liveFor` fell back to the current gameweek for anything it did not
+     * have, so GW25 came back as GW20's scores under a GW25 heading — itemised
+     * goals for matches that have not kicked off.
+     */
+    const now = u.liveFor(CURRENT_GW);
+    const future = u.liveFor(CURRENT_GW + 5);
+    expect(future.elements.length).toBe(now.elements.length);
+    expect(future.elements.every((e) => e.stats.total_points === 0)).toBe(true);
+    expect(future.elements.every((e) => e.stats.minutes === 0)).toBe(true);
+    expect(future.elements.every((e) => (e.explain ?? []).length === 0)).toBe(true);
+    // And it is genuinely a different document from the one it used to copy.
+    expect(now.elements.some((e) => e.stats.total_points > 0)).toBe(true);
   });
 });
