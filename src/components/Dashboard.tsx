@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { api, entryNotFoundMessage, FplApiError, loadTeamData, fmtNum, fmtRank, rankPercentile, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
@@ -11,7 +11,12 @@ import { projectAutoSubs } from "@/lib/live";
 import { netEventPoints, netGwDelta, netGwPoints, valueDelta } from "@/lib/display";
 import { saveRecentTeam } from "@/lib/recent";
 import { launchPool } from "@/lib/pool";
-import { cachedPastSeason, loadPastSeason } from "@/lib/pastSeasonStore";
+import {
+  cachedPastSeason,
+  loadPastSeason,
+  pastSeasonVersion,
+  subscribePastSeason,
+} from "@/lib/pastSeasonStore";
 import {
   reconcileFinishedGws,
   seedDemoCalibration,
@@ -168,9 +173,38 @@ export default function Dashboard({
   // the outcome into the calibration factors, then snapshot the (freshly
   // calibrated) prediction for the upcoming GW so IT can be graded next.
   const [calVersion, setCalVersion] = useState(0);
-  // Bumped once the shared last-season record has landed, so the pitch view
-  // re-projects on the same evidence the drafter used.
-  const [pastReady, setPastReady] = useState(0);
+  /*
+    * The pitch re-projects when the shared last-season record changes, so it is
+    * always drawn on the same evidence the drafter used.
+    *
+    * This was a counter this component bumped itself, in one place, right after
+    * its own load. That is only correct if the cache changes in one place, and
+    * it does not. Pre-GW1 with no squad, this load can fail while the drafter's
+    * — a different call, seconds later, on the same pool — succeeds: the cache
+    * fills, nothing bumps, and the pitch spends the rest of the session quoting
+    * a projection built without last season while the squad beside it was
+    * drafted with it. A partial load later completed by a full one does the
+    * same. The store knows when its records move; asking it is the whole fix.
+    *
+    * `useSyncExternalStore` rather than `useState` + a subscribing effect,
+    * which is the same idea with a hole in it. An effect subscribes AFTER the
+    * render that read the initial value, so a commit landing in that window is
+    * never seen: the component would hold the pre-commit version for the rest
+    * of the session and the pitch would stay on a record-blind projection with
+    * nothing able to recover it. That window is empty today only by accident —
+    * this component's first render has no `data`, so nothing has started a load
+    * yet — and "correct because of what another effect happens to do first" is
+    * not a property worth relying on. `useSyncExternalStore` re-reads the
+    * snapshot after subscribing and re-renders if it moved, which is precisely
+    * that gap, closed by the framework instead of by luck. The third argument
+    * is the server snapshot: this is a client component under the App Router,
+    * so it is still rendered once on the server.
+    */
+  const pastReady = useSyncExternalStore(
+    subscribePastSeason,
+    pastSeasonVersion,
+    pastSeasonVersion
+  );
   useEffect(() => {
     if (!data) return;
     let cancelled = false;
@@ -188,6 +222,15 @@ export default function Dashboard({
         // rests on last season's per-player record, so snapshotting a run that
         // never loaded it would teach the calibration a correction for a model
         // nobody uses. Load it (cached; the drafter shares this) and wait.
+        //
+        // The `!demo` half is now a cost decision and nothing more. It used to
+        // be load-bearing by accident — the store keyed on pool size and lowest
+        // id, both of which the demo's 1..300 share with three hundred real
+        // footballers, so loading here in demo mode would have poisoned the
+        // cache for the real feed and vice versa. `pastSeasonStore` keys on the
+        // feed now, so the choice is free: the demo is a MID-SEASON fixture,
+        // every one of its players has minutes, `statLine` therefore prefers
+        // the bootstrap, and three hundred round trips would buy nothing.
         let past = cachedPastSeason() ?? undefined;
         if (!past && !demo) {
           try {
@@ -204,7 +247,6 @@ export default function Dashboard({
           pastSeason: past && past.size > 0 ? past : undefined,
         });
         snapshotPredictions(demo, nextEv, xp);
-        setPastReady((v) => v + 1);
       }
       if (changed || demo) setCalVersion((v) => v + 1);
     })();
@@ -816,7 +858,7 @@ export default function Dashboard({
         )}
         {visited.has("stats") && (
           <div hidden={tab !== "stats"}>
-            <StatsTable data={data} onSelect={setSelected} />
+            <StatsTable data={data} onSelect={setSelected} xp={xpOf} />
           </div>
         )}
         {visited.has("fixtures") && (

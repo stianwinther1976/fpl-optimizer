@@ -4,6 +4,45 @@
 import { NextRequest, NextResponse } from "next/server";
 import { makeDemoUniverse } from "@/lib/demo";
 
+/*
+ * ONE UNIVERSE PER TICK, NOT ONE PER REQUEST.
+ *
+ * `makeDemoUniverse` plays twenty gameweeks of a three-hundred-player league:
+ * it builds every team sheet, scores every match, awards every bonus point,
+ * assembles ten squads and samples twenty-four more to derive the field
+ * average. That is 80-190ms of CPU, and it was being done again for every
+ * single request — a dashboard load fires the bootstrap, the fixtures, the
+ * entry, the history, the picks, a live feed and an element summary per player
+ * card, so opening the demo cost one to three seconds of server time rebuilding
+ * an identical object six or seven times over.
+ *
+ * The universe is a pure function of `now`, so it is cached against a coarse
+ * bucket and the work happens once per bucket instead of once per fetch.
+ *
+ * The bucket is NOT what keeps the demo live, and the comment here used to
+ * claim it was: "the minute in an in-play fixture still advances". It does not.
+ * Every kickoff is pinned relative to `now` — the in-play ones at `now` minus
+ * 73 minutes — so the clock and the fixture move together and the match renders
+ * at 58' forever, at any `now` whatsoever. That is deliberate (a demo that
+ * drifts out of its own in-play window stops demonstrating the live feed), and
+ * it is the reason every SCORE, rank, price and league place in the universe is
+ * invariant in `now`. Not quite everything is: `thisSeasonStart` and
+ * `seasonLabel` read the calendar off GW1's date, so the season a card is
+ * labelled with does turn over, once a year, on a day nobody will be watching.
+ *
+ * So the bucket buys one thing only: a bound on how stale the object may be if
+ * that invariance is ever broken more seriously — a new fixture pinned to an
+ * absolute date, a deadline that finally passes. Fifteen seconds is cheap
+ * insurance against a future edit, not a live clock.
+ */
+const TICK_MS = 15_000;
+let cached: { tick: number; universe: ReturnType<typeof makeDemoUniverse> } | null = null;
+const demoUniverse = (now: number) => {
+  const tick = Math.floor(now / TICK_MS);
+  if (!cached || cached.tick !== tick) cached = { tick, universe: makeDemoUniverse(tick * TICK_MS) };
+  return cached.universe;
+};
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
@@ -12,7 +51,7 @@ export async function GET(
   let joined = path.join("/");
   if (!joined.endsWith("/")) joined += "/";
 
-  const u = makeDemoUniverse(Date.now());
+  const u = demoUniverse(Date.now());
 
   let body: unknown = null;
   if (/^bootstrap-static\/$/.test(joined)) body = u.bootstrap;
@@ -35,8 +74,13 @@ export async function GET(
   // reader's own numbers.
   else if (/^entry\/\d+\/history\/$/.test(joined))
     body = u.historyFor(parseInt(joined.split("/")[1], 10));
-  else if (/^entry\/\d+\/transfers\/$/.test(joined)) body = u.transfers;
-  else if (/^entry\/\d+\/$/.test(joined)) body = u.entry;
+  // And the last two endpoints that were still throwing the id away. With
+  // `picks` and `history` per-entry and these two not, the API contradicted
+  // itself about the same manager: a rival's card opened on "Demo Manager" and
+  // his 1,152 points above a pitch and a season belonging to somebody else.
+  else if (/^entry\/\d+\/transfers\/$/.test(joined))
+    body = u.transfersFor(parseInt(joined.split("/")[1], 10));
+  else if (/^entry\/\d+\/$/.test(joined)) body = u.entryFor(parseInt(joined.split("/")[1], 10));
   // A season has 38 gameweeks and no more. Outside that the request is not for
   // a week the demo declines to describe, it is not for a week at all, and a
   // 404 says so — `liveFor` used to answer GW99 with GW20's scores.

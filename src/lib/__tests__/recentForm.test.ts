@@ -105,7 +105,7 @@ function minutesOf(elements: Element[], recentForm?: Map<number, RecentForm>) {
   const bootstrap = { events, teams, elements, total_players: 1_167_938 } as unknown as Bootstrap;
   XP_DEBUG.minutes = new Map();
   try {
-    const xp = projectAll({
+    const xp = projectAll({ pastSeason: undefined,
       bootstrap,
       fixtures,
       nextEvent: TEAM_GAMES + 1,

@@ -122,6 +122,35 @@ describe("the demo API route", () => {
   it("404s a manager it has no season for", async () => {
     const { status } = await call("entry/12345/history");
     expect(status).toBe(404);
+    expect((await call("entry/12345")).status).toBe(404);
+    expect((await call("entry/12345/transfers")).status).toBe(404);
+  });
+
+  it("honours the entry id on the manager card and the transfer ledger", async () => {
+    // The last two endpoints still throwing the id away, which left the API
+    // contradicting itself: `picks` and `history` answered per manager while
+    // these two answered "Demo Manager" to everybody.
+    const { body: league } = (await call("leagues-classic/900001/standings")) as {
+      body: { standings: { results: { entry: number; total: number }[] } };
+    };
+    const rival = league.standings.results.find((r) => r.entry !== DEMO_ENTRY_ID)!;
+    const mine = (await call(`entry/${DEMO_ENTRY_ID}`)).body as {
+      id: number;
+      summary_overall_points: number;
+    };
+    const theirs = (await call(`entry/${rival.entry}`)).body as {
+      id: number;
+      summary_overall_points: number;
+      name: string;
+    };
+    expect(theirs.id).toBe(rival.entry);
+    expect(theirs.summary_overall_points).toBe(rival.total);
+    expect(theirs.summary_overall_points).not.toBe(mine.summary_overall_points);
+    // A rival holds one squad all season, so his ledger is empty — and empty is
+    // the true answer, where the demo manager's twelve dated purchases were not.
+    const ledger = (await call(`entry/${rival.entry}/transfers`)).body as unknown[];
+    expect(ledger).toEqual([]);
+    expect(((await call(`entry/${DEMO_ENTRY_ID}/transfers`)).body as unknown[]).length).toBeGreaterThan(0);
   });
 
   it("404s a gameweek that is not a gameweek", async () => {

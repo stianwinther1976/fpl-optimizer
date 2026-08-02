@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { fetchRecentForm, type TeamData } from "@/lib/fpl";
+import { currentFeed, fetchRecentForm, type TeamData } from "@/lib/fpl";
 import type { RecentForm } from "@/lib/types";
-import { loadPastSeason } from "@/lib/pastSeasonStore";
+import { cachedPastSeason, loadPastSeason } from "@/lib/pastSeasonStore";
 import { launchPool } from "@/lib/pool";
 import {
   optimize,
@@ -284,12 +284,67 @@ export default function OptimizePanel({
 
   // Recent line-up data (element-summary) for owned players + the optimizer's
   // realistic candidate pool. Fetched once and reused by both engines.
+  /*
+   * WAIT FOR LAST SEASON'S RECORD RATHER THAN HOPING IT HAS ARRIVED.
+   *
+   * Reading the cache and carrying on is not "with it if it has landed" — it is
+   * a coin flip on the clock. The only unconditional load lives in the
+   * pre-GW1 launch branch above, so for a manager who already has a squad the
+   * store is filled solely by the dashboard's effect, which first reconciles
+   * finished gameweeks and then fetches four hundred players ten at a time. A
+   * manager who taps Optimize inside that window gets a different candidate
+   * pool and different recommended transfers from one who waits, with nothing
+   * on screen to say which happened — and it sticks, because `recentForm` is
+   * memoised, so one early tap poisons every later run and the six-week plan
+   * too. Awaiting is nearly free: the key is the same pool the dashboard is
+   * already loading, so this joins that same in-flight promise rather than
+   * starting a second one. It is not free in TIME, though — joining a load
+   * already in flight cannot re-wire the progress callback, so the caller's
+   * own label is set first and simply stays put for the wait.
+   */
+  async function ensurePastSeason(): Promise<Map<number, import("@/lib/types").PastSeasonStats> | undefined> {
+    const held = cachedPastSeason();
+    if (held) return held;
+    // The demo is a mid-season fixture: every one of its three hundred players
+    // has minutes this season, so `statLine` prefers the bootstrap and the
+    // record would change nothing — it is not worth three hundred round trips
+    // per tap. The dashboard makes the same call, for the same reason.
+    if (currentFeed() !== "real") return undefined;
+    setPhase("Checking last season…");
+    try {
+      await loadPastSeason(launchPool(data.bootstrap.elements), (done, total) =>
+        setPhase(`Checking last season… ${done}/${total}`)
+      );
+    } catch {
+      return undefined;
+    }
+    /*
+     * THE STORE'S RECORD, NOT THIS FETCH'S. `loadPastSeason` resolves with the
+     * result it fetched even when the store REJECTS that result as thinner than
+     * what it already holds — a partial run under a flaky connection, say,
+     * arriving after a complete one. Returning the transport's answer meant the
+     * candidate pre-rank a few lines below could be built on the thin map while
+     * `run()` a moment later read the fuller one out of the cache: two
+     * different versions of last season inside a single Optimize, which is a
+     * small copy of exactly the split this whole path exists to close.
+     */
+    return cachedPastSeason() ?? undefined;
+  }
+
   async function loadRecentForm(): Promise<Map<number, RecentForm>> {
     if (recentForm) return recentForm;
+    // With last season's record. This projection only decides WHICH players are
+    // worth an element-summary lookup, but that is a decision it was making
+    // badly for precisely the players the lookup would help most: a summer
+    // signing or a returning long-term absentee is on no minutes this season,
+    // so without `pastSeason` he projects near zero, finishes outside the top
+    // fifteen of his position and never gets his line-ups fetched — after which
+    // the optimizer has no recent-form evidence for him either.
     const prelim = projectAll({
       bootstrap: data.bootstrap,
       fixtures: data.fixtures,
       nextEvent: squad!.nextEvent!,
+      pastSeason: await ensurePastSeason(),
     });
     const ids = new Set<number>(squad!.players.map((p) => p.element.id));
     for (const t of [1, 2, 3, 4]) {
@@ -326,6 +381,8 @@ export default function OptimizePanel({
         nextEvent: squad!.nextEvent!,
         horizon,
         recentForm: recent,
+        // `loadRecentForm` has already awaited this, so the read is settled.
+        pastSeason: cachedPastSeason() ?? undefined,
       });
       setResult(res);
     } finally {
@@ -351,6 +408,7 @@ export default function OptimizePanel({
           nextEvent: squad!.nextEvent!,
           horizon: 6,
           recentForm: recent,
+          pastSeason: cachedPastSeason() ?? undefined,
         })
       );
     } finally {
@@ -363,6 +421,19 @@ export default function OptimizePanel({
   async function showChip(chip: string) {
     setChipLoading(chip);
     try {
+      /*
+       * THIS TAP CAN BE THE FIRST THING THE READER DOES. The chip badges render
+       * in the panel body, above the Optimize button, enabled from first paint
+       * — so "Wildcard" is reachable before `run()` or `runPlan()` has ever been
+       * called, and those two are the only callers of `loadRecentForm`, which is
+       * the only thing that awaits the past-season load. Reading the cache here
+       * and carrying on meant a wildcard squad built with no record of last
+       * season at all: no summer signing, no returning absentee, while the
+       * Optimize tab three inches away includes them the moment it is tapped.
+       * The panel's own note above `ensurePastSeason` says exactly why that is
+       * not acceptable; this call site was simply not obeying it.
+       */
+      const past = await ensurePastSeason();
       await new Promise((r) => setTimeout(r, 20));
       const scen = chipScenario(
         {
@@ -375,6 +446,7 @@ export default function OptimizePanel({
           horizon,
           precomputedXp: result?.xp,
           recentForm: recentForm ?? undefined,
+          pastSeason: past,
         },
         chip
       );

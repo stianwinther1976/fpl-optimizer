@@ -180,6 +180,20 @@ export interface OptimizerInput {
   precomputedXp?: Map<number, PlayerXp>;
   /** Recent line-up form per element (see XpContext.recentForm). */
   recentForm?: Map<number, RecentForm>;
+  /*
+   * LAST SEASON'S RECORD, which this engine could not see at all.
+   *
+   * `projectAll` has taken `pastSeason` for a long time, and the dashboard and
+   * the launch drafter both pass it. The optimizer, the six-week planner and
+   * the chip scenarios did not — the field did not exist on their inputs — so
+   * the app ended up quoting two different xP figures for the same man and
+   * disagreeing hardest about exactly the players a manager needs help with: a
+   * summer signing or a returning long-term absentee is on no minutes this
+   * season, so with no record he projects near zero, never enters the candidate
+   * pool, and cannot be recommended however good he is. The pitch would show
+   * him at 4.1 while the Optimize tab refused to consider him.
+   */
+  pastSeason?: Map<number, PastSeasonStats>;
 }
 
 export interface OptimizerResult {
@@ -213,6 +227,7 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     nextEvent,
     horizon,
     recentForm: input.recentForm,
+    pastSeason: input.pastSeason,
   };
   const xp = input.precomputedXp ?? projectAll(ctx);
   const lastEvent = bootstrap.events.length > 0 ? bootstrap.events[bootstrap.events.length - 1].id : 38;
@@ -1124,6 +1139,8 @@ export interface PlannerInput {
   singlesPerState?: number; // default 8
   precomputedXp?: Map<number, PlayerXp>;
   recentForm?: Map<number, RecentForm>;
+  /** See the note on `OptimizerInput.pastSeason`. */
+  pastSeason?: Map<number, PastSeasonStats>;
 }
 
 export function planHorizon(input: PlannerInput): SeasonPlan {
@@ -1141,6 +1158,7 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
       nextEvent,
       horizon,
       recentForm: input.recentForm,
+      pastSeason: input.pastSeason,
     });
   const lastEvent =
     bootstrap.events.length > 0 ? bootstrap.events[bootstrap.events.length - 1].id : 38;
@@ -1375,6 +1393,7 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
       nextEvent,
       horizon,
       recentForm: input.recentForm,
+      pastSeason: input.pastSeason,
     });
   const lastEvent =
     bootstrap.events.length > 0 ? bootstrap.events[bootstrap.events.length - 1].id : 38;

@@ -350,7 +350,7 @@ describe("suspension risk reaches expected points", () => {
     elements: [def(1, 0), def(2, 4)],
     total_players: 1_167_938,
   } as unknown as Bootstrap;
-  const xp = projectAll({ bootstrap, fixtures, nextEvent: 11, horizon: 4 });
+  const xp = projectAll({ pastSeason: undefined, bootstrap, fixtures, nextEvent: 11, horizon: 4 });
   const clean = xp.get(1)!;
   const booked = xp.get(2)!;
 
@@ -510,7 +510,7 @@ describe("suspension risk reaches expected points", () => {
       team_h_score: 1,
       team_a_score: 1,
     }));
-    const late = projectAll({
+    const late = projectAll({ pastSeason: undefined,
       bootstrap: {
         ...bootstrap,
         elements: [def(1, 0), def(2, 4), def(3, 9)],
@@ -533,7 +533,7 @@ describe("suspension risk reaches expected points", () => {
     1 - m.get(2)!.perGw.get(gw)! / m.get(1)!.perGw.get(gw)!;
 
   const twins = (fx: Fixture[]) =>
-    projectAll({
+    projectAll({ pastSeason: undefined,
       bootstrap: { ...bootstrap, elements: [def(1, 0), def(2, 4)] } as unknown as Bootstrap,
       fixtures: fx,
       nextEvent: 11,
@@ -592,7 +592,7 @@ describe("suspension risk reaches expected points", () => {
     // RELATIVE suspension hit must be smaller for the doubtful one.
     const doubtful = (id: number, yellows: number) =>
       ({ ...def(id, yellows), status: "d", chance_of_playing_next_round: 25 }) as unknown as Element;
-    const flagged = projectAll({
+    const flagged = projectAll({ pastSeason: undefined,
       bootstrap: {
         ...bootstrap,
         elements: [doubtful(1, 0), doubtful(2, 4)],
@@ -607,7 +607,7 @@ describe("suspension risk reaches expected points", () => {
   });
 
   it("does nothing at all to a player who is not near a threshold", () => {
-    const both = projectAll({
+    const both = projectAll({ pastSeason: undefined,
       bootstrap: {
         ...bootstrap,
         elements: [def(1, 0), def(2, 2)],

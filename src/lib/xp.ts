@@ -1644,8 +1644,25 @@ export interface XpContext {
    * history_past). The grounded pre-season signal for who actually played and
    * what they produced — and the ONLY such signal once FPL resets the
    * bootstrap counters for the new season.
+   *
+   * REQUIRED, THOUGH IT MAY BE `undefined`. This was optional, and the app
+   * spent a long time quoting two different xP figures for the same player
+   * because of it: the dashboard projected with the record, the optimizer, the
+   * six-week planner, the chip scenarios and the stats table projected without
+   * it, and nothing anywhere said so. A player on no minutes this season — a
+   * summer signing, a returning long-term absentee — is projected almost
+   * entirely from this map, so the gap was widest exactly where the number
+   * mattered most.
+   *
+   * An optional field lets a caller forget. A required one that accepts
+   * `undefined` makes him decide, at the call site, in a way the compiler
+   * checks — which is worth more than the source-scanning test in
+   * `componentInvariants.test.ts` that used to be the only thing watching.
+   * `undefined` remains a legitimate answer: pre-season with the fetch still in
+   * flight, or the demo feed, where every player has minutes this season and
+   * `statLine` prefers the bootstrap anyway.
    */
-  pastSeason?: Map<number, PastSeasonStats>;
+  pastSeason: Map<number, PastSeasonStats> | undefined;
 }
 
 /** Fixtures for a team in a given event (0, 1 or 2 = DGW). */

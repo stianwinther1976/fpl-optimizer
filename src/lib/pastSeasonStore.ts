@@ -12,25 +12,112 @@
 // thing the app does. Caching it here means it happens once per session
 // regardless of how many components want it.
 
-import { fetchPastSeason, type PastSeasonFetch } from "./fpl";
+import { currentFeed, fetchPastSeason, type PastSeasonFetch } from "./fpl";
 import type { PastSeasonStats } from "./types";
 
 let inflight: Promise<PastSeasonFetch> | null = null;
 let cached: PastSeasonFetch | null = null;
+/** Key of the load in flight — or, if none is, of the last one requested. */
 let cachedIds: string | null = null;
-
-const keyOf = (ids: number[]) => `${ids.length}:${[...ids].sort((a, b) => a - b)[0] ?? 0}`;
+/*
+ * Key of the records actually SITTING IN `cached`, which is not the same thing.
+ * `cachedIds` moves the moment a new load starts; the records it describes do
+ * not arrive until that load lands. One variable was doing both jobs, so during
+ * every in-flight load the store claimed the old records belonged to the new
+ * key — and once the two keys could name different FEEDS, that window was long
+ * enough to serve a whole real-football season to the demo, and to let the
+ * "never trade a fuller record for a thinner one" rule below prefer a 420-man
+ * real result over the 300-man demo one that had just replaced it.
+ */
+let cachedKey: string | null = null;
+/*
+ * Bumped every time `cached` changes. React has no way to see module state
+ * move, so every consumer had invented its own signal for "the record has
+ * landed" — the dashboard a `pastReady` counter bumped in exactly one place,
+ * the stats table nothing at all. A counter bumped in one place is only right
+ * if the cache changes in one place, and it does not: a partial load followed
+ * by a full one, or a failed dashboard load followed by a successful drafter
+ * one, both change it with nobody watching. Then the pitch shows a projection
+ * built without last season while the drafter beside it used it — the very
+ * split this store exists to close, one level up.
+ */
+let version = 0;
+const listeners = new Set<() => void>();
 
 /**
- * Whatever has already been loaded, or null. Synchronous, for render paths that
- * must not block — they simply project without it until the load lands.
+ * A snapshot of what `cachedPastSeason()` will answer. It changes whenever that
+ * answer changes, and it is safe both as a React dependency and as a
+ * `useSyncExternalStore` snapshot — same value in, `Object.is`-equal out, no
+ * allocation the caller can tell apart.
+ *
+ * THE FEED IS PART OF IT, and a bare counter was wrong to leave it out.
+ * `cachedPastSeason` returns null for records fetched under a different feed
+ * (`cacheIsCurrentFeed`), and the feed is flipped by `setDemoMode` in `fpl.ts`,
+ * which is outside this module and cannot notify it — an import the other way
+ * would be a cycle. So the counter could stand still across a demo/real switch
+ * while the value it claims to describe went from a full map to null. Folding
+ * the feed into the snapshot means any render that happens after the switch —
+ * and one always does, because switching feed reloads the team — reads a
+ * different snapshot and recomputes. Nothing has to be notified for the value
+ * to be right; it only has to be looked at.
+ */
+export function pastSeasonVersion(): string {
+  return `${currentFeed()}|${version}`;
+}
+
+/** Call back whenever the held records change. Returns an unsubscribe. */
+export function subscribePastSeason(cb: () => void): () => void {
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
+}
+
+function commit(r: PastSeasonFetch, key: string): void {
+  cached = r;
+  cachedKey = key;
+  version++;
+  for (const cb of [...listeners]) cb();
+}
+
+/*
+ * THE FEED IS PART OF THE KEY, because element ids are not unique across feeds.
+ *
+ * The key was `${ids.length}:${lowestId}` and nothing else. Demo players are
+ * ids 1..300; so are three hundred real footballers. A visitor who looked at
+ * their own team and then opened `/team/999999` was one matching pool size away
+ * from having real men's last-season records — real minutes, real xG, real
+ * starts — handed to the demo's projection under the demo's names, and the
+ * demo's whole point is that every number in it can be traced back to a match
+ * it played. Nothing crashed and nothing looked wrong; the demo simply began
+ * quoting somebody else's season.
+ *
+ * The feed is not threaded through the callers on purpose. A parameter is a
+ * promise each call site has to keep, and the two that read this store
+ * synchronously had already failed to keep the equivalent one — the dashboard
+ * gated the LOAD on `!demo` and left the READ ungated, which is exactly the
+ * leak. `currentFeed()` is the same switch `get()` uses to choose the URL, so
+ * the cache cannot disagree with the feed the rows came from.
+ */
+const keyOf = (ids: number[]) =>
+  `${currentFeed()}|${ids.length}:${[...ids].sort((a, b) => a - b)[0] ?? 0}`;
+
+/** Were the records in `cached` taken from the feed the app is reading now? */
+const cacheIsCurrentFeed = () => cachedKey != null && cachedKey.startsWith(`${currentFeed()}|`);
+
+/**
+ * Whatever has already been loaded FOR THE CURRENT FEED, or null. Synchronous,
+ * for render paths that must not block — they simply project without it until
+ * the load lands.
  */
 export function cachedPastSeason(): Map<number, PastSeasonStats> | null {
+  if (!cacheIsCurrentFeed()) return null;
   return cached && cached.data.size > 0 ? cached.data : null;
 }
 
 /** Coverage of the last completed load, for surfacing a gap to the user. */
 export function pastSeasonCoverage(): { requested: number; failed: number } | null {
+  if (!cacheIsCurrentFeed()) return null;
   return cached ? { requested: cached.requested, failed: cached.failed } : null;
 }
 
@@ -57,11 +144,30 @@ export function loadPastSeason(
   //
   // This is worth more now than it was: the pool doubled to 420, so a rate-limit
   // that used to clip a handful of requests has twice as much to clip.
-  if (cached && cachedIds === key && cached.failed === 0) return Promise.resolve(cached);
+  if (cached && cachedKey === key && cached.failed === 0) return Promise.resolve(cached);
   if (inflight && cachedIds === key) return inflight;
   cachedIds = key;
-  inflight = fetchPastSeason(ids, 10, onProgress)
+  const p: Promise<PastSeasonFetch> = fetchPastSeason(ids, 10, onProgress)
     .then((r) => {
+      /*
+       * A SUPERSEDED LOAD DOES NOT GET TO WRITE.
+       *
+       * Nothing here cancels: `fetchPastSeason` takes an `AbortSignal` and no
+       * caller passes one, so switching entry — or feed — leaves the previous
+       * four hundred requests running alongside the new ones, and they land in
+       * whatever order the network feels like. The earlier load landing LAST
+       * used to win, because the "fuller vs thinner" test below compares
+       * `cachedKey` and a stale key never matches, so `keep` was forced false
+       * and the old universe's records were written over the new one's. The
+       * feed prefix then correctly refused to show them — leaving the demo with
+       * nothing at all and no second load coming.
+       *
+       * `cachedIds` names the load that started most recently, so this is the
+       * one test that distinguishes "mine" from "overtaken". It also makes
+       * `resetPastSeasonStore` real: reset nulls `cachedIds`, so a fetch still
+       * in the air when a test tears down can no longer seed the next test.
+       */
+      if (cachedIds !== key) return r;
       // Never trade a fuller result for a thinner one: a retry that goes worse
       // (offline, say) must not blank out records already on screen. On an exact
       // tie the newer result wins, which is unobservable — equal `data.size`
@@ -72,13 +178,28 @@ export function loadPastSeason(
       // `AbortSignal` and nothing passes one. Changing entry id mid-fetch leaves
       // the previous 420 requests running alongside the new ones. Doubling the
       // pool doubled that window without making the plumbing any better.
-      cached = cached && cachedIds === key && cached.data.size > r.data.size ? cached : r;
+      // "Fuller" is only a comparison between two answers to the SAME question.
+      // The guard is on `cachedKey` — the key the held records were fetched
+      // under — not on `cachedIds`, which by now names this load. Compared
+      // against the wrong key, 420 real players beat 300 demo ones and the
+      // rule that exists to protect the pitch quietly repopulated it from the
+      // other universe.
+      const keep = cached !== null && cachedKey === key && cached.data.size > r.data.size;
+      if (!keep) commit(r, key);
       return r;
     })
     .finally(() => {
-      inflight = null;
+      // Only if it is still MINE — and identity is the only thing that says so.
+      // This compared KEYS, which two different loads can share: a load for the
+      // demo starts and finishes while a load for the real feed is in the air,
+      // the reader switches back, a third load starts under the first one's
+      // key — and then the first one settles and blanks the third, which is
+      // still running. The next caller finds no in-flight promise and pays for
+      // a fourth fetch of four hundred players.
+      if (inflight === p) inflight = null;
     });
-  return inflight;
+  inflight = p;
+  return p;
 }
 
 /** Test seam: forget everything loaded so far. */
@@ -86,4 +207,12 @@ export function resetPastSeasonStore(): void {
   inflight = null;
   cached = null;
   cachedIds = null;
+  cachedKey = null;
+  // Bumping the version without telling the listeners was a half-measure that
+  // read like a whole one: `subscribePastSeason` promises a callback whenever
+  // the held records change, and this changes them to nothing. No production
+  // caller resets, so it cost nothing — but a contract that is honoured only on
+  // the paths someone happened to check is not a contract.
+  version++;
+  for (const cb of [...listeners]) cb();
 }

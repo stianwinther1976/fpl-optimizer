@@ -73,6 +73,15 @@ interface Row {
   event_transfers: number;
   event_transfers_cost: number;
   points_on_bench: number;
+  /*
+   * NO `active_chip` HERE, deliberately. FPL publishes chips in their own array
+   * on `entry/{id}/history/` and on the picks document, never on a history row,
+   * and the demo now matches that for all ten managers rather than for the nine
+   * whose rows happened to be built from a different object. The chip week is
+   * still checkable — it is the one week the row's `points` and the eleven on
+   * the pitch stop agreeing by the usual rule — but it is checked against the
+   * endpoint that really carries it.
+   */
 }
 interface Standing {
   entry: number;
@@ -107,7 +116,13 @@ interface DemoUniverse {
   liveFor: (gw: number) => EventLive;
   leagueFor: (id: number) => { league: { id: number; name: string }; standings: { results: Standing[] } };
   elementHistory: (id: number) => {
-    history: { round: number; minutes: number; total_points: number; goals_scored: number }[];
+    history: {
+      round: number;
+      minutes: number;
+      starts: number;
+      total_points: number;
+      goals_scored: number;
+    }[];
     history_past: {
       season_name: string;
       total_points: number;
@@ -123,6 +138,18 @@ interface DemoUniverse {
     chips: { name: string; event: number }[];
     past: { season_name: string; total_points: number; rank: number }[];
   };
+  /*
+   * Every manager's ledger, not just the reader's. This lived as a local
+   * intersection type on one describe block, which was fine while exactly one
+   * block asked rivals about their money — but the budget and the value walk
+   * are the same question asked at two ends of the season, and the affordability
+   * test now reads the opening row of the same ledger this one reads the last
+   * row of. One declaration, so the two cannot drift apart.
+   */
+  historyFor: (id: number) => {
+    current: Row[];
+    chips: { name: string; event: number }[];
+  } | null;
   transfers: Transfer[];
   live: EventLive;
   league: { standings: { results: Standing[] } };
@@ -372,21 +399,48 @@ describe("the demo universe reports each rank exactly once", () => {
     expect(byMargin[0].rank / byMargin[byMargin.length - 1].rank).toBeGreaterThan(4);
   });
 
-  it("moves the overall rank the wrong way after a below-average gameweek", () => {
+  it("moves the overall rank the way the week actually went", () => {
     const u = universe();
     /*
      * The overall rank used to be `400_000 - gw * 8_000`: a straight line that
      * improved every single week regardless of what the manager scored,
-     * including the weeks he took a hit and lost ground. GW20 is exactly such a
-     * week, which is why the demo could show a red gameweek beside a green
-     * season-rank arrow.
+     * including the weeks he took a hit and lost ground, so the demo could show
+     * a red gameweek beside a green season-rank arrow.
+     *
+     * This asserted that GW20 SPECIFICALLY was a below-average week, which was
+     * true of the fixture on the day it was written and is a fact about the
+     * generator's dice, not about the arithmetic under test. It broke the first
+     * time an unrelated change moved the demo squad by a player.
+     *
+     * What is actually being claimed is that the rank is a function of the
+     * manager's STANDING — his cumulative margin over the field, measured in
+     * standard deviations — and of nothing else. It is deliberately not a
+     * function of the single week: the spread of eleven million season totals
+     * widens with the square root of the gameweek, so a manager can beat the
+     * average by two in week five and still be overtaken by the field fanning
+     * out around him. That is the right behaviour and a per-week direction test
+     * would forbid it. The per-week direction claim belongs to the GAMEWEEK
+     * rank, and the test above this one makes it.
      */
-    expect(netGwPoints(u.current)).toBeLessThan(u.avgOf(u.current.event));
-    expect(u.current.overall_rank).toBeGreaterThan(u.prev.overall_rank);
-    // And at least one week must go the other way, or "responds to the score"
-    // would be satisfied by a line that only ever got worse.
-    const improved = u.rows.slice(1).some((r, i) => r.overall_rank < u.rows[i].overall_rank);
-    expect(improved).toBe(true);
+    const z = (r: (typeof u.rows)[number], i: number) =>
+      (r.total_points - u.rows.slice(0, i + 1).reduce((s, x) => s + u.avgOf(x.event), 0)) /
+      Math.sqrt(r.event);
+    for (let i = 1; i < u.rows.length; i++) {
+      const gained = z(u.rows[i], i) - z(u.rows[i - 1], i - 1);
+      if (gained === 0) continue;
+      expect({
+        gw: u.rows[i].event,
+        follows:
+          gained > 0
+            ? u.rows[i].overall_rank < u.rows[i - 1].overall_rank
+            : u.rows[i].overall_rank > u.rows[i - 1].overall_rank,
+      }).toEqual({ gw: u.rows[i].event, follows: true });
+    }
+    // And both directions have to occur, or a line that only ever moved one way
+    // would satisfy every clause above.
+    const moved = u.rows.slice(1).map((r, i) => r.overall_rank - u.rows[i].overall_rank);
+    expect(moved.some((d) => d < 0)).toBe(true);
+    expect(moved.some((d) => d > 0)).toBe(true);
   });
 });
 
@@ -463,13 +517,31 @@ describe("the demo mini-league agrees with every dashboard it links to", () => {
      * overtaken. Ranking on `total - event_total` is the only definition that
      * makes the arrow mean anything.
      */
-    const expected = [...u.league.standings.results]
-      .sort((a, b) => b.total - b.event_total - (a.total - a.event_total))
-      .map((r) => r.entry);
+    const before = (r: { total: number; event_total: number }) => r.total - r.event_total;
+    const ordered = [...u.league.standings.results].sort((a, b) => before(b) - before(a));
+    /*
+     * Standard-competition ranking, 1-2-2-4, the same rule the current-week
+     * table above obeys, and the same rule `demo.ts` ranks by. `indexOf` was
+     * used here, which is not that rule: it silently assumes no two managers
+     * ever shared a previous total, and reports the wrong place for both of them
+     * when two do.
+     *
+     * NO TIE EXISTS IN TODAY'S FIXTURE — the ten previous totals are ten
+     * distinct numbers — so this branch is not exercised, and saying otherwise
+     * would be inventing a scenario to justify the code. It is here because the
+     * assertion is meant to state the ranking rule rather than to fit one
+     * particular league table: the depth vector that produces these ten totals
+     * is chosen, and a tie is one edit away from existing.
+     */
+    const lastRankOf = new Map<number, number>();
+    ordered.forEach((r, i) => {
+      const tiedWithAbove = i > 0 && before(r) === before(ordered[i - 1]);
+      lastRankOf.set(r.entry, tiedWithAbove ? lastRankOf.get(ordered[i - 1].entry)! : i + 1);
+    });
     for (const r of u.league.standings.results) {
       expect({ entry: r.entry, last: r.last_rank }).toEqual({
         entry: r.entry,
-        last: expected.indexOf(r.entry) + 1,
+        last: lastRankOf.get(r.entry),
       });
     }
     // Somebody has to have moved, or the arrows are never exercised.
@@ -1366,7 +1438,24 @@ describe("the demo bootstrap is a bootstrap the app can read", () => {
      * classifies a pick as template or differential by comparing against that
      * total, so in demo mode almost nothing could read as a differential.
      */
-    expect(Math.abs(total - 1500)).toBeLessThan(25);
+    /*
+     * Tightened from 25 once the 0.1% floor was moved INSIDE the rescale.
+     * Applying it afterwards lifted thirty-eight players off the bottom after
+     * the total had been solved, so the sum came out at 1502.3 — and 25 was
+     * wide enough to keep that green.
+     *
+     * What is left is publication rounding, and this bound is a STATISTICAL
+     * claim about it rather than an arithmetic one. Three hundred figures are
+     * each published to one decimal, so the worst case a bound could have to
+     * survive is 300 × 0.05 = ±15; the demo lands at 1500.8 because three
+     * hundred independent roundings cancel, not because they cannot add up.
+     * Two is therefore a real assertion — it fails long before the rescale is
+     * broken enough to matter, and it would fail on a generator whose rounding
+     * errors were correlated rather than scattered, which is exactly the kind of
+     * mistake (a floor, a clamp, a ceiling applied after the solve) that put the
+     * total at 1502.3 in the first place.
+     */
+    expect(Math.abs(total - 1500)).toBeLessThan(2);
     expect(Math.min(...u.bootstrap.elements.map((e) => parseFloat(e.selected_by_percent)))).toBeGreaterThan(0);
   });
 
@@ -1637,13 +1726,55 @@ describe("every price and every name in the demo is one FPL could have issued", 
      * they fielded roughly £115m of talent while he played by the rules — and
      * every rank on the front page was a measurement of that asymmetry rather
      * than of anything he did. One budget, applied to everyone.
+     *
+     * MEASURED IN GW1 MONEY, which is the only basis the question makes sense
+     * in. This used to sum `now_cost` — today's price — against the opening
+     * budget, and that comparison is wrong in a way that hid a real bug behind
+     * a passing test. A squad bought in August and held appreciates: a £100.0m
+     * fifteen is worth £101.5m by Christmas without its owner spending a penny,
+     * so the assertion was really "no manager has done well", and it failed the
+     * moment the generator started letting squads appreciate at all. Meanwhile
+     * the actual defect it should have caught — the repair loop shopping in
+     * GW20 prices while the bank was charged GW1 prices, leaving every rival
+     * silently holding £3.7m to £6.0m he was never told about — sailed straight
+     * through it.
+     *
+     * So the test crosses two endpoints instead of reading one. `value` on the
+     * GW1 row is squad-plus-bank and every manager in FPL reads exactly his
+     * opening budget there — but in the demo that is an ALGEBRAIC IDENTITY, not
+     * a finding: the bank is defined as the budget minus the same GW1 sum the
+     * value adds back, so the row cannot report anything else however the squad
+     * was chosen. Asserting it proves the arithmetic, which was never in doubt.
+     *
+     * What carries the weight is the pair below it. The picks endpoint is asked
+     * for the same manager's GW1 fifteen and priced in GW1 money; the total plus
+     * the published bank has to come to the budget. That fails if the two
+     * endpoints ever disagree about which fifteen he opened with, and it fails
+     * if either half is priced in the wrong week's money — the actual defect,
+     * which the old `now_cost` sum sailed past. And the bank must be a
+     * REMAINDER, not a hiding place: never short, and never a striker's worth of
+     * cash nobody was told about, which is how the repair loop's GW20 shopping
+     * showed itself.
      */
+    const byId = new Map(u.bootstrap.elements.map((e) => [e.id, e]));
+    // The demo's own price walk, `demo.ts:priceAt`, at gameweek 1.
+    const gw1Cost = (id: number) => {
+      const e = byId.get(id)!;
+      return e.now_cost - Math.round(e.cost_change_start * (1 - 1 / CURRENT_GW));
+    };
     for (const r of u.league.standings.results) {
-      const p = u.picksFor(r.entry, CURRENT_GW);
-      const spend = p.picks.reduce((s, x) => s + u.byId.get(x.element)!.now_cost, 0);
-      expect({ entry: r.entry, over: spend > INITIAL_BUDGET }).toEqual({
+      const first = u.historyFor(r.entry)!.current[0];
+      expect({ entry: r.entry, event: first.event }).toEqual({ entry: r.entry, event: 1 });
+      const opening = u.picksFor(r.entry, 1).picks;
+      const spent = opening.reduce((s, p) => s + gw1Cost(p.element), 0);
+      expect({ entry: r.entry, n: opening.length, outlay: spent + first.bank }).toEqual({
         entry: r.entry,
-        over: false,
+        n: 15,
+        outlay: INITIAL_BUDGET,
+      });
+      expect({ entry: r.entry, bank: first.bank >= 0 && first.bank <= 30 }).toEqual({
+        entry: r.entry,
+        bank: true,
       });
     }
     /*
@@ -1652,10 +1783,13 @@ describe("every price and every name in the demo is one FPL could have issued", 
      * every pass including the last, so it would give up £2.0m of striker to
      * close a £0.3m gap and leave the change sitting in an unspendable bank: a
      * £98.5m squad that came out at £95.2m. Money left on the table is quality
-     * left on the bench.
+     * left on the bench. The bound above covers every rival; the reader is the
+     * one who also spends across the season, so his LAST week is checked too —
+     * a manager who has been trading all year should not have drifted into
+     * holding half a midfielder in cash.
      */
-    const mine = u.picks.picks.reduce((s, x) => s + u.byId.get(x.element)!.now_cost, 0);
-    expect(mine).toBeGreaterThan(INITIAL_BUDGET - 30);
+    const rows = u.history.current;
+    expect(rows[rows.length - 1].bank).toBeLessThanOrEqual(30);
   });
 });
 
@@ -1811,8 +1945,11 @@ describe("the demo's underlying numbers describe the player, not his club", () =
     // Every manager picks fifteen, so the playerbase sums to 1500% and no
     // more. The raw curve summed to ~6,100% — four squads each — and the
     // differential badge is a comparison against that total, so in demo mode
-    // almost nothing ever read as a differential.
-    expect(Math.abs(sum - 1500)).toBeLessThan(25);
+    // almost nothing ever read as a differential. The two is a statistical
+    // bound on three hundred one-decimal roundings, not an arithmetic one; see
+    // "shares out fifteen squad places and no more" for why it is still a real
+    // assertion when the worst case is ±15.
+    expect(Math.abs(sum - 1500)).toBeLessThan(2);
     const sorted = [...own].sort((a, b) => b - a);
     // Top-heavy the way FPL is: a premium above 35%, and a long tail.
     expect(sorted[0]).toBeGreaterThan(35);
@@ -1846,18 +1983,7 @@ describe("the demo's underlying numbers describe the player, not his club", () =
 });
 
 describe("the demo answers about the manager who was asked about", () => {
-  const u = makeDemoUniverse(NOW) as unknown as DemoUniverse & {
-    historyFor: (id: number) => {
-      current: {
-        event: number;
-        total_points: number;
-        value: number;
-        bank: number;
-        active_chip: string | null;
-      }[];
-      chips: { name: string; event: number }[];
-    } | null;
-  };
+  const u = makeDemoUniverse(NOW) as unknown as DemoUniverse;
 
   it("gives every rival his own season rather than the reader's", () => {
     /*
@@ -1882,11 +2008,40 @@ describe("the demo answers about the manager who was asked about", () => {
       });
       expect(last.total_points).not.toBe(mine.current[mine.current.length - 1].total_points);
       totals.add(last.total_points);
-      // His own chips, read off his own season.
-      const used = h!.current.filter((c) => c.active_chip).map((c) => c.active_chip);
+      // His own chips, read off his own season — and read off the endpoint that
+      // FPL really publishes them on. This used to walk `current[].active_chip`,
+      // which worked only because the demo put a field on a rival's history row
+      // that the real feed does not put anywhere.
+      const used = h!.current
+        .map((c) => u.picksFor(r.entry, c.event).active_chip)
+        .filter((c): c is string => c != null);
       expect(h!.chips.map((c) => c.name)).toEqual(used);
     }
     expect(totals.size).toBe(rivals.length);
+  });
+
+  it("answers every manager's history in the same shape", () => {
+    /*
+     * The reader's rows and a rival's rows come from two different builders, and
+     * for a while they published two different documents: the rival's rows
+     * carried `active_chip` and the reader's did not. Nothing read it, which is
+     * the only reason it survived — but the demo exists so the app cannot tell
+     * it from the real feed, and a stub that is richer for nine managers than
+     * for the tenth is a stub the next reader will believe.
+     */
+    const ids = u.leagueFor(900001).standings.results.map((r) => r.entry);
+    expect(ids).toContain(DEMO_ENTRY_ID);
+    expect(ids.length).toBe(10);
+    const keysOf = (id: number) =>
+      Object.keys(u.historyFor(id)!.current[0] as unknown as Record<string, unknown>).sort();
+    const mineKeys = keysOf(DEMO_ENTRY_ID);
+    expect(mineKeys).not.toContain("active_chip");
+    for (const id of ids) {
+      expect({ id, keys: keysOf(id) }).toEqual({ id, keys: mineKeys });
+    }
+    // And the chip array is populated for the reader too, so "same shape" is not
+    // being satisfied by every manager having nothing.
+    expect(u.historyFor(DEMO_ENTRY_ID)!.chips.length).toBeGreaterThan(0);
   });
 
   it("does not invent a season for a manager it has never heard of", () => {
@@ -1925,6 +2080,74 @@ describe("the demo answers about the manager who was asked about", () => {
     expect(finals.size).toBeGreaterThan(3);
   });
 
+  it("lets a squad appreciate over half a season", () => {
+    /*
+     * TEN MANAGERS, TWENTY GAMEWEEKS, AND EVERY ONE OF THEM POORER THAN HE
+     * STARTED — £99.4m to £100.1m, the reader's own team on £99.6m under a red
+     * arrow on the KPI card, as though the app had noticed something wrong with
+     * his season. Nothing was wrong with the arithmetic: the value walk is
+     * FPL's own rule and the league's prices rose by a healthy net £18.6m.
+     *
+     * `sellingPrice` is what closed the gap. FPL pays a seller his purchase
+     * price plus HALF of any rise, and the WHOLE of any fall — so a squad whose
+     * prices move symmetrically bleeds value by construction, and it takes
+     * roughly two pounds of rise to cancel one pound of fall. The generator's
+     * price drift was symmetric about a quality centre, so it handed every
+     * squad in the demo a losing bet.
+     *
+     * FPL's real distribution is not symmetric, and for a reason: a rise is
+     * strangers buying a player, a fall is owners selling one they already
+     * hold. Only the second needs an owner, so falls are rarer and shallower
+     * and most of the league never moves at all. The generator's fall slope is
+     * now the shallow one.
+     *
+     * The assertion is on the DIRECTION and on nobody being absurd, not on any
+     * particular figure — a demo that has to hit £101.1m is a demo pinned to
+     * its own dice.
+     *
+     * It is carried by the MEAN rather than by ten separate `> £100.0m` checks,
+     * because those were a knife-edge dressed as a property. The managers land
+     * between £100.7m and £101.9m; a per-manager floor at exactly £100.0m has
+     * seven tenths of slack under the lowest of them, so any future tweak to
+     * the drift would have failed this test on a rounding difference and told
+     * whoever hit it that appreciation was broken. The mean has room to be
+     * read. The per-manager bounds below are a wide sanity corridor around it —
+     * they exist so that one absurd squad cannot hide inside a healthy average,
+     * not to pin anybody's figure.
+     */
+    const walks = u.leagueFor(900001).standings.results.map((r) => {
+      const rows = u.historyFor(r.entry)!.current;
+      return {
+        entry: r.entry,
+        value: rows[rows.length - 1].value,
+        low: Math.min(...rows.map((x) => x.value)),
+      };
+    });
+    const mean = walks.reduce((s, w) => s + w.value, 0) / walks.length;
+    expect(mean).toBeGreaterThan(INITIAL_BUDGET + 5);
+    expect(mean).toBeLessThan(INITIAL_BUDGET + 40);
+    for (const { entry, value, low } of walks) {
+      /*
+       * `low` is the assertion that pins the fix this test's own subject broke
+       * itself on. The repair loop used to shop in GW20 prices while the bank
+       * was charged GW1 prices, so every manager started the season already
+       * under water in the only ledger the app displays: eighteen manager-weeks
+       * across the league sat below £100.0m, bottoming out at £99.7m, and the
+       * KPI card's red arrow was reporting that honestly. Both halves are
+       * priced in GW1 money now — see `gw1Cost` — and the walk dips at most a
+       * tenth below the opening budget, in the first week or two, before the
+       * rises pull it clear.
+       */
+      expect({
+        entry,
+        ends: value >= INITIAL_BUDGET - 5 && value < INITIAL_BUDGET + 40,
+        never: low >= INITIAL_BUDGET - 10,
+      }).toEqual({ entry, ends: true, never: true });
+    }
+    // The reader's own card is the one that was showing the red arrow.
+    expect(u.entry.last_deadline_value).toBeGreaterThan(INITIAL_BUDGET);
+  });
+
   it("spreads the mini-league across managers of different standards", () => {
     /*
      * All nine rivals were built at depth 0 — the best available man at every
@@ -1938,9 +2161,28 @@ describe("the demo answers about the manager who was asked about", () => {
     const mine = results.find((r) => r.entry === DEMO_ENTRY_ID)!;
     const place = totals.indexOf(mine.total) + 1;
     // Near the top, but beaten: a demo that opens on first place is a demo
-    // nobody believes, and one that opens on last contradicts the rank card.
+    // nobody believes, and one that opens mid-table contradicts the rank card
+    // sitting directly above it, which calls the same manager top six per cent.
     expect(place).toBeGreaterThan(1);
-    expect(place).toBeLessThan(6);
+    expect(place).toBeLessThanOrEqual(3);
+    /*
+     * And the table has to be CONTESTABLE, which the placement alone does not
+     * say. Nine rivals strung out fifty points apart would satisfy everything
+     * above while making `MiniLeague`'s ▲/▼ column unreachable — no gameweek is
+     * worth fifty points, so no rank could ever move. So: at least three other
+     * managers within a realistic run of the reader.
+     *
+     * "A realistic run" needs a number, and the fixture is asked for it rather
+     * than told: the spread between the best and worst single-gameweek score in
+     * this league is what one week can actually move a manager past another. A
+     * hardcoded forty was a figure with nothing behind it, and it would have
+     * gone on passing after a generator change made the weeks flat.
+     */
+    const swings = results.map((r) => r.event_total);
+    const swing = Math.max(...swings) - Math.min(...swings);
+    expect(swing).toBeGreaterThan(25);
+    const near = totals.filter((t) => t !== mine.total && Math.abs(t - mine.total) <= swing);
+    expect(near.length).toBeGreaterThanOrEqual(3);
   });
 
   it("answers an unplayed gameweek with an unplayed gameweek", () => {
@@ -1957,5 +2199,135 @@ describe("the demo answers about the manager who was asked about", () => {
     expect(future.elements.every((e) => (e.explain ?? []).length === 0)).toBe(true);
     // And it is genuinely a different document from the one it used to copy.
     expect(now.elements.some((e) => e.stats.total_points > 0)).toBe(true);
+  });
+});
+
+describe("the demo's availability flags describe the same player its match feed does", () => {
+  const u = makeDemoUniverse(NOW) as unknown as DemoUniverse;
+  const els = u.bootstrap.elements;
+  const lastRounds = (id: number, n: number) => u.elementHistory(id)!.history.slice(-n);
+
+  it("does not flag a man out while its own team sheets keep naming him", () => {
+    /*
+     * THE DEFECT. `status`, `news` and `chance_of_playing_next_round` were
+     * `id % 53` and `id % 37`, and `teamSheet` never read any of them. So three
+     * ever-presents — every minute of all twenty gameweeks, ninety of them in
+     * the week on screen — were published as `status: "i"` with a zero chance
+     * of playing. `XP_CONFIG.statusProb.i` is 0, so the optimizer rated the
+     * highest-minute midfielder in the game at exactly 0.00 xP and ranked him
+     * last of three hundred, beneath men who have never been named in a squad.
+     *
+     * A flag that says a player is out is a claim about the feed beside it.
+     */
+    const out = els.filter((e) => e.status === "i" || e.chance_of_playing_next_round === 0);
+    expect(out.length).toBeGreaterThan(2);
+    for (const e of out) {
+      const recent = lastRounds(e.id, 1);
+      expect({ id: e.id, playedSinceBeingRuledOut: recent.some((r) => r.minutes > 0) }).toEqual({
+        id: e.id,
+        playedSinceBeingRuledOut: false,
+      });
+    }
+  });
+
+  it("keeps the three availability fields telling one story", () => {
+    for (const e of els) {
+      const zeroed = e.status === "i";
+      expect({
+        id: e.id,
+        agree:
+          zeroed
+            ? e.chance_of_playing_next_round === 0 && e.news.length > 0
+            : e.status === "d"
+              ? e.chance_of_playing_next_round === 75 && e.news.length > 0
+              : e.chance_of_playing_next_round === null && e.news === "",
+      }).toEqual({ id: e.id, agree: true });
+    }
+  });
+
+  it("leaves an injured man out of every squad in the universe", () => {
+    /*
+     * The demo manager's ten pinned starters are named by `mustStart`, and an
+     * injured player is filtered off the team sheet before that pin is applied.
+     * If a squad builder could select one, he would silently fail to appear —
+     * a second blanking starter, a second auto-substitution, and a demo that
+     * stopped telling the story its comments promise.
+     */
+    const outIds = new Set(els.filter((e) => e.status === "i").map((e) => e.id));
+    expect(outIds.size).toBeGreaterThan(0);
+    const squads: number[][] = [
+      u.picksFor(DEMO_ENTRY_ID, CURRENT_GW)!.picks.map((p) => p.element),
+      ...u
+        .leagueFor(900001)
+        .standings.results.map((r) => u.picksFor(r.entry, CURRENT_GW)!.picks.map((p) => p.element)),
+    ];
+    for (const s of squads) {
+      expect(s.filter((id) => outIds.has(id))).toEqual([]);
+    }
+  });
+
+  it("counts a start as being named, not as surviving an hour", () => {
+    /*
+     * `starts` was `minutes >= 60`, which is a fair proxy for a finished match
+     * and plain wrong for one in progress: the two GW20 fixtures still being
+     * played credit 58 minutes, so all forty-four men on those pitches reported
+     * `starts: 0` for a week they had started. The playing-time model reads
+     * recent starts to decide who is nailed on, so the demo was telling it that
+     * two entire clubs had been dropped.
+     */
+    const inPlay = els
+      .map((e) => u.elementHistory(e.id)!.history[CURRENT_GW - 1])
+      // 58 is the clock in the two fixtures still being played; a 30-minute
+      // substitute in a FINISHED GW20 match is a different case and is
+      // correctly not a start.
+      .filter((r) => r.minutes === 58);
+    expect(inPlay.length).toBeGreaterThan(20);
+    expect(inPlay.every((r) => r.starts === 1)).toBe(true);
+    // And a substitute in a finished match is still not a starter.
+    const cameOn = els
+      .flatMap((e) => u.elementHistory(e.id)!.history.slice(0, CURRENT_GW - 1))
+      .filter((r) => r.minutes > 0 && r.minutes < 40);
+    expect(cameOn.length).toBeGreaterThan(0);
+    expect(cameOn.every((r) => r.starts === 0)).toBe(true);
+  });
+});
+
+describe("the demo prices its players on the ladders FPL actually uses", () => {
+  const u = makeDemoUniverse(NOW) as unknown as DemoUniverse;
+
+  it("keeps every position inside its own market", () => {
+    /*
+     * Price is evidence in this app, not decoration: `priorPStart` and
+     * `priceFactor` in the projection model both read it as a proxy for how
+     * highly a player is rated, and both are calibrated against FPL's real
+     * ladders. Those ladders are per position — the entire keeper market lives
+     * under £6.0m and the entire defender market under £7.5m, while only
+     * midfielders and forwards reach the teens.
+     *
+     * The demo set a single slope per position for the SEASON-START price and
+     * then added up to £1.2m of price drift on top, so eleven keepers finished
+     * above £6.0m and seven defenders above £7.0m — prices the game has never
+     * issued, being fed to a model that reads them as a rating.
+     */
+    const band: Record<number, [number, number]> = { 1: [38, 60], 2: [38, 75], 3: [38, 145], 4: [38, 150] };
+    for (const e of u.bootstrap.elements) {
+      const [lo, hi] = band[e.element_type];
+      expect({ id: e.id, name: e.web_name, inBand: e.now_cost >= lo && e.now_cost <= hi }).toEqual({
+        id: e.id,
+        name: e.web_name,
+        inBand: true,
+      });
+    }
+  });
+
+  it("still spreads each position across its band rather than piling on the cap", () => {
+    // A clamp that everybody hits is a constant, and a constant price tells the
+    // model nothing. The top of each market has to be reachable and rare.
+    for (const t of [1, 2, 3, 4]) {
+      const prices = u.bootstrap.elements.filter((e) => e.element_type === t).map((e) => e.now_cost);
+      const top = Math.max(...prices);
+      expect({ t, distinct: new Set(prices).size >= 8 }).toEqual({ t, distinct: true });
+      expect({ t, rare: prices.filter((p) => p === top).length <= 3 }).toEqual({ t, rare: true });
+    }
   });
 });

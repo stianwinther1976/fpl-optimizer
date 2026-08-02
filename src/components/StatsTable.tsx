@@ -3,18 +3,43 @@
 import { useMemo, useState } from "react";
 import type { TeamData } from "@/lib/fpl";
 import { fmtPrice, POSITION_NAMES } from "@/lib/rules";
-import { projectAll } from "@/lib/xp";
+import type { PlayerXp } from "@/lib/xp";
 import type { ElementType } from "@/lib/types";
 import { PlayerAvatar } from "./Pitch";
 
 type SortKey = "xp" | "total_points" | "form" | "now_cost" | "selected" | "xgi";
 
+/** Stable identity, so the row memo below does not rebuild on every render. */
+const NO_XP: Map<number, PlayerXp> = new Map();
+
 export default function StatsTable({
   data,
   onSelect,
+  xp: sharedXp,
 }: {
   data: TeamData;
   onSelect?: (el: import("@/lib/types").Element) => void;
+  /*
+   * ONE PROJECTION, NOT TWO — AND REQUIRED, NOT OPTIONAL.
+   *
+   * This used to run its own `projectAll` with no `pastSeason`, while the
+   * dashboard ran one WITH it. So the two tabs disagreed about the same
+   * player, and they disagreed hardest exactly where the number matters most:
+   * a player on no minutes this season — a new signing, a returning long-term
+   * absentee — is projected almost entirely from last season's record, and
+   * this table was the one place in the app quoting him without it. Two xP
+   * columns, one player, no way for the reader to tell which the optimizer had
+   * used. It was also a second full projection of the league on every mount.
+   *
+   * The prop is required rather than defaulted on purpose. A fallback here
+   * could not be reached — the dashboard returns null from its projection
+   * under exactly the condition that would trigger it — so it was an untested
+   * branch that would have been wrong the first time anyone leaned on it, and
+   * it re-created the bug in miniature by reading module state React cannot
+   * see change. `null` means "there is no next gameweek", which is the
+   * caller's business to decide, not this table's to guess around.
+   */
+  xp: Map<number, PlayerXp> | null;
 }) {
   const [posFilter, setPosFilter] = useState<0 | ElementType>(0);
   const [sortKey, setSortKey] = useState<SortKey>("xp");
@@ -33,14 +58,7 @@ export default function StatsTable({
     [data.bootstrap]
   );
 
-  const nextEvent = data.bootstrap.events.find((e) => e.is_next)?.id ?? null;
-  const xp = useMemo(
-    () =>
-      nextEvent != null
-        ? projectAll({ bootstrap: data.bootstrap, fixtures: data.fixtures, nextEvent })
-        : new Map(),
-    [data, nextEvent]
-  );
+  const xp = sharedXp ?? NO_XP;
 
   // Pre-season everyone is on 0 minutes/points — don't hide the whole game then.
   const playedGws = data.bootstrap.events.filter((e) => e.finished).length;

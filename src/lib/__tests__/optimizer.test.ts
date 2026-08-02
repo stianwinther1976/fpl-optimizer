@@ -74,14 +74,14 @@ describe("mock universe sanity", () => {
     ).toEqual([]);
   });
   it("projects positive xP for available players", () => {
-    const xp = projectAll({ bootstrap, fixtures, nextEvent: 11 });
+    const xp = projectAll({ pastSeason: undefined, bootstrap, fixtures, nextEvent: 11 });
     const values = [...xp.values()].map((v) => v.total);
     expect(Math.max(...values)).toBeGreaterThan(0);
   });
 });
 
 describe("pickBestXi", () => {
-  const xp = projectAll({ bootstrap, fixtures, nextEvent: 11 });
+  const xp = projectAll({ pastSeason: undefined, bootstrap, fixtures, nextEvent: 11 });
   const xi = pickBestXi(owned.map((o) => o.element), (id) => xp.get(id)?.next ?? 0);
 
   it("returns a legal formation with 11 starters and 4 on the bench", () => {
@@ -209,8 +209,8 @@ describe("xp model — opponent strength & priors", () => {
       team_h_difficulty: 3, team_a_difficulty: 3,
       kickoff_time: null, finished: false, team_h_score: null, team_a_score: null,
     }];
-    const vsWeak = projectAll({ bootstrap: b, fixtures: mkFx(strongOpp), nextEvent: 11, horizon: 1 }).get(el.id)!.next;
-    const vsStrong = projectAll({ bootstrap: b, fixtures: mkFx(weakOpp), nextEvent: 11, horizon: 1 }).get(el.id)!.next;
+    const vsWeak = projectAll({ pastSeason: undefined, bootstrap: b, fixtures: mkFx(strongOpp), nextEvent: 11, horizon: 1 }).get(el.id)!.next;
+    const vsStrong = projectAll({ pastSeason: undefined, bootstrap: b, fixtures: mkFx(weakOpp), nextEvent: 11, horizon: 1 }).get(el.id)!.next;
     // team index 0 has LOWEST ratings (weakest), index 19 highest (strongest)
     expect(vsWeak).toBeGreaterThan(vsStrong);
   });
@@ -228,7 +228,7 @@ describe("xp model — opponent strength & priors", () => {
     cheap.expected_goals = el.expected_goals; cheap.expected_assists = el.expected_assists;
     cheap.ict_index = el.ict_index; cheap.ep_next = null; el.ep_next = null;
     cheap.team = el.team;
-    const xp = projectAll({ bootstrap: b, fixtures: makeMockFixtures(), nextEvent: 11, horizon: 1 });
+    const xp = projectAll({ pastSeason: undefined, bootstrap: b, fixtures: makeMockFixtures(), nextEvent: 11, horizon: 1 });
     expect(xp.get(el.id)!.next).toBeGreaterThan(xp.get(cheap.id)!.next);
   });
 });
@@ -241,14 +241,14 @@ describe("xp model — DGW/blank GWs and discounting", () => {
     const fx = makeMockFixtures().filter(
       (f) => !(f.event === 11 && (f.team_h === el.team || f.team_a === el.team))
     );
-    const xp = projectAll({ bootstrap: b, fixtures: fx, nextEvent: 11, horizon: 1 });
+    const xp = projectAll({ pastSeason: undefined, bootstrap: b, fixtures: fx, nextEvent: 11, horizon: 1 });
     expect(xp.get(el.id)!.next).toBe(0);
   });
   it("a double gameweek projects more than a single", () => {
     const b = makeMockBootstrap();
     const el = b.elements.find((e) => e.element_type === 3 && e.minutes > 1000)!;
     const base = makeMockFixtures();
-    const single = projectAll({ bootstrap: b, fixtures: base, nextEvent: 11, horizon: 1 });
+    const single = projectAll({ pastSeason: undefined, bootstrap: b, fixtures: base, nextEvent: 11, horizon: 1 });
     const extra = {
       id: 9999,
       event: 11,
@@ -261,11 +261,11 @@ describe("xp model — DGW/blank GWs and discounting", () => {
       team_h_score: null,
       team_a_score: null,
     };
-    const dgw = projectAll({ bootstrap: b, fixtures: [...base, extra], nextEvent: 11, horizon: 1 });
+    const dgw = projectAll({ pastSeason: undefined, bootstrap: b, fixtures: [...base, extra], nextEvent: 11, horizon: 1 });
     expect(dgw.get(el.id)!.next).toBeGreaterThan(single.get(el.id)!.next * 1.5);
   });
   it("totalDiscounted is below total over a multi-GW horizon", () => {
-    const xp = projectAll({ bootstrap, fixtures, nextEvent: 11, horizon: 5 });
+    const xp = projectAll({ pastSeason: undefined, bootstrap, fixtures, nextEvent: 11, horizon: 5 });
     const p = [...xp.values()].find((v) => v.total > 5)!;
     expect(p.totalDiscounted).toBeLessThan(p.total);
     expect(p.totalDiscounted).toBeGreaterThan(p.total * 0.6);
@@ -390,8 +390,8 @@ describe("xp model — recent starts", () => {
   it("a player who lost his place projects lower; a new starter higher", () => {
     const b = makeMockBootstrap();
     const el = b.elements.find((e) => e.element_type === 3 && e.minutes > 1500)!;
-    const base = projectAll({ bootstrap: b, fixtures, nextEvent: 11, horizon: 3 });
-    const benched = projectAll({
+    const base = projectAll({ pastSeason: undefined, bootstrap: b, fixtures, nextEvent: 11, horizon: 3 });
+    const benched = projectAll({ pastSeason: undefined,
       bootstrap: b,
       fixtures,
       nextEvent: 11,
@@ -399,7 +399,7 @@ describe("xp model — recent starts", () => {
       // started 0 of last 5
       recentForm: new Map([[el.id, { startShare: 0, minsPerGame: 0, minsPerStart: null }]]),
     });
-    const nailed = projectAll({
+    const nailed = projectAll({ pastSeason: undefined,
       bootstrap: b,
       fixtures,
       nextEvent: 11,
@@ -430,7 +430,7 @@ describe("pre-season: leans on FPL's ep_next (premium-aware)", () => {
     premium.now_cost = 145;
     premium.ep_next = "7.5"; // FPL rates this player highly
     const run = () =>
-      projectAll({ bootstrap: b, fixtures: makeMockFixtures(), nextEvent: 11, horizon: 1 });
+      projectAll({ pastSeason: undefined, bootstrap: b, fixtures: makeMockFixtures(), nextEvent: 11, horizon: 1 });
     const high = run();
     const withHigh = high.get(premium.id)!.next;
     const rest = b.elements.filter((e) => e.element_type === 4 && e.id !== premium.id);
@@ -753,7 +753,7 @@ describe("valueCapOf", () => {
 });
 
 describe("benchAwareScore (bench priced at its measured autosub value)", () => {
-  const xp = projectAll({ bootstrap, fixtures, nextEvent: 11 });
+  const xp = projectAll({ pastSeason: undefined, bootstrap, fixtures, nextEvent: 11 });
   const score = (id: number) => xp.get(id)?.totalDiscounted ?? 0;
   const squad = owned.map((o) => o.element);
 
@@ -795,7 +795,7 @@ describe("buildBenchAwareSquad", () => {
     e.is_next = e.id === 1;
   });
   const fx = makeMockFixtures().map((f) => ({ ...f, event: (f.event ?? 11) - 10, finished: false }));
-  const xp = projectAll({ bootstrap: b, fixtures: fx, nextEvent: 1, horizon: 5 });
+  const xp = projectAll({ pastSeason: undefined, bootstrap: b, fixtures: fx, nextEvent: 1, horizon: 5 });
   const score = (id: number) => xp.get(id)?.totalDiscounted ?? 0;
 
   it("returns a legal fifteen inside the budget", () => {

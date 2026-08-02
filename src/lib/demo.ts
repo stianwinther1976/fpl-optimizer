@@ -81,8 +81,33 @@ function makeElements() {
        * or above £4.0m, keepers and defenders top out near £6.0m and £7.0m, and
        * only midfielders and forwards reach the double-digit prices.
        */
+      /*
+       * THE SLOPES ARE PER POSITION BECAUSE FPL'S MARKET IS. A goalkeeper and
+       * a striker are not priced on the same ladder: the whole keeper market
+       * lives inside £4.0m–£6.0m and the whole defender market inside
+       * £4.0m–£7.5m, while only midfielders and forwards reach the teens.
+       *
+       * The slopes below used to be 4 and 6, which put the best keeper at
+       * £6.0m and the best defender at £7.0m BEFORE the season's price drift
+       * was added — and the drift is worth up to £1.2m. So eleven keepers
+       * ended the twenty gameweeks above £6.0m and seven defenders above
+       * £7.0m, prices FPL has never issued. That is not cosmetic: `priorPStart`
+       * and `priceFactor` in the projection model both read price as evidence
+       * of how highly a player is rated, calibrated against the real ladders,
+       * so an £7.2m keeper was being told he was a premium asset.
+       *
+       * They are set so the top of each position's market lands AT OR JUST
+       * UNDER its real ceiling once the drift is added, and `POSITION_CEILING`
+       * below enforces the bound rather than trusting the arithmetic. Only the
+       * keeper and defender ladders actually reach theirs — the best demo
+       * midfielder comes out around £13.3m against a £14.5m ceiling. That gap
+       * is the honest consequence of a clamp rather than a target, and it is
+       * worth knowing when reading the demo's premium midfielders: there are
+       * none of the very top tier, so `priceFactor` never sees its highest
+       * input there.
+       */
       const startPrice =
-        [0, 40, 40, 45, 45][t] + Math.round([0, 4, 6, 15, 18][t] * (quality - 1));
+        [0, 40, 40, 45, 45][t] + Math.round([0, 1.6, 4.6, 15, 18][t] * (quality - 1));
       /*
        * And the season's price movement is a function of quality too. It was
        * `((id * 3) % 7) - 3` — ±0.3m assigned by id, so the players who had
@@ -102,11 +127,65 @@ function makeElements() {
        * squad priced out at £100.1m against a £100.0m budget and the walk threw
        * outright. A season in which the average team loses value is not a
        * season anyone recognises: the whole point of holding a rising player is
-       * that he rises. Centring at 2.6 and tripling the slope gives the shape
-       * FPL actually has — a long tail of small fallers, a short head of real
-       * risers worth about £1.0m over half a season.
+       * that he rises. Centring at 2.6 fixed the direction of the LEAGUE, which
+       * turned out not to be the same question as the direction of a TEAM — see
+       * the asymmetry below, which is the part that was still missing.
        */
-      const nowCost = Math.max(38, startPrice + Math.round((quality - 2.6) * 3) + ((id * 7) % 5) - 2);
+      // £3.8m is FPL's floor; the ceilings are the top of each position's real
+      // market. Both ends are clamped, and `cost_change_start` is read back off
+      // the clamped price below so the season-start arithmetic still closes.
+      const POSITION_CEILING = [0, 60, 75, 145, 150];
+      /*
+       * THE MOVEMENT IS ASYMMETRIC, because FPL's is.
+       *
+       * A rise is caused by people buying a player; a fall by people selling
+       * one they already own. That is not a symmetry — you can only sell what
+       * you hold, so the men who fall hard are the ones who were popular and
+       * disappointed, while the great majority of the league is owned by
+       * nobody and simply sits still. FPL's actual distribution over half a
+       * season is a short head of real risers worth £1.0-1.7m, a broad middle
+       * that has not moved, and a shallow tail of falls.
+       *
+       * A SYMMETRIC SLOPE PUT EVERY MANAGER IN THE DEMO UNDERWATER, and the
+       * reason is `sellingPrice`: FPL pays a seller the purchase price plus
+       * HALF the rise, but the whole of the fall. A squad has to rise about
+       * twice as much as it falls just to stand still. The old slope gave the
+       * league a healthy net +£18.6m and still walked all ten managers down
+       * to £99.4-100.1m by GW20, with the reader's own team at £99.6m — a
+       * number no active manager sees twenty gameweeks in, printed under a
+       * red arrow on the KPI card as though the app had spotted something.
+       *
+       * Widening the slope does not fix it (the falls widen with it). Making
+       * the fall the shallower half of the two does, and it is the half FPL
+       * actually damps.
+       */
+      const fromCentre = quality - 2.6;
+      const drift = Math.round(fromCentre > 0 ? fromCentre * 4 : fromCentre * 1.5);
+      const nowCost = Math.min(
+        POSITION_CEILING[t],
+        Math.max(38, startPrice + drift + ((id * 7) % 5) - 2)
+      );
+      /*
+       * How far this man has travelled toward his next price change, signed.
+       * Computed ONCE and used twice — for `price_change_percent` and for the
+       * transfer flow that is supposed to be causing it — because the two were
+       * separate expressions that had quietly stopped agreeing.
+       *
+       * The ordinary case is centred on zero rather than running 0..59. Nothing
+       * on screen changes (anything under ±85 reads "unlikely to change"), but a
+       * demo in which every unflagged player is drifting upward gives the whole
+       * league net transfers IN, which is not a market.
+       */
+      const pricePressure =
+        id % 23 === 0
+          ? 104
+          : id % 17 === 0
+            ? 91
+            : id % 19 === 0
+              ? -103
+              : id % 13 === 0
+                ? -88
+                : ((id * 11) % 121) - 60;
       elements.push({
         id,
         web_name: `${TEAM_CODES[team - 1]} ${["Keeper", "Back", "Mid", "Striker"][t - 1]} ${i}`,
@@ -119,34 +198,41 @@ function makeElements() {
         // Price Change Predictor: most players sit still, a handful of each
         // direction are near or past the threshold so the UI has something real
         // to draw. Deterministic, like the rest of the demo feed.
-        price_change_percent: String(
-          id % 23 === 0 ? 104 : id % 17 === 0 ? 91 : id % 19 === 0 ? -103 : id % 13 === 0 ? -88 : (id * 11) % 60
-        ),
-        cost_change_event: id % 23 === 0 ? 1 : id % 19 === 0 ? -1 : 0,
+        price_change_percent: String(pricePressure),
         /*
-         * Availability, and ALL THREE FIELDS HAVE TO AGREE. The three ternaries
-         * used to key off different divisors — `status` branched on `% 53` for
-         * the injured case while `news` and `chance_of_playing_next_round`
-         * branched on `% 37` alone — so every status-"i" player carried an empty
-         * news line and a null chance. `XP_CONFIG.statusProb.i` is 0, so the
-         * optimizer rated those four men at exactly 0.00 xP and ranked them
-         * last of 240 while the demo's own live feed had three of them playing
-         * ninety minutes, and `PlayerModal` had no text to explain why. An
-         * injury is a fact about a player, not about a field.
+         * This week's movement, READ OFF THE WALK rather than invented. It was
+         * `id % 23 ? 1 : id % 19 ? -1 : 0`, which disagreed with `priceAt` for
+         * twenty-six of the twenty-eight players it flagged: they were
+         * published as having moved this week while the price history said they
+         * had not. Nothing in the app reads this field today, which is exactly
+         * why it was free to drift — and exactly why the first price-change UI
+         * to read it would have started contradicting the chart beside it.
+         * `priceAt(e, CURRENT_GW - 1)` is the price a week ago, so the
+         * difference is `round(cost_change_start / CURRENT_GW)`.
          */
-        ...(() => {
-          const doubt = id % 37 === 0;
-          const inj = !doubt && id % 53 === 0;
-          return {
-            status: doubt ? "d" : inj ? "i" : "a",
-            news: doubt
-              ? "Knock - 75% chance of playing"
-              : inj
-                ? "Hamstring injury - expected back late February"
-                : "",
-            chance_of_playing_next_round: doubt ? 75 : inj ? 0 : null,
-          };
-        })(),
+        cost_change_event: Math.round((nowCost - startPrice) / CURRENT_GW),
+        /*
+         * Availability. PLACEHOLDERS — every one of these is rewritten in the
+         * season write-back from the minutes the player actually played.
+         *
+         * They used to be three ternaries over `id % 53` and `id % 37`, and the
+         * first repair only made the three fields agree WITH EACH OTHER. They
+         * still did not agree with the match feed: `teamSheet` never consulted
+         * `status`, so ids 53, 106 and 159 carried `status: "i"` and
+         * `chance_of_playing_next_round: 0` while the demo's own live feed had
+         * them playing every minute of all twenty gameweeks, including ninety
+         * in the week the reader is looking at. `XP_CONFIG.statusProb.i` is 0,
+         * so the optimizer published 0.00 xP for the highest-minute midfielder
+         * in the game and ranked him last of three hundred — beneath men who
+         * have never been named in a squad.
+         *
+         * An injury is an EVENT, so it is now generated as one: `injuredFrom`
+         * below takes the player off the team sheet from a given gameweek
+         * onwards, and the flag is read back off the absence he leaves behind.
+         */
+        status: "a",
+        news: "",
+        chance_of_playing_next_round: null as number | null,
         // Placeholders. Every one of these is overwritten in the season
         // write-back from what the player actually did across the twenty
         // gameweeks — they were previously left as written here, which made
@@ -174,14 +260,28 @@ function makeElements() {
          * This week's transfer market. The price-change predictor reads these
          * two and nothing else; with both missing it had a threshold and no
          * flow to compare it against, so every player in the demo sat at
-         * exactly net zero and the panel drew twenty blank rows. They agree in
-         * sign with `cost_change_event` above, because a price rise is caused
-         * by net transfers in.
+         * exactly net zero and the panel drew twenty blank rows.
+         *
+         * The surplus is `pricePressure` itself, so the net flow and the
+         * progress bar beside it always point the same way and cannot drift
+         * apart again. The comment here used to claim they agreed in sign with
+         * `cost_change_event` instead, and they did not: `cost_change_event` is
+         * `round(cost_change_start / 20)`, one twentieth of a whole season's
+         * drift, which rounds to zero for everyone but the very best and is
+         * never negative at all. It is a correct reading of the price WALK and
+         * simply has nothing to do with this week's market. The field these
+         * numbers belong beside is the one the predictor pairs them with.
          */
         transfers_in_event:
-          3_000 + Math.round(60_000 * q) + ((id * 7_919) % 40_000) + (id % 23 === 0 ? 260_000 : 0),
+          3_000 +
+          Math.round(60_000 * q) +
+          ((id * 7_919) % 40_000) +
+          (pricePressure > 0 ? 2_500 * pricePressure : 0),
         transfers_out_event:
-          3_000 + Math.round(60_000 * q) + ((id * 104_729) % 40_000) + (id % 19 === 0 ? 260_000 : 0),
+          3_000 +
+          Math.round(60_000 * q) +
+          ((id * 104_729) % 40_000) +
+          (pricePressure < 0 ? -2_500 * pricePressure : 0),
         // Generation inputs, not display fields. `_quality` drives how often the
         // man returns; `_nailed` decides whether he starts or is a rotation
         // risk. Both are stripped before the bootstrap is served.
@@ -443,6 +543,8 @@ export function makeDemoUniverse(now: number) {
     opponent: number;
     wasHome: boolean;
     minutes: number;
+    /** Named in the eleven. Not the same question as "played an hour". */
+    started: boolean;
     goals: number;
     assists: number;
     saves: number;
@@ -481,6 +583,41 @@ export function makeDemoUniverse(now: number) {
   /** Substitution clock: who comes off when, once a match is over. */
   const SUB_MINUTES = [60, 70, 80];
 
+  /*
+   * ============================ THE TREATMENT ROOM ============================
+   *
+   * Which players are injured, and FROM WHEN. This is the only place in the
+   * demo that decides it; `teamSheet` reads it to leave a man out, the squad
+   * builders read it to not buy him, and the season write-back reads the hole
+   * it leaves in his minutes to publish `status`, `news` and
+   * `chance_of_playing_next_round`. One fact, three consumers, no way for them
+   * to disagree — which is exactly what the previous version had no way to
+   * guarantee, because the flag was a function of the id and the minutes were a
+   * function of the generator and nothing connected the two.
+   *
+   * The injury lands one to three gameweeks back, so the player's recent
+   * history shows the absence the flag is claiming. That matters beyond
+   * tidiness: the app's playing-time model reads recent starts, and a man
+   * flagged out who is still starting every week is a training example that
+   * says the flag means nothing.
+   *
+   * `CURRENT_GW - 1 - (e.id % 3)` is that window; `CURRENT_GW - (e.id % 3)` was
+   * not. It ran zero to two back, so a third of the treatment room was injured
+   * only from the gameweek that is still being played — flagged out on the card
+   * with a completed history in which they had never missed a minute, which is
+   * exactly the training example the paragraph above says not to publish.
+   */
+  const injuredFrom = new Map<number, number>();
+  for (const e of elements) {
+    if (e.id % 37 === 0) continue; // reserved for knocks, which do not miss matches
+    if (e.id % 53 !== 0) continue;
+    injuredFrom.set(e.id, CURRENT_GW - 1 - (e.id % 3));
+  }
+  /** Is he in the treatment room in this gameweek? */
+  const injuredIn = (id: number, gw: number) => (injuredFrom.get(id) ?? Infinity) <= gw;
+  /** Is he in it right now — which is what the bootstrap's flag describes? */
+  const injuredNow = (id: number) => injuredIn(id, CURRENT_GW);
+
   const teamSheet = (
     teamId: number,
     gw: number,
@@ -491,9 +628,12 @@ export function makeDemoUniverse(now: number) {
     // start every week and the wobble is deterministic in the gameweek.
     const rank = (e: any) =>
       qualityOf.get(e.id)! + (nailedOf.has(e.id) ? 2.5 : 0) + rnd(e.id * 31 + gw * 1009) * 1.5;
+    // An injured man is not dropped, he is UNAVAILABLE — so the injury filter
+    // sits ahead of `mustStart` rather than beside it. Nothing pins him,
+    // because the squad builders below never select a man who is out.
     const avail = rosterOf
       .get(teamId)!
-      .filter((e) => !mustSit.has(e.id))
+      .filter((e) => !mustSit.has(e.id) && !injuredIn(e.id, gw))
       .sort((a, b) => rank(b) - rank(a));
 
     const keepers = avail.filter((e) => e.element_type === 1);
@@ -541,12 +681,23 @@ export function makeDemoUniverse(now: number) {
     const mustStart = squadCtx?.mustStart ?? NONE;
     const mustSit = squadCtx?.mustSit ?? NONE;
     const minutesOf = new Map<number, number>();
+    /*
+     * WHO WAS NAMED, recorded rather than inferred. `starts` was reconstructed
+     * afterwards as `minutes >= 60`, which is a decent proxy for a finished
+     * match and simply false for one in progress: the two GW20 fixtures still
+     * being played credit 58 minutes, so all forty-four men on those pitches
+     * published `starts: 0` for a week they had started. The playing-time model
+     * reads recent starts to decide whether a man is nailed on, so the demo was
+     * telling it that two whole clubs had been benched en masse.
+     */
+    const startedIds = new Set<number>();
     for (const f of gwFixtures) {
       const finished = f.finished;
       const inPlay = f.started && !f.finished;
       if (!f.started) continue;
       for (const teamId of [f.team_h, f.team_a]) {
         const { gk, xi, bench } = teamSheet(teamId, gw, mustStart, mustSit);
+        for (const e of [gk, ...xi]) startedIds.add(e.id);
         if (inPlay) {
           // 58 minutes gone, nobody withdrawn yet: 11 × 58, and the bench is
           // still the bench.
@@ -599,7 +750,7 @@ export function makeDemoUniverse(now: number) {
        */
       const cardRate = [0, 0.02, 0.13, 0.11, 0.07][e.element_type];
       const yellow = !dnp && rnd(e.id + 613 + gw * 241) < cardRate ? 1 : 0;
-      return { e, f, inPlay, minutes, goals, assists, saves, yellow };
+      return { e, f, inPlay, minutes, goals, assists, saves, yellow, started: startedIds.has(e.id) };
     });
 
     // PASS 2 — the scoreline IS the sum of the goals the live feed records. It
@@ -698,6 +849,7 @@ export function makeDemoUniverse(now: number) {
           opponent: p.f.team_h === p.e.team ? p.f.team_a : p.f.team_h,
           wasHome: p.f.team_h === p.e.team,
           minutes: p.minutes,
+          started: p.started,
           goals: p.goals,
           assists: p.assists,
           saves: p.saves,
@@ -758,8 +910,14 @@ export function makeDemoUniverse(now: number) {
     }
   }
 
+  /*
+   * A club's men at a position, in depth-chart order — and only the fit ones.
+   * Every squad in the universe is drawn through here or through
+   * `repairToBudget`, so filtering once is what keeps `mustStart` from ever
+   * pinning a man the team sheet has already ruled out.
+   */
   const byTeamType = (team: number, t: number) =>
-    elements.filter((e) => e.team === team && e.element_type === t);
+    elements.filter((e) => e.team === team && e.element_type === t && !injuredNow(e.id));
 
   /*
    * ============================== THE SQUAD ==============================
@@ -784,7 +942,35 @@ export function makeDemoUniverse(now: number) {
    * cannot produce an illegal or unaffordable squad because it never leaves the
    * legal set.
    */
+  /**
+   * What a player cost in a given gameweek: his current price, less the share
+   * of this season's movement that had not happened yet. `priceAt(e, 0)` is the
+   * season-start price `now_cost - cost_change_start`, which is what
+   * `purchasePriceFor` falls back to, and `priceAt(e, CURRENT_GW)` is exactly
+   * `now_cost`. Both ends have to hold or the ledger and the bootstrap disagree
+   * about the same player in the same week.
+   */
+  const priceAt = (e: { now_cost: number; cost_change_start: number }, gw: number) =>
+    e.now_cost - Math.round(e.cost_change_start * (1 - gw / CURRENT_GW));
+
   const SQUAD_BUDGET = INITIAL_BUDGET - 15; // £1.5m held back, as most managers do
+  /*
+   * A SQUAD IS BOUGHT IN GW1 PRICES, NOT IN TODAY'S.
+   *
+   * Both the repair and the reinvestment below used to measure a fifteen with
+   * `now_cost` — the GW20 price — against a GW1 budget, and the walk that
+   * publishes the manager's bank then charged him `priceAt(e, 1)`. Those are
+   * not the same money: a riser carries up to £1.3m of this season's drift, so
+   * the squad the repair thought it had spent £98.5m on had actually cost
+   * £94.0m, and every rival went to the mini-league table sitting on £3.7m to
+   * £6.0m of unspent cash under a line claiming £1.5m was held back. The
+   * reader's own bank read a flat £5.2m for sixteen straight gameweeks.
+   *
+   * Measuring in the currency the purchase is actually made in is the whole
+   * fix, and it has to be BOTH functions: repairing in one basis and
+   * reinvesting in the other just moves the discrepancy.
+   */
+  const gw1Cost = (e: { now_cost: number; cost_change_start: number }) => priceAt(e, 1);
   const QUOTA: Record<number, number> = { 1: 2, 2: 5, 3: 5, 4: 3 };
   const pointsOf = (e: any) => formPointsOf.get(e.id) ?? 0;
 
@@ -802,7 +988,7 @@ export function makeDemoUniverse(now: number) {
    */
   const repairToBudget = (held: any[], budget: number): any[] => {
     const ptsOf = pointsOf;
-    let cost = held.reduce((s, e) => s + e.now_cost, 0);
+    let cost = held.reduce((s, e) => s + gw1Cost(e), 0);
     /*
      * Each pass considers every legal one-for-one downgrade and takes the
      * cheapest one IN POINTS PER TENTH FREED, which is the same trade a
@@ -840,10 +1026,11 @@ export function makeDemoUniverse(now: number) {
         for (const e of rest) restClubs.set(e.team, (restClubs.get(e.team) ?? 0) + 1);
         for (const cand of elements) {
           if (cand.element_type !== out.element_type) continue;
+          if (injuredNow(cand.id)) continue; // nobody buys a man in the treatment room
           if (restIds.has(cand.id)) continue;
-          if (cand.now_cost >= out.now_cost) continue;
+          if (gw1Cost(cand) >= gw1Cost(out)) continue;
           if ((restClubs.get(cand.team) ?? 0) >= MAX_PER_CLUB) continue;
-          const save = out.now_cost - cand.now_cost;
+          const save = gw1Cost(out) - gw1Cost(cand);
           const loss = Math.max(0, ptsOf(out) - ptsOf(cand));
           const swap = { i, e: cand, save, loss };
           if (!bestRate || loss / save < bestRate.loss / bestRate.save) bestRate = swap;
@@ -890,7 +1077,7 @@ export function makeDemoUniverse(now: number) {
    */
   const investBank = (held: any[], budget: number, depth: number): any[] => {
     const ptsOf = pointsOf;
-    let cost = held.reduce((s, e) => s + e.now_cost, 0);
+    let cost = held.reduce((s, e) => s + gw1Cost(e), 0);
     for (let pass = 0; budget - cost > 5; pass++) {
       if (pass > 400) break;
       const headroom = budget - cost;
@@ -905,15 +1092,16 @@ export function makeDemoUniverse(now: number) {
           .filter(
             (c) =>
               c.element_type === out.element_type &&
+              !injuredNow(c.id) &&
               !restIds.has(c.id) &&
-              c.now_cost > out.now_cost &&
-              c.now_cost - out.now_cost <= headroom &&
+              gw1Cost(c) > gw1Cost(out) &&
+              gw1Cost(c) - gw1Cost(out) <= headroom &&
               (restClubs.get(c.team) ?? 0) < MAX_PER_CLUB
           )
-          .sort((a, b) => ptsOf(b) - ptsOf(a) || b.now_cost - a.now_cost || a.id - b.id);
+          .sort((a, b) => ptsOf(b) - ptsOf(a) || gw1Cost(b) - gw1Cost(a) || a.id - b.id);
         if (!affordable.length) continue;
         const cand = affordable[Math.min(depth, affordable.length - 1)];
-        const spend = cand.now_cost - out.now_cost;
+        const spend = gw1Cost(cand) - gw1Cost(out);
         if (!best || spend > best.spend || (spend === best.spend && cand.id < best.e.id)) {
           best = { i, e: cand, spend };
         }
@@ -930,9 +1118,9 @@ export function makeDemoUniverse(now: number) {
     const need: Record<number, number> = { ...QUOTA };
     const clubs = new Map<number, number>();
     const held: any[] = [];
-    const ranked = [...elements].sort(
-      (a, b) => ptsOf(b) - ptsOf(a) || a.now_cost - b.now_cost || a.id - b.id
-    );
+    const ranked = [...elements]
+      .filter((e) => !injuredNow(e.id))
+      .sort((a, b) => ptsOf(b) - ptsOf(a) || a.now_cost - b.now_cost || a.id - b.id);
     for (const e of ranked) {
       if (!need[e.element_type] || (clubs.get(e.team) ?? 0) >= MAX_PER_CLUB) continue;
       held.push(e);
@@ -1061,17 +1249,6 @@ export function makeDemoUniverse(now: number) {
    * fielding eleven Arsenal players in GW3 — legal at the end of the season and
    * illegal at every point before it, under a comment claiming the opposite.
    */
-  /**
-   * What a player cost in a given gameweek: his current price, less the share
-   * of this season's movement that had not happened yet. `priceAt(e, 0)` is the
-   * season-start price `now_cost - cost_change_start`, which is what
-   * `purchasePriceFor` falls back to, and `priceAt(e, CURRENT_GW)` is exactly
-   * `now_cost`. Both ends have to hold or the ledger and the bootstrap disagree
-   * about the same player in the same week.
-   */
-  const priceAt = (e: { now_cost: number; cost_change_start: number }, gw: number) =>
-    e.now_cost - Math.round(e.cost_change_start * (1 - gw / CURRENT_GW));
-
   const squadForGw = new Map<number, any[]>();
   const transfers: Transfer[] = [];
   {
@@ -1402,7 +1579,7 @@ export function makeDemoUniverse(now: number) {
         a.bps += r.bps;
         if (r.cs) a.cs++;
         if (r.minutes > 0) a.apps++;
-        if (r.minutes >= 60) a.starts++;
+        if (r.started) a.starts++;
         if (gw > CURRENT_GW - 4) a.recent.push(r.points);
       }
     }
@@ -1438,6 +1615,30 @@ export function makeDemoUniverse(now: number) {
       // FPL's points-per-game is per APPEARANCE, not per gameweek, so a
       // rotation player is not punished twice for the weeks he did not feature.
       e.points_per_game = (a.apps ? a.points / a.apps : 0).toFixed(1);
+
+      /*
+       * AVAILABILITY, READ OFF THE ABSENCE. `injuredFrom` took him off the team
+       * sheet; the flag simply reports how long he has been off it, so the
+       * three fields agree with each other AND with every minute in the feed.
+       * A knock is a different thing — it costs no appearances, it only puts
+       * next week in doubt — so it is a flag with no hole behind it, and it is
+       * only ever hung on a man who has actually been playing.
+       */
+      const outFrom = injuredFrom.get(e.id);
+      const knock = outFrom === undefined && e.id % 37 === 0 && a.minutes > 0;
+      e.status = outFrom !== undefined ? "i" : knock ? "d" : "a";
+      e.news =
+        outFrom !== undefined
+          ? `${["Hamstring injury", "Knee injury", "Ankle injury"][e.id % 3]}${
+              // Only claim he has been missing since a gameweek if he was in
+              // the side before it. A reserve who has not played all season is
+              // injured, not absent from an eleven he was never in.
+              a.minutes > 0 ? ` - out since GW${outFrom}` : ""
+            } - no return date`
+          : knock
+            ? "Knock - 75% chance of playing"
+            : "";
+      e.chance_of_playing_next_round = outFrom !== undefined ? 0 : knock ? 75 : null;
       e.form = (a.recent.length ? a.recent.reduce((s, v) => s + v, 0) / a.recent.length : 0).toFixed(1);
       e.ep_next = e.points_per_game;
 
@@ -1532,10 +1733,31 @@ export function makeDemoUniverse(now: number) {
      * differential. Rescaling preserves the ordering (the popular players are
      * still the popular ones) and fixes the sum.
      */
+    /*
+     * THE FLOOR HAS TO BE INSIDE THE RESCALE, NOT AFTER IT. Applying
+     * `Math.max(0.1, …)` to the scaled figures lifted thirty-eight players off
+     * the bottom and the total came out at 1502.3% — a small error, but the
+     * differential/template split is a comparison against exactly this sum, so
+     * it is an error in the one quantity the rescale exists to fix.
+     *
+     * So the floor is imposed first and the scale solved for what is left: the
+     * floored players are paid their 0.1% out of the 1500, and everyone else
+     * shares the remainder in the proportions the curve gave them.
+     */
+    const FLOOR = 0.1;
     const raw = elements.map((e) => parseFloat(e.selected_by_percent));
-    const scale = 1500 / raw.reduce((s, v) => s + v, 0);
+    let scale = 1500 / raw.reduce((s, v) => s + v, 0);
+    for (let pass = 0; pass < 40; pass++) {
+      const floored = raw.map((v) => v * scale < FLOOR);
+      const budget = 1500 - floored.filter(Boolean).length * FLOOR;
+      const free = raw.reduce((s, v, i) => (floored[i] ? s : s + v), 0);
+      if (free <= 0) break;
+      const next = budget / free;
+      if (Math.abs(next - scale) < 1e-12) break;
+      scale = next;
+    }
     elements.forEach((e, i) => {
-      e.selected_by_percent = Math.max(0.1, raw[i] * scale).toFixed(1);
+      e.selected_by_percent = Math.max(FLOOR, raw[i] * scale).toFixed(1);
     });
   }
 
@@ -1812,18 +2034,61 @@ export function makeDemoUniverse(now: number) {
      * seventh of ten in his own league while the card above it called him top
      * 2%. Two true things that read as one contradiction.
      *
-     * Depth is how far down each club's list a manager is willing to go, so it
-     * is exactly the dial for "how well does he pick": 0 is the sharp one, 3
-     * the friend who drafted on shirt numbers. Cycling it gives a league with a
-     * top, a middle and a tail, and puts the reader near but not at the top.
+     * Depth is how far down each club's list a manager is willing to go: 0 is
+     * the sharp one, 5 the friend who drafted on shirt numbers. It is a real
+     * dial but it is a WEAK one, and the numbers say so plainly. Holding every
+     * rival at a single depth and reading off the season totals gives, for the
+     * nine seeds in order, 1055/907/1028/1025/1006/968/1198/1094/976 at depth 0
+     * against 839/889/730/900/882/612/1081/717/807 at depth 6 — one seed
+     * (999906) never drops below 1081 however deep he is told to dig, and
+     * another (999903) scores MORE at depth 6 than at depth 2 (900 against
+     * 865, having started from 1025 at depth 0). That is
+     * `repairToBudget` at work: it rebuilds a good part of every squad on the
+     * way down to the budget, so which clubs a manager's seed sends him to
+     * first matters about as much as how far into them he goes.
+     *
+     * So the vector below is MEASURED, not reasoned: each entry was chosen off
+     * that table to produce the standings the front page needs — a clear leader
+     * on 1084, the reader second on 966, then 959, 948 and 936 stacked inside
+     * thirty points of him (and a fourth on 935, one point outside) where places
+     * actually change hands, and a tail down to 848. Four of the ten rows move
+     * between `last_rank` and `rank`, so `MiniLeague`'s ▲/▼ arrows are drawn by
+     * the fixture rather than merely allowed by it. It is a fixture, and a
+     * fixture is allowed to be chosen for what it shows; what it is not allowed
+     * to do is claim a story it does not have. Re-derive it if the generator
+     * changes: the totals above are the whole method.
+     *
+     * `i % 4` PUT THE READER FIFTH. Same 966 — his own squad does not depend on
+     * the rivals — but with 1171, 1055, 1006 and 976 above it, under a KPI card
+     * that reads his overall rank as 273,315 of 11,000,000. Top two and a half
+     * per cent of the country, mid-table among nine acquaintances: not
+     * impossible, but it is the one line of the demo a reader is most likely to
+     * check against itself, and it invited him to conclude the app cannot add
+     * up rather than that he keeps sharp company.
      */
-    const fifteen = rivalSquad(id, i % 4);
+    const fifteen = rivalSquad(id, [4, 1, 2, 1, 5, 1, 5, 1, 2][i]);
     // A chip apiece for two of them in the current week, so the badge and the
     // bench-boost scoring path are both exercised by something other than the
     // demo manager.
     const chipAt = (gw: number) =>
       gw !== CURRENT_GW ? null : id % 7 === 0 ? "bboost" : id % 5 === 0 ? "3xc" : null;
-    const hitAt = (gw: number) => (rnd(id * 31 + gw) < 0.25 ? 4 : 0);
+    /*
+     * A RIVAL WHO NEVER CHANGES HIS TEAM NEVER PAYS FOR CHANGING IT.
+     *
+     * This was `rnd(id * 31 + gw) < 0.25 ? 4 : 0` — a −4 in a quarter of the
+     * weeks — while `picksAt` below returns the SAME fifteen for every
+     * gameweek of the season. So each rival was docked twelve to thirty-six
+     * points across the twenty weeks for transfers his own picks endpoint says
+     * he did not make, and his ledger reported one or two transfers in every
+     * week including GW1, where FPL always publishes 0.
+     *
+     * Giving the rivals real transfers means giving them a per-gameweek squad,
+     * a per-gameweek purchase ledger and a budget walk — the machinery the demo
+     * manager has and the reason he is the one the app tells a story about.
+     * Until they have it, the honest ledger is the one that matches their
+     * picks: one squad, no transfers, no hits.
+     */
+    const hitAt = () => 0;
     rivals.set(id, {
       entry: id,
       name: `Rival FC ${i + 1}`,
@@ -1878,6 +2143,16 @@ export function makeDemoUniverse(now: number) {
      */
     const paid = r.fifteen.map((e) => priceAt(e, 1));
     const rivalBank = INITIAL_BUDGET - paid.reduce((s, v) => s + v, 0);
+    // The demo manager's own opening squad throws if it cannot be paid for;
+    // the rivals' did not, and simply published whatever came out — including,
+    // in principle, a negative `last_deadline_bank` on a rival's card. The
+    // squads are repaired against GW1 prices now, which is the basis this
+    // subtraction is in, so the two can no longer be measuring different money.
+    if (rivalBank < 0) {
+      throw new Error(
+        `demo: rival ${r.entry}'s opening squad costs ${INITIAL_BUDGET - rivalBank} against a budget of ${INITIAL_BUDGET}`
+      );
+    }
     return Array.from({ length: CURRENT_GW }, (_, i) => {
       const gw = i + 1;
       const squadValue = r.fifteen.reduce(
@@ -1905,10 +2180,21 @@ export function makeDemoUniverse(now: number) {
         // 1000 after GW1 however much he left unspent. See `display.teamValue`.
         bank: rivalBank,
         value: squadValue + rivalBank,
-        event_transfers: hit / 4 + 1,
+        // He holds one fifteen all season — see `hitAt`. GW1 is 0/0 in real FPL
+        // too: the opening squad is not a transfer.
+        event_transfers: 0,
         event_transfers_cost: hit,
         points_on_bench: bench,
-        active_chip: chip,
+        /*
+         * AND NO `active_chip`. It used to be published here, which gave the
+         * nine rivals a history row one field wider than the demo manager's and
+         * one field wider than the real endpoint's — FPL keeps chips in their
+         * own array and puts nothing on the row. Nothing read it except the two
+         * places below that needed to know which chip a rival played, and both
+         * of them are holding `r` already and can ask `r.chipAt(gw)`, which is
+         * where `chip` above came from in the first place. One source, one row
+         * shape, ten identical managers.
+         */
       };
     });
   }
@@ -2134,8 +2420,7 @@ export function makeDemoUniverse(now: number) {
      */
     if (!r) return null;
     const rows = rivalRows.get(id)!;
-    const { active_chip, ...row } = rows[week - 1];
-    return { active_chip, picks: r.picksAt(week), entry_history: row };
+    return { active_chip: r.chipAt(week), picks: r.picksAt(week), entry_history: rows[week - 1] };
   };
 
   /**
@@ -2209,7 +2494,7 @@ export function makeDemoUniverse(now: number) {
         element: id,
         round: i + 1,
         minutes: r.minutes,
-        starts: r.minutes >= 60 ? 1 : 0,
+        starts: r.started ? 1 : 0,
         total_points: r.points,
         goals_scored: r.goals,
         assists: r.assists,
@@ -2321,21 +2606,87 @@ export function makeDemoUniverse(now: number) {
     if (id === DEMO_ENTRY_ID) return history;
     const rows = rivalRows.get(id);
     if (!rows) return null;
+    const r = rivals.get(id)!;
     return {
+      /*
+       * ONE ROW SHAPE FOR EVERY MANAGER, and it is the real endpoint's — see the
+       * note where these rows are built. The demo exists so the app cannot tell
+       * it from the live feed, and a stub whose rivals carry a field the feed
+       * has never published teaches whoever reads it next the wrong lesson about
+       * what is safe to depend on.
+       */
       current: rows,
-      // A rival's chips are the ones his own season used, read off his own
-      // rows rather than copied from the demo manager's list.
+      // A rival's chips are the ones his own season used, read off `chipAt` —
+      // the same function his rows were scored with — rather than copied from
+      // the demo manager's list, which is what this endpoint used to serve.
       chips: rows
-        .filter((r) => r.active_chip)
-        .map((r) => ({ name: r.active_chip as string, time: deadlineFor(r.event), event: r.event })),
+        .map((row) => ({ name: r.chipAt(row.event), event: row.event }))
+        .filter((c): c is { name: string; event: number } => c.name != null)
+        .map((c) => ({ name: c.name, time: deadlineFor(c.event), event: c.event })),
       past: [] as { season_name: string; total_points: number; rank: number }[],
     };
+  };
+
+  /*
+   * The manager card, per id. `entry/{id}/` returned the demo manager's own
+   * document whatever was asked for — his name, his points, his rank, his
+   * leagues — so the two endpoints that HAD been taught to honour the id
+   * (`picks` and `history`) now disagreed with the one that had not: a rival
+   * card could open on "Demo Manager", 1,152 points and a top-2% badge above a
+   * pitch and a season that belonged to somebody else.
+   */
+  const entryFor = (id: number) => {
+    if (id === DEMO_ENTRY_ID) return entry;
+    const r = rivals.get(id);
+    const rows = rivalRows.get(id);
+    if (!r || !rows) return null;
+    const last = rows[CURRENT_GW - 1];
+    const standing = league.standings.results.find((x) => x.entry === id)!;
+    return {
+      id,
+      player_first_name: r.manager.split(" ")[0],
+      player_last_name: r.manager.split(" ").slice(1).join(" "),
+      name: r.name,
+      summary_overall_points: last.total_points,
+      summary_overall_rank: last.overall_rank,
+      summary_event_points: last.points,
+      summary_event_rank: last.rank,
+      current_event: CURRENT_GW,
+      last_deadline_bank: last.bank,
+      last_deadline_value: last.value,
+      leagues: {
+        classic: [
+          {
+            id: 900001,
+            name: "Demo League of Legends",
+            league_type: "x",
+            entry_rank: standing.rank,
+            entry_last_rank: standing.last_rank,
+          },
+        ],
+      },
+    };
+  };
+
+  /*
+   * And the transfer ledger, per id. A rival holds one fifteen all season — see
+   * `hitAt` — so his ledger is empty, and an empty ledger is the true answer.
+   * Serving the demo manager's twelve transfers under a rival's id was worse
+   * than serving nothing: it attributed named purchases, at dated prices, to a
+   * manager whose squad never contained those players.
+   */
+  const transfersFor = (id: number) => {
+    if (id === DEMO_ENTRY_ID) return transfers;
+    if (!rivals.has(id)) return null;
+    return [] as typeof transfers;
   };
 
   return {
     bootstrap,
     fixtures,
     entry,
+    entryFor,
+    transfersFor,
     picks: picksFor(DEMO_ENTRY_ID, CURRENT_GW),
     picksFor,
     history,

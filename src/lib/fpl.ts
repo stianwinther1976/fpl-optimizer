@@ -25,6 +25,21 @@ export function setDemoMode(on: boolean) {
   demoMode = on;
 }
 
+/**
+ * WHICH UNIVERSE THE APP IS CURRENTLY READING FROM.
+ *
+ * Anything that caches player data keyed by element id has to know this,
+ * because the two universes number their players the same way: the demo's
+ * elements are ids 1..300 and so are three hundred real Premier League
+ * footballers. `fetchCache` above is safe by accident — it keys on the URL,
+ * which carries `/api/demo` or `/api/fpl` in it — but a cache keyed on ids
+ * alone has no way to tell a demo midfielder from the real one wearing his
+ * number, and will happily serve one man's season as the other's.
+ */
+export function currentFeed(): "demo" | "real" {
+  return demoMode ? "demo" : "real";
+}
+
 export class FplApiError extends Error {
   constructor(
     message: string,

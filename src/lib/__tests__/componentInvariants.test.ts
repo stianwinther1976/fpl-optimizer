@@ -26,6 +26,7 @@ import path from "node:path";
  * without anyone remembering to.
  */
 const DIR = path.resolve(__dirname, "../../components");
+const LIB = path.resolve(__dirname, "..");
 const read = (f: string) => fs.readFileSync(path.join(DIR, f), "utf8");
 const componentFiles = fs.readdirSync(DIR).filter((f) => f.endsWith(".tsx"));
 
@@ -461,5 +462,207 @@ describe("team value is read the way FPL defines it", () => {
     // reach of every test, and an inverted one paints a falling squad green.
     const inline = componentFiles.filter((f) => /teamValue\([^)]*\)\s*-\s*teamValue\(/.test(read(f)));
     expect(inline).toEqual([]);
+  });
+});
+
+/*
+ * EVERY PROJECTION IN THE APP READS THE SAME EVIDENCE.
+ *
+ * `projectAll` takes an optional `pastSeason` — last season's per-player
+ * record, fetched once and shared through `pastSeasonStore`. Optional is the
+ * problem: a component that forgets it still compiles, still renders, and still
+ * produces a plausible number. `StatsTable` forgot it, so the Stats tab and the
+ * pitch quoted different xP for the same man; `OptimizePanel`'s candidate
+ * pre-rank forgot it, so the players the record helps most — a summer signing,
+ * a returning absentee, anyone on no minutes this season — ranked near zero and
+ * never had their line-ups looked up at all.
+ *
+ * Neither showed up as a failure anywhere. Both are cases of the same rule, so
+ * the rule is stated over the whole directory rather than over the two files
+ * that happened to break it.
+ */
+describe("nothing projects without last season's record", () => {
+  /*
+   * A FUNCTION, NOT A CONSTANT — and that is a bug fix, not a style choice.
+   *
+   * This was `const CALL = /projectAll\(\s*\{/g` shared between the two tests
+   * below. A `/g` regex carries `lastIndex`, `RegExp.test` advances it, and
+   * `String.matchAll` SEEDS ITS CLONE FROM IT. So the first test's `.test`
+   * sweep left an offset behind and the second test began scanning every file
+   * from that byte — roughly 218,000 characters in, which is past the end of
+   * every source it looks at. The rule found zero call sites and passed.
+   *
+   * It survived only because the last file in the scan order is `lib/xp.ts`,
+   * which does not itself call `projectAll` and therefore reset `lastIndex` to
+   * 0 on its way out. Adding one `projectAll` call to the module that DEFINES
+   * `projectAll` would have blinded the whole rule — silently, in the same
+   * commit as a genuine violation. A guard that fails open on an unrelated
+   * edit is worse than no guard, because it reports success.
+   */
+  const call = () => /projectAll\(\s*\{/g;
+
+  /*
+   * Comments are not code. `projectAll({ bootstrap, /* TODO: pastSeason * / })`
+   * satisfied the check below on the strength of a note saying the work had
+   * NOT been done. In a file set this heavily commented that is not a
+   * contrived case, so the argument text is stripped before it is read.
+   */
+  const decomment = (s: string) =>
+    s.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+
+  /*
+   * The scan covers `src/lib` as well as `src/components`, and that is not
+   * tidiness. The first version of this rule looked at components only, and
+   * while it was green the actual second opinion was in `optimizer.ts`: the
+   * optimizer, the six-week planner and the chip scenarios all projected with
+   * no `pastSeason` because their input types had no field for one. The two
+   * tabs agreed; the tab that makes the recommendation did not.
+   */
+  /*
+   * RECURSIVE, and over `src` rather than over two hand-listed directories.
+   * The flat `readdirSync` pair missed `src/app` entirely, missed any `.ts`
+   * file sitting among the components, and would miss the first subdirectory
+   * anyone adds under either. None of those are hypothetical places to project
+   * from — `src/app` is where the pages live.
+   */
+  const walk = (dir: string, rel: string): { file: string; src: string }[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
+      const full = path.join(dir, d.name);
+      const name = rel ? `${rel}/${d.name}` : d.name;
+      if (d.isDirectory()) return walk(full, name);
+      if (!/\.tsx?$/.test(d.name) || /\.test\.tsx?$/.test(d.name)) return [];
+      return [{ file: name, src: fs.readFileSync(full, "utf8") }];
+    });
+  const sources = walk(path.resolve(LIB, ".."), "");
+
+  it("scans the files it means to scan", () => {
+    // Without this the rule passes vacuously the day someone moves a file.
+    const names = sources.map((s) => s.file);
+    expect(names).toContain("components/StatsTable.tsx");
+    expect(names).toContain("components/Dashboard.tsx");
+    expect(names).toContain("lib/optimizer.ts");
+    expect(names).toContain("lib/xp.ts");
+    // `app/` is in scope too, and a scan that silently stopped covering it
+    // would look exactly like a scan that found nothing wrong there.
+    expect(names.some((n) => n.startsWith("app/"))).toBe(true);
+    expect(sources.filter((s) => call().test(s.src)).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("passes pastSeason wherever it projects", () => {
+    const offenders: { file: string; call: number }[] = [];
+    for (const { file, src } of sources) {
+      for (const m of src.matchAll(call())) {
+        // The argument object, brace-matched: `pastSeason: past && past.size > 0
+        // ? past : undefined` contains no closing brace, but a nested
+        // `bootstrap: {...}` one day would, and a lazy match would stop there.
+        let depth = 0;
+        let end = m.index + m[0].length - 1;
+        for (let i = end; i < src.length; i++) {
+          if (src[i] === "{") depth++;
+          else if (src[i] === "}" && --depth === 0) {
+            end = i;
+            break;
+          }
+        }
+        const arg = decomment(src.slice(m.index, end + 1));
+        // Shorthand counts: `projectAll({ bootstrap, pastSeason })` passes the
+        // record perfectly well, and a rule that fails correct code gets
+        // deleted by the next person in a hurry.
+        if (!/\bpastSeason\s*[:,}]/.test(arg)) offenders.push({ file, call: m.index });
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  /*
+   * THE SCAN ABOVE IS A BACKSTOP. This is the rule.
+   *
+   * Everything the scan does is defeatable by writing the call differently:
+   * `projectAll(ctx)` has no object literal to read, a nested brace inside a
+   * string truncates the argument, and `pastSeason: undefined` satisfies a
+   * regex looking for the word. A regex over source text can only ever
+   * describe how the code is spelled.
+   *
+   * So `XpContext.pastSeason` is declared REQUIRED — `Map | undefined` rather
+   * than `?: Map` — and the compiler enforces at every call site, in every
+   * spelling, that somebody decided. `undefined` is still a legal answer; what
+   * is no longer legal is not answering. See the note on the field itself in
+   * `xp.ts` for why silence was the wrong default.
+   */
+  it("makes the compiler ask about last season, not this file", () => {
+    const xp = fs.readFileSync(path.join(LIB, "xp.ts"), "utf8");
+    const at = xp.indexOf("export interface XpContext {");
+    expect(at).toBeGreaterThanOrEqual(0);
+    const body = xp.slice(at, xp.indexOf("\n}", at));
+    // Optional would let a caller forget in silence, which is the whole defect.
+    expect(/\bpastSeason\?:/.test(body)).toBe(false);
+    expect(/\bpastSeason: Map<number, PastSeasonStats> \| undefined;/.test(body)).toBe(true);
+  });
+
+  /*
+   * The engines take `pastSeason` optionally — they have a dozen inputs and a
+   * caller who wants the default is not making a mistake — but they must at
+   * least be ABLE to be told, and they must hand it on. `optimize` builds an
+   * `XpContext` internally, so the compiler now catches the omission there;
+   * `planHorizon` and `chipScenario` do too. This counts the forwarding.
+   */
+  it("lets every engine be told about last season", () => {
+    const opt = fs.readFileSync(path.join(LIB, "optimizer.ts"), "utf8");
+    for (const iface of ["OptimizerInput", "PlannerInput"]) {
+      const at = opt.indexOf(`export interface ${iface} {`);
+      expect({ iface, declared: at >= 0 }).toEqual({ iface, declared: true });
+      const body = opt.slice(at, opt.indexOf("\n}", at));
+      expect({ iface, takesRecord: /\bpastSeason\?:/.test(body) }).toEqual({
+        iface,
+        takesRecord: true,
+      });
+    }
+    // ...and actually hands it on. Three engines project: optimize (via its
+    // XpContext), planHorizon, chipScenario.
+    expect(opt.match(/pastSeason: input\.pastSeason/g)?.length ?? 0).toBe(3);
+  });
+
+  it("keeps the stats table on the projection the pitch is drawn from", () => {
+    // Two projections of a three-hundred-player league that agree today can
+    // stop agreeing tomorrow, and the reader has no way to tell which one the
+    // optimizer used. The table takes the dashboard's — and cannot make its
+    // own, which is stronger than requiring it to pass the record: an optional
+    // prop with a fallback is an untested second projection waiting to drift,
+    // and this one could not even be reached.
+    const table = read("StatsTable.tsx");
+    expect(/projectAll\s*\(/.test(table)).toBe(false);
+    // Required, not `xp?:`. The dashboard decides what "no next gameweek"
+    // means; the table does not guess around a missing prop.
+    expect(/^\s*xp: Map<number, PlayerXp> \| null;/m.test(table)).toBe(true);
+
+    // Depth- and quote-aware, for the reason set out over `openingTrTags`: a
+    // `[^>]*` scan is broken by the first prop containing a `>`, and
+    // `onSelect={(el) => …}` is one keystroke away. It would then fail on
+    // correct code.
+    const dash = read("Dashboard.tsx");
+    const uses: string[] = [];
+    for (let i = dash.indexOf("<StatsTable"); i >= 0; i = dash.indexOf("<StatsTable", i + 11)) {
+      let depth = 0;
+      let quote: string | null = null;
+      for (let j = i + 11; j < dash.length; j++) {
+        const c = dash[j];
+        if (quote) {
+          if (c === "\\") j++;
+          else if (c === quote) quote = null;
+          continue;
+        }
+        if (c === '"' || c === "'" || c === "`") quote = c;
+        else if (c === "{") depth++;
+        else if (c === "}") depth--;
+        else if (c === ">" && depth === 0) {
+          uses.push(dash.slice(i, j + 1));
+          break;
+        }
+      }
+    }
+    // EVERY use, not "some use" — a `.test()` on the whole file passes while a
+    // second, record-blind table sits three hundred lines below the good one.
+    expect(uses.length).toBeGreaterThanOrEqual(1);
+    expect(uses.filter((u) => /\bxp=\{/.test(u))).toEqual(uses);
   });
 });
