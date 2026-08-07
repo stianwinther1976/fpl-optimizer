@@ -666,3 +666,23 @@ describe("nothing projects without last season's record", () => {
     expect(uses.filter((u) => /\bxp=\{/.test(u))).toEqual(uses);
   });
 });
+
+describe("the captain's field read is looked up, never indexed", () => {
+  // `captainReads` is keyed by element id precisely so the labels cannot drift
+  // off the players they describe. A parallel array is the obvious shape and
+  // the trap: `captainRanking` and the reads are built by different code, so
+  // the day one of them is re-sorted, an ownership figure and a "the field's
+  // last captain" note appear against another man's name — worse than showing
+  // nothing, because it is wrong rather than missing.
+  //
+  // This guards the token, not the behaviour: the lookup must be by id. The
+  // ordering itself is tested in `optimizer.test.ts`.
+  it("reads the map by element id in OptimizePanel", () => {
+    const src = read("OptimizePanel.tsx");
+    expect(src).toMatch(/captainReads\.get\(\s*c\.element\.id\s*\)/);
+    // And nothing indexes it. `captainReads[` would be an array subscript
+    // returning undefined against a Map, which renders as a silently missing
+    // label rather than an error.
+    expect(src).not.toMatch(/captainReads\[/);
+  });
+});

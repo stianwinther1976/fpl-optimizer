@@ -89,6 +89,22 @@ export interface Event {
   is_next: boolean;
   average_entry_score: number;
   highest_score: number | null;
+  /*
+   * WHAT THE FIELD DID. Published on every event and, until `field.ts`, never
+   * read by this app — which had no model of its competition at all.
+   *
+   * All four are null or empty for a gameweek that has not finished, so
+   * pre-season they are null for all 38. Nothing may treat an absent value as a
+   * zero: "no manager captained him" and "the week has not happened" are
+   * different claims and only one of them is ever true here.
+   */
+  /** Element id of the most-captained player. An id, never a share. */
+  most_captained?: number | null;
+  most_vice_captained?: number | null;
+  most_selected?: number | null;
+  /** Managers who played each chip in this gameweek. */
+  chip_plays?: { chip_name: string; num_played: number }[];
+  transfers_made?: number;
 }
 
 export interface BootstrapChip {
