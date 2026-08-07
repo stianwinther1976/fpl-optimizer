@@ -11,12 +11,18 @@ entry id.
 ## Commands
 
 ```bash
-npm run dev          # local dev server
-npm run build        # production build — run before claiming anything is done
-npm test             # vitest run — the main suite (~457 tests)
-npm run lint         # eslint
-npx tsc --noEmit     # typecheck
+npm run dev               # local dev server
+npm run build             # production build — run before claiming anything is done
+npm test                  # vitest run — the main suite (~457 tests)
+npm run lint              # eslint
+npx tsc --noEmit          # typecheck the app
+npm run typecheck:scripts # typecheck scripts/ — a separate tsconfig
 ```
+
+`typecheck:scripts` is easy to forget and is the only check that reaches the
+harnesses below: they are outside `vitest.config.ts`'s `include`, so `npm test`
+never compiles them. They sat with eight type errors — two of them real bugs —
+until someone ran it.
 
 Four extra vitest configs exist for slow measurement harnesses that are NOT part
 of the main suite and are run by hand:
