@@ -59,26 +59,35 @@ const cacheTtl = (path: string): number => {
 };
 const fetchCache = new Map<string, { promise: Promise<unknown>; at: number }>();
 
+const feedUrl = (path: string) => `${demoMode ? "/api/demo" : "/api/fpl"}/${path}`;
+
+/**
+ * One round trip, no retention. Used directly by the element-summary layer
+ * below, which keeps its own (far smaller) reduced records instead of parking
+ * the raw payload in `fetchCache` forever.
+ */
+async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(url, signal ? { signal } : undefined);
+  if (!res.ok) {
+    throw new FplApiError(
+      res.status === 404
+        ? "No data found — check that the FPL ID is correct."
+        : res.status === 503
+          ? "FPL is updating the game right now. Try again in a few minutes."
+          : `FPL API error (${res.status})`,
+      res.status
+    );
+  }
+  return res.json() as Promise<T>;
+}
+
 async function get<T>(path: string): Promise<T> {
-  const url = `${demoMode ? "/api/demo" : "/api/fpl"}/${path}`;
+  const url = feedUrl(path);
   const cached = fetchCache.get(url);
   if (cached && Date.now() - cached.at < cacheTtl(path)) {
     return cached.promise as Promise<T>;
   }
-  const promise = (async () => {
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new FplApiError(
-        res.status === 404
-          ? "No data found — check that the FPL ID is correct."
-          : res.status === 503
-            ? "FPL is updating the game right now. Try again in a few minutes."
-            : `FPL API error (${res.status})`,
-        res.status
-      );
-    }
-    return res.json();
-  })();
+  const promise = fetchJson<T>(url);
   fetchCache.set(url, { promise, at: Date.now() });
   // Failed requests must not be cached, or a retry could never succeed.
   promise.catch(() => {
@@ -125,8 +134,131 @@ export const api = {
   live: (gw: number) => get<EventLive>(`event/${gw}/live/`),
   league: (id: number, page = 1) =>
     get<LeagueStandings>(`leagues-classic/${id}/standings/?page_standings=${page}`),
-  elementSummary: (id: number) => get<ElementSummary>(`element-summary/${id}/`),
+  elementSummary: (id: number) =>
+    fetchJson<ElementSummary>(feedUrl(`element-summary/${id}/`)),
 };
+
+// --- The element-summary layer ---------------------------------------------
+/**
+ * ONE FETCH PER PLAYER PER SESSION, REDUCED ON ARRIVAL.
+ *
+ * `element-summary/{id}/` is by far the most expensive thing the app does —
+ * one request per player, and the launch pool is the whole field. It is also
+ * the only endpoint whose payload is read by two different consumers for two
+ * different halves: `fetchPastSeason` wants `history_past`, `fetchRecentForm`
+ * wants `history`. Both used to call `api.elementSummary` independently, so a
+ * player in both sets was fetched twice for two halves of one document.
+ *
+ * The client cache above did not save them. It keys on URL with a 120s TTL,
+ * and the two calls are made minutes apart — the dashboard loads last season on
+ * mount, the recent-form pull happens when someone taps Optimize. Past the TTL
+ * the second call is a fresh round trip for a document already parsed once.
+ *
+ * Worse, `fetchCache` never evicts. It checks `at` on READ, so an expired entry
+ * is bypassed but not dropped: every raw summary the app has ever fetched stays
+ * in the map for the life of the page. Reducing on arrival is what fixes that —
+ * what is kept here is the small record each consumer actually reads, and the
+ * payload is released.
+ *
+ * So this layer sits under both, and `element-summary` no longer goes through
+ * `fetchCache` at all.
+ */
+interface SummaryRounds {
+  round: number;
+  minutes: number;
+  starts?: number;
+}
+
+interface ReducedSummary {
+  past: PastSeason;
+  rounds: SummaryRounds[];
+}
+
+/**
+ * Keyed by FEED and id, never by id alone. The demo numbers its players 1..300
+ * and so do three hundred real footballers; see `currentFeed`.
+ *
+ * FAILURES ARE DELIBERATELY NOT CACHED. `pastSeasonStore` refuses to treat a
+ * result with failures as final precisely so the drafter's "Re-draft to try
+ * them again" button can mean what it says, and caching a failure here would
+ * quietly take that back — the retry would find the miss recorded and issue no
+ * request at all. A player who could not be fetched simply stays absent, and
+ * the next caller asks again.
+ */
+const summaryCache = new Map<string, ReducedSummary>();
+const summaryKey = (id: number) => `${currentFeed()}:${id}`;
+
+/** Drop every held summary. Feed switches and tests both need this. */
+export function resetSummaryCache(): void {
+  summaryCache.clear();
+}
+
+/**
+ * Fetch (or reuse) the reduced summary for each id, at limited concurrency.
+ *
+ * `signal` is honoured between players rather than mid-flight, which is the
+ * granularity that matters: the cost being cancelled is the QUEUE, hundreds of
+ * requests deep, not the one already on the wire.
+ *
+ * Progress counts every id asked for, cached ones included, so a re-run that
+ * hits the cache still walks its progress bar to the end instead of appearing
+ * to hang at 0.
+ */
+async function fetchSummaries(
+  ids: number[],
+  concurrency: number,
+  onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal
+): Promise<{ held: Map<number, ReducedSummary>; requested: number; failed: number }> {
+  const held = new Map<number, ReducedSummary>();
+  const queue: number[] = [];
+  for (const id of new Set(ids)) {
+    const hit = summaryCache.get(summaryKey(id));
+    if (hit) held.set(id, hit);
+    else queue.push(id);
+  }
+  const requested = new Set(ids).size;
+  let done = requested - queue.length;
+  let failed = 0;
+  onProgress?.(done, requested);
+
+  const worker = async () => {
+    for (;;) {
+      if (signal?.aborted) return;
+      const id = queue.shift();
+      if (id == null) return;
+      try {
+        let s: ElementSummary;
+        try {
+          s = await fetchJson<ElementSummary>(feedUrl(`element-summary/${id}/`), signal);
+        } catch {
+          if (signal?.aborted) return;
+          // Almost always a transient 429/503 under this much concurrency.
+          await new Promise((r) => setTimeout(r, 400));
+          s = await fetchJson<ElementSummary>(feedUrl(`element-summary/${id}/`), signal);
+        }
+        const rec: ReducedSummary = {
+          past: reducePastSeason(s),
+          rounds: (s.history ?? []).map((r) => ({
+            round: r.round,
+            minutes: r.minutes,
+            starts: r.starts,
+          })),
+        };
+        summaryCache.set(summaryKey(id), rec);
+        held.set(id, rec);
+      } catch {
+        // Still no data. The model carries on with prices + ep_next for this
+        // player, but the caller is told how many were lost.
+        failed++;
+      }
+      done++;
+      onProgress?.(done, requested);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, queue.length)) }, worker));
+  return { held, requested, failed };
+}
 
 /**
  * Recent line-up data for a set of players (element-summary endpoint), fetched
@@ -145,35 +277,25 @@ export async function fetchRecentForm(
   ids: number[],
   lastN = 5,
   concurrency = 8,
-  onProgress?: (done: number, total: number) => void
+  onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal
 ): Promise<Map<number, RecentForm>> {
+  const { held } = await fetchSummaries(ids, concurrency, onProgress, signal);
   const out = new Map<number, RecentForm>();
-  const queue = [...new Set(ids)];
-  let done = 0;
-  const worker = async () => {
-    for (;;) {
-      const id = queue.shift();
-      if (id == null) return;
-      try {
-        const s = await api.elementSummary(id);
-        const rows = s.history.slice(-lastN);
-        if (rows.length > 0 && rows.some((r) => r.starts != null)) {
-          const started = rows.filter((r) => (r.starts ?? 0) > 0);
-          const startMins = started.reduce((a, r) => a + (r.minutes ?? 0), 0);
-          out.set(id, {
-            startShare: started.length / rows.length,
-            minsPerGame: rows.reduce((a, r) => a + (r.minutes ?? 0), 0) / rows.length,
-            minsPerStart: started.length > 0 ? startMins / started.length : null,
-          });
-        }
-      } catch {
-        // no data — season model carries on alone
-      }
-      done++;
-      onProgress?.(done, queue.length + done);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+  for (const [id, rec] of held) {
+    // `lastN` is applied HERE, not at fetch time. The rounds are cached whole
+    // so that a caller asking for a different window does not have to re-fetch
+    // a document the session already holds.
+    const rows = rec.rounds.slice(-lastN);
+    if (rows.length === 0 || !rows.some((r) => r.starts != null)) continue;
+    const started = rows.filter((r) => (r.starts ?? 0) > 0);
+    const startMins = started.reduce((a, r) => a + (r.minutes ?? 0), 0);
+    out.set(id, {
+      startShare: started.length / rows.length,
+      minsPerGame: rows.reduce((a, r) => a + (r.minutes ?? 0), 0) / rows.length,
+      minsPerStart: started.length > 0 ? startMins / started.length : null,
+    });
+  }
   return out;
 }
 
@@ -219,85 +341,67 @@ export async function fetchPastSeason(
   onProgress?: (done: number, total: number) => void,
   signal?: AbortSignal
 ): Promise<PastSeasonFetch> {
+  const { held, requested, failed } = await fetchSummaries(
+    ids,
+    concurrency,
+    onProgress,
+    signal
+  );
   const out = new Map<number, PastSeason>();
-  const queue = [...new Set(ids)];
-  const requested = queue.length;
-  let done = 0;
-  let failed = 0;
-  const worker = async () => {
-    for (;;) {
-      if (signal?.aborted) return;
-      const id = queue.shift();
-      if (id == null) return;
-      try {
-        let s: ElementSummary;
-        try {
-          s = await api.elementSummary(id);
-        } catch {
-          // Almost always a transient 429/503 under this much concurrency.
-          await new Promise((r) => setTimeout(r, 400));
-          s = await api.elementSummary(id);
-        }
-        const rows = s.history_past ?? [];
-        // An entry is written for EVERY player queried, even one with no
-        // history at all — "we looked and there is nothing" is itself the
-        // signal that separates a new signing from a benched squad player.
-        const newest = rows.length > 0 ? rows[rows.length - 1] : null;
-        // Per-90 rates come from the most recent season with actual pitch time:
-        // a year lost to injury shouldn't erase what the player can do.
-        const src = [...rows].reverse().find((p) => p.minutes > 0);
-        out.set(id, {
-          plSeasons: rows.length,
-          seasons: rows.map((r) => ({
-            seasonName: r.season_name,
-            minutes: r.minutes,
-            starts: r.starts,
-          })),
-          lastSeason: newest
-            ? {
-                seasonName: newest.season_name,
-                minutes: newest.minutes,
-                // Passed through verbatim, INCLUDING zero, because zero here
-                // is ambiguous and only the consumer can disambiguate it.
-                //
-                // An earlier version of this comment said `starts` "only
-                // exists from 2021/22" and that an absent value is not zero.
-                // Both halves are wrong. Counted over the element summaries in
-                // the 2026/27 snapshot, not one row before 2022/23 reports a
-                // start, and the API never sends `null` for the field — it
-                // sends `0`. So there is no absent value to protect here; the
-                // real hazard is a `0` on a pre-2022/23 row, which means "not
-                // recorded" rather than "did not start". That call needs the
-                // season name, so it is made in `startsUnrecorded` in `xp.ts`
-                // against `XP_CONFIG.startsRecordedFrom`, which carries the
-                // per-season counts that place the cut-off.
-                starts: newest.starts,
-              }
-            : undefined,
-          seasonName: src?.season_name,
-          points: src?.total_points ?? 0,
-          minutes: src?.minutes ?? 0,
-          starts: src?.starts,
-          defensiveContribution: src?.defensive_contribution,
-          goals: src?.goals_scored,
-          assists: src?.assists,
-          xg: num(src?.expected_goals),
-          xa: num(src?.expected_assists),
-          bonus: src?.bonus,
-          ict: num(src?.ict_index),
-          saves: src?.saves,
-        });
-      } catch {
-        // Still no data. The model carries on with prices + ep_next for this
-        // player, but the caller is told how many were lost.
-        failed++;
-      }
-      done++;
-      onProgress?.(done, requested);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+  for (const [id, rec] of held) out.set(id, rec.past);
   return { data: out, requested, failed };
+}
+
+/** `history_past` -> the record the model reads. Pure; see `fetchSummaries`. */
+function reducePastSeason(s: ElementSummary): PastSeason {
+  const rows = s.history_past ?? [];
+  // An entry is written for EVERY player queried, even one with no history at
+  // all — "we looked and there is nothing" is itself the signal that separates
+  // a new signing from a benched squad player.
+  const newest = rows.length > 0 ? rows[rows.length - 1] : null;
+  // Per-90 rates come from the most recent season with actual pitch time: a
+  // year lost to injury shouldn't erase what the player can do.
+  const src = [...rows].reverse().find((p) => p.minutes > 0);
+  return {
+    plSeasons: rows.length,
+    seasons: rows.map((r) => ({
+      seasonName: r.season_name,
+      minutes: r.minutes,
+      starts: r.starts,
+    })),
+    lastSeason: newest
+      ? {
+          seasonName: newest.season_name,
+          minutes: newest.minutes,
+          // Passed through verbatim, INCLUDING zero, because zero here is
+          // ambiguous and only the consumer can disambiguate it.
+          //
+          // An earlier version of this comment said `starts` "only exists from
+          // 2021/22" and that an absent value is not zero. Both halves are
+          // wrong. Counted over the element summaries in the 2026/27 snapshot,
+          // not one row before 2022/23 reports a start, and the API never sends
+          // `null` for the field — it sends `0`. So there is no absent value to
+          // protect here; the real hazard is a `0` on a pre-2022/23 row, which
+          // means "not recorded" rather than "did not start". That call needs
+          // the season name, so it is made in `startsUnrecorded` in `xp.ts`
+          // against `XP_CONFIG.startsRecordedFrom`, which carries the per-season
+          // counts that place the cut-off.
+          starts: newest.starts,
+        }
+      : undefined,
+    seasonName: src?.season_name,
+    points: src?.total_points ?? 0,
+    minutes: src?.minutes ?? 0,
+    starts: src?.starts,
+    defensiveContribution: src?.defensive_contribution,
+    goals: src?.goals_scored,
+    assists: src?.assists,
+    xg: num(src?.expected_goals),
+    xa: num(src?.expected_assists),
+    bonus: src?.bonus,
+    ict: num(src?.ict_index),
+    saves: src?.saves,
+  };
 }
 
 export interface TeamData {

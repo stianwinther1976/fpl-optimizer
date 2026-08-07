@@ -19,13 +19,34 @@ const ALLOWED: RegExp[] = [
 ];
 
 // Cache lifetime (seconds) per endpoint type.
-function cacheSeconds(path: string): number {
+export function cacheSeconds(path: string): number {
   if (path.startsWith("bootstrap-static")) return 300;
   // Fixtures and live scores drive the in-play view (30s UI poll) — keep fresh.
   if (path.startsWith("fixtures")) return 25;
   if (path.includes("/live/")) return 25;
   if (path.includes("/history/") || path.includes("/transfers/")) return 300;
+  // An element summary changes when a gameweek's results land and not otherwise
+  // — the same volatility as the entry history above, and it was getting the
+  // catch-all 120 for no reason beyond nobody having named it.
+  if (path.startsWith("element-summary")) return 300;
   return 120;
+}
+
+/**
+ * How long a stale answer may still be served while its refresh runs behind it.
+ *
+ * Every other endpoint here is fetched once per reader, so a cold miss costs
+ * that reader one round trip. `element-summary` is fetched once per PLAYER —
+ * the launch pool is the whole field — so a cold miss is not one round trip but
+ * hundreds arriving together, against an API that rate-limits and whose refusals
+ * degrade the model to a price prior. That asymmetry, not the data's freshness,
+ * is what sets this: a summary is allowed to be served stale for as long as a
+ * day, because the thing it could be stale ABOUT happens weekly, and the refresh
+ * is already on its way to the next reader.
+ */
+export function staleSeconds(path: string): number {
+  if (path.startsWith("element-summary")) return 86_400;
+  return cacheSeconds(path) * 2;
 }
 
 export async function GET(
@@ -77,7 +98,7 @@ export async function GET(
     const data = await upstream.json();
     return NextResponse.json(data, {
       headers: {
-        "Cache-Control": `public, s-maxage=${ttl}, stale-while-revalidate=${ttl * 2}`,
+        "Cache-Control": `public, s-maxage=${ttl}, stale-while-revalidate=${staleSeconds(joined)}`,
       },
     });
   } catch {

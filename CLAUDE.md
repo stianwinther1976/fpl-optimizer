@@ -142,5 +142,25 @@ always render at 58'. `makeDemoUniverse(NOW)` builds it; tests use
   measured for `buildSquadWithinBudget` and was worse on the live model; see the
   note at `src/lib/optimizer.ts:419`. No equivalent has been measured for
   `pickBestXi` itself.
-- `fetchPastSeason` accepts an `AbortSignal` and nothing passes one, so changing
-  entry id mid-fetch leaves ~400 requests running alongside the new ones.
+## The element-summary layer
+
+`element-summary/{id}/` is the only endpoint fetched once per **player** rather
+than once per reader, and its payload is read by two consumers for two different
+halves: `fetchPastSeason` wants `history_past`, `fetchRecentForm` wants
+`history`. Both used to call it independently, minutes apart, so a player in both
+sets was fetched twice for two halves of one document — and `fetchCache` never
+evicts, so every raw payload stayed in memory for the life of the page.
+
+`fetchSummaries` in `src/lib/fpl.ts` now sits under both: one fetch per player
+per session, reduced on arrival, keyed by feed. Three rules it is worth knowing
+before touching it:
+
+- **Failures are not cached.** `pastSeasonStore` refuses to treat a result with
+  failures as final so the drafter's "Re-draft to try them again" button means
+  what it says; recording a miss here would silently take that back.
+- **`resetSummaryCache()` is what makes `resetPastSeasonStore()` complete.** A
+  reset that left the layer below populated hands the next test records the
+  store never fetched.
+- **Cancellation is best-effort.** The store aborts the load it overtakes, but
+  workers only check the signal between players, so the `loadSeq` guard against
+  a superseded load *writing* is still load-bearing and must stay.

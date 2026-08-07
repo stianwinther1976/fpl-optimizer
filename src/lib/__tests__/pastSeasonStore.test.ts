@@ -10,7 +10,8 @@ import type { PastSeasonFetch } from "../fpl";
 
 const fetchPastSeason = vi.hoisted(() => vi.fn());
 const currentFeed = vi.hoisted(() => vi.fn(() => "real" as "real" | "demo"));
-vi.mock("../fpl", () => ({ fetchPastSeason, currentFeed }));
+const resetSummaryCache = vi.hoisted(() => vi.fn());
+vi.mock("../fpl", () => ({ fetchPastSeason, currentFeed, resetSummaryCache }));
 
 const {
   loadPastSeason,
@@ -195,13 +196,17 @@ describe("the past-season cache keeps the two feeds apart", () => {
 });
 
 /*
- * NOTHING HERE CANCELS.
+ * CANCELLING IS NOT THE SAME AS ORDERING.
  *
- * `fetchPastSeason` accepts an `AbortSignal` and no caller passes one, so
- * switching entry — or feed — leaves four hundred requests running alongside
- * the four hundred that replaced them, and they land in whatever order the
- * network chooses. Every rule in this store is written as if loads finish in
- * the order they started. These are the cases where they do not.
+ * The store now aborts the load it overtakes, so switching entry — or feed —
+ * no longer leaves four hundred requests running alongside the four hundred
+ * that replaced them. But abort is a request, not a guarantee: the workers
+ * check the signal between players, so one already past the check settles
+ * anyway, and a load cancelled a moment before it would have resolved resolves
+ * regardless. Landing order stays arbitrary while every rule in this store is
+ * written as if loads finish in the order they started. These are the cases
+ * where they do not — and the abort below is asserted separately, because a
+ * guard that holds only when cancellation wins the race is not a guard.
  */
 describe("a load that has been overtaken does not get to write", () => {
   beforeEach(() => {
@@ -220,6 +225,30 @@ describe("a load that has been overtaken does not get to write", () => {
     );
     return { release: (v: PastSeasonFetch) => release(v) };
   }
+
+  it("cancels the load it overtakes", async () => {
+    // The guard below stops an overtaken load from WRITING. What it could not
+    // do was stop it from RUNNING: hundreds of element-summary requests stayed
+    // on the wire competing with the ones the reader is now waiting for, and
+    // against an API that rate-limits, the new load was being slowed by the
+    // answer to a question nobody had asked since.
+    const first = deferred();
+    const firstLoad = loadPastSeason(IDS);
+    const signal = fetchPastSeason.mock.calls[0][3] as AbortSignal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted).toBe(false);
+
+    currentFeed.mockReturnValue("demo");
+    fetchPastSeason.mockResolvedValueOnce(result(300, 300));
+    await loadPastSeason(Array.from({ length: 300 }, (_, i) => i + 1));
+
+    expect(signal.aborted).toBe(true);
+
+    // And the overtaken load still may not write when it settles anyway.
+    first.release(result(420, 420));
+    await firstLoad;
+    expect(cachedPastSeason()?.size).toBe(300);
+  });
 
   it("does not let a stale feed's late arrival evict the current one", async () => {
     // The real load is still in the air when the reader opens the demo. The
