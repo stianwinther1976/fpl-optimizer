@@ -153,6 +153,35 @@ always render at 58'. `makeDemoUniverse(NOW)` builds it; tests use
   measured for `buildSquadWithinBudget` and was worse on the live model; see the
   note at `src/lib/optimizer.ts:419`. No equivalent has been measured for
   `pickBestXi` itself.
+## Chip timing: two registers that must not mix
+
+`src/lib/chips.ts` reasons about chips over the rest of the season; the chip
+advisor in `optimizer.ts` still scores them in expected points over the
+projection horizon. These are deliberately separate and must stay so:
+
+- **Scored** — inside the horizon. Expected points, from `projectAll`.
+- **Structural** — beyond it. Fixture *counts* only, from the published
+  calendar. Never a points claim, because `perGw` twenty weeks out would be a
+  number with no evidence in it.
+
+Two rules the tests pin, both of which produce actively wrong advice if broken:
+
+- **Clip every window to the chip's own.** Since 2025/26 there are two of each
+  chip and each expires (`bootstrap.chips`; GW2–19 and GW20–38 in 2026/27).
+  Suggesting a GW29 double for a chip that dies at GW19 is worse than silence.
+- **"No window published" ≠ "every window has closed."** `chipWindow` returned
+  null for both, so an expired chip came back as *unknown* and the advisor said
+  nothing instead of saying it had expired.
+
+Note also that `wcGain` is `max(0, bestSquadWithinValue − keepSquad)` — bounded
+below by zero, and a fresh squad beats a held one over *any* window. It is the
+size of a gap, not a reason to play the chip, and the copy says so.
+
+Pre-season there are no blanks or doubles at all: the opening calendar is 380
+fixtures, one per club per gameweek. They appear later as cup runs and
+postponements force rescheduling, so the advisor says the calendar has not
+spoken rather than reporting "nothing better ahead" as a finding.
+
 ## The element-summary layer
 
 `element-summary/{id}/` is the only endpoint fetched once per **player** rather
