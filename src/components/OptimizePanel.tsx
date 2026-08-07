@@ -880,13 +880,35 @@ export default function OptimizePanel({
                       +{a.projectedGain.toFixed(1)} <span className="text-sm">xp</span>
                     </div>
                     <div className="mt-1 text-xs text-muted">{a.detail}</div>
+                    {/*
+                      The timing note comes from the published calendar, not from
+                      the projection, and is kept visually separate for that
+                      reason: the figure above it is expected points inside the
+                      horizon, this is a fixture count that may be months out.
+                      See the header of `chips.ts`.
+                    */}
+                    {a.timing.note && (
+                      <div
+                        className={`mt-2 border-t border-border-c pt-2 text-xs ${
+                          a.timing.verdict === "structural-window-ahead"
+                            ? "text-warn"
+                            : "text-muted"
+                        }`}
+                      >
+                        {a.timing.verdict === "structural-window-ahead" ? "⏳ " : ""}
+                        {a.timing.note}
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
             <p className="mt-2 text-xs text-muted">
-              Only one chip per gameweek. Watch for double/blank gameweeks — Bench Boost and
-              Triple Captain usually pay most in doubles, Free Hit in blanks.
+              Only one chip per gameweek. The xp figure is what a chip is worth inside
+              the projection; the note under it reads the published fixture list to the
+              end of the chip&apos;s window, which is the part that can be months away.
+              Bench Boost and Triple Captain usually pay most in doubles, Free Hit in
+              blanks.
             </p>
           </div>
 

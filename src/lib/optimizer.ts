@@ -20,6 +20,7 @@ import {
   type CaptainRead,
   type FieldSplit,
 } from "./field";
+import { chipTiming, type ChipTiming } from "./chips";
 
 export interface XiSlot {
   element: Element;
@@ -66,6 +67,17 @@ export interface ChipAdvice {
   label: string;
   projectedGain: number;
   detail: string;
+  /**
+   * Timing over the rest of the chip's own window, from the published calendar
+   * rather than from the projection — see `chips.ts`.
+   *
+   * Strictly separate from `projectedGain`, which is an expected-points figure
+   * and is only ever computed inside the projection horizon. Nothing in here is
+   * a points claim: a fixture count fourteen weeks out is a fact about a
+   * schedule, and an expected-points figure fourteen weeks out would be a
+   * number with no evidence in it.
+   */
+  timing: ChipTiming;
 }
 
 interface SquadEval {
@@ -441,17 +453,33 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     const fhGwGain = xiAt(fhSquad, gw).totalXp - ownXi.totalXp;
     if (fhGwGain > fhBest.gain) fhBest = { gw, gain: fhGwGain };
   }
+  const horizonEnd = gws.length > 0 ? gws[gws.length - 1] : nextEvent;
+  const leagueTeamIds = bootstrap.teams.map((t) => t.id);
+  const timingFor = (chip: string) =>
+    chipTiming(
+      chip,
+      fixtures,
+      squadEls,
+      leagueTeamIds,
+      nextEvent,
+      lastEvent,
+      bootstrap.chips,
+      horizonEnd
+    );
+
   chipAdvice.push({
     chip: "bboost",
     label: "Bench Boost",
     projectedGain: bbBest.gain,
     detail: `Best in GW${bbBest.gw}${gwNote(bbBest.gw)}: your bench projects ${bbBest.gain.toFixed(1)} pts that week.`,
+    timing: timingFor("bboost"),
   });
   chipAdvice.push({
     chip: "3xc",
     label: "Triple Captain",
     projectedGain: tcBest.gain,
     detail: `Best in GW${tcBest.gw}${gwNote(tcBest.gw)}: ${tcBest.name} would add ~${tcBest.gain.toFixed(1)} extra points (3x instead of 2x).`,
+    timing: timingFor("3xc"),
   });
   const wcGain = Math.max(
     0,
@@ -462,13 +490,27 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     chip: "wildcard",
     label: "Wildcard",
     projectedGain: wcGain,
-    detail: `An optimal squad within your team value is projected to gain ~${wcGain.toFixed(1)} points over the next ${gws.length} gameweeks.`,
+    /*
+     * SAY WHAT THIS NUMBER IS, BECAUSE IT IS NOT WHAT IT LOOKS LIKE.
+     *
+     * `wcGain` is `max(0, bestSquadWithinValue - keepSquad)` over the horizon.
+     * It is bounded below by zero and a freshly optimised squad beats a held one
+     * over ANY window, so it is almost always comfortably positive — and the
+     * card then sorts to the top of the advisor and reads as "play this now".
+     * It is not that. It is the gap between your squad and the best one your
+     * money can buy, which is a statement about your squad and says nothing
+     * about whether this week is the week. The timing note beside it is what
+     * addresses that, and the copy now stops short of implying otherwise.
+     */
+    detail: `Your squad is ~${wcGain.toFixed(1)} points behind an optimal one within your team value, over the next ${gws.length} gameweeks. That is the size of the gap, not a reason to play the chip this week.`,
+    timing: timingFor("wildcard"),
   });
   chipAdvice.push({
     chip: "freehit",
     label: "Free Hit",
     projectedGain: Math.max(0, fhBest.gain),
     detail: `Best in GW${fhBest.gw}${gwNote(fhBest.gw)}: an optimal one-week squad projects ~${Math.max(0, fhBest.gain).toFixed(1)} pts more than your team that week.`,
+    timing: timingFor("freehit"),
   });
   chipAdvice.sort((a, b) => b.projectedGain - a.projectedGain);
 

@@ -1144,3 +1144,44 @@ describe("captaincy against the field", () => {
     expect(bold.captainRanking[0].xp).toBeGreaterThanOrEqual(bestXp - 0.75);
   });
 });
+
+describe("chip advice carries season-long timing", () => {
+  const result = optimize({
+    bootstrap,
+    fixtures,
+    owned,
+    bank: 20,
+    freeTransfers: 2,
+    nextEvent: 11,
+    horizon: 3,
+  });
+
+  it("attaches a timing read to every chip", () => {
+    expect(result.chipAdvice.length).toBeGreaterThan(0);
+    for (const a of result.chipAdvice) {
+      expect(a.timing, `${a.chip} has no timing`).toBeDefined();
+      expect(a.timing.chip).toBe(a.chip);
+    }
+  });
+
+  it("never flags a gameweek inside the horizon it already scored, or past the window", () => {
+    // The two registers must not overlap: what the projection scored in points
+    // is not re-reported as a fixture count, and nothing is suggested for a
+    // gameweek the chip cannot be played in.
+    for (const a of result.chipAdvice) {
+      for (const w of a.timing.windows) {
+        expect(w.gw).toBeGreaterThan(13); // nextEvent 11 + horizon 3 - 1
+        if (a.timing.window) expect(w.gw).toBeLessThanOrEqual(a.timing.window.stop);
+      }
+    }
+  });
+
+  it("stops the Wildcard card from reading as 'play it this week'", () => {
+    // `wcGain` is bounded below by zero and a freshly optimised squad beats a
+    // held one over any window, so the figure is almost always positive and
+    // used to sort straight to the top under copy that implied urgency. It is
+    // the size of a gap, and the copy has to say so.
+    const wc = result.chipAdvice.find((a) => a.chip === "wildcard")!;
+    expect(wc.detail).toMatch(/not a reason to play the chip this week/);
+  });
+});
