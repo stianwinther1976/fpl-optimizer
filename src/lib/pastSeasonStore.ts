@@ -12,7 +12,7 @@
 // thing the app does. Caching it here means it happens once per session
 // regardless of how many components want it.
 
-import { currentFeed, fetchPastSeason, type PastSeasonFetch } from "./fpl";
+import { currentFeed, fetchPastSeason, resetSummaryCache, type PastSeasonFetch } from "./fpl";
 import type { PastSeasonStats } from "./types";
 
 let inflight: Promise<PastSeasonFetch> | null = null;
@@ -29,6 +29,11 @@ let cachedIds: string | null = null;
  * passes an `AbortSignal`), so those four hundred requests really do land.
  */
 let loadSeq = 0;
+/**
+ * Cancels the load named by `loadSeq` — see the abort in `loadPastSeason`.
+ * Null whenever no load is in the air.
+ */
+let inflightAbort: AbortController | null = null;
 /*
  * Key of the records actually SITTING IN `cached`, which is not the same thing.
  * `cachedIds` moves the moment a new load starts; the records it describes do
@@ -158,16 +163,37 @@ export function loadPastSeason(
   if (inflight && cachedIds === key) return inflight;
   cachedIds = key;
   const seq = ++loadSeq;
-  const p: Promise<PastSeasonFetch> = fetchPastSeason(ids, 10, onProgress)
+  /*
+   * THE LOAD BEING SUPERSEDED IS NOW CANCELLED, NOT MERELY IGNORED.
+   *
+   * Reaching this line means a load is starting for a key that is not the one
+   * in flight — the reader switched entry, or switched feed. The guard below
+   * has always stopped the overtaken load from WRITING; what it could not do
+   * was stop it from running. Hundreds of element-summary requests stayed on
+   * the wire competing with the ones the user is now waiting for, and against
+   * an API that rate-limits, the new load was being slowed by the answer to a
+   * question nobody had asked since.
+   *
+   * Aborting here is the missing half. The `seq` guard stays exactly as it was:
+   * abort is best-effort and a load can still land between the abort and the
+   * check, so "did not get to write" must not depend on "was cancelled".
+   */
+  inflightAbort?.abort();
+  const ac = new AbortController();
+  inflightAbort = ac;
+  const p: Promise<PastSeasonFetch> = fetchPastSeason(ids, 10, onProgress, ac.signal)
     .then((r) => {
       /*
        * A SUPERSEDED LOAD DOES NOT GET TO WRITE.
        *
-       * Nothing here cancels: `fetchPastSeason` takes an `AbortSignal` and no
-       * caller passes one, so switching entry — or feed — leaves the previous
-       * four hundred requests running alongside the new ones, and they land in
-       * whatever order the network feels like. The earlier load landing LAST
-       * used to win, because the "fuller vs thinner" test below compares
+       * The load being overtaken is now aborted above, but abort is a request,
+       * not a guarantee: workers check the signal between players, so one
+       * already past the check still settles, and a load cancelled a moment
+       * before it would have resolved resolves anyway. Landing order therefore
+       * stays arbitrary and this guard stays load-bearing.
+       *
+       * The earlier load landing LAST used to win, because the "fuller vs
+       * thinner" test below compares
        * `cachedKey` and a stale key never matches, so `keep` was forced false
        * and the old universe's records were written over the new one's. The
        * feed prefix then correctly refused to show them — leaving the demo with
@@ -191,10 +217,6 @@ export function loadPastSeason(
       // against an equal `requested` means an equal `failed` — and `>=` here is
       // a surviving equivalent mutant rather than a gap in the tests.
       //
-      // Still missing, and worth naming: `fetchPastSeason` takes an
-      // `AbortSignal` and nothing passes one. Changing entry id mid-fetch leaves
-      // the previous 420 requests running alongside the new ones. Doubling the
-      // pool doubled that window without making the plumbing any better.
       // "Fuller" is only a comparison between two answers to the SAME question.
       // The guard is on `cachedKey` — the key the held records were fetched
       // under — not on `cachedIds`, which by now names this load. Compared
@@ -214,6 +236,7 @@ export function loadPastSeason(
       // still running. The next caller finds no in-flight promise and pays for
       // a fourth fetch of four hundred players.
       if (inflight === p) inflight = null;
+      if (inflightAbort === ac) inflightAbort = null;
     });
   inflight = p;
   return p;
@@ -225,6 +248,13 @@ export function resetPastSeasonStore(): void {
   cached = null;
   cachedIds = null;
   cachedKey = null;
+  // "Forget everything" has to reach the layer UNDER this one too. The summary
+  // cache in `fpl.ts` is what makes a second load free, so a reset that left it
+  // populated would hand the next test records this store never fetched — the
+  // same half-measure the version bump below was fixed for.
+  inflightAbort?.abort();
+  inflightAbort = null;
+  resetSummaryCache();
   // A load already in the air is now nobody's, which is what "forget
   // everything" has to mean if it is going to hold between tests.
   loadSeq++;

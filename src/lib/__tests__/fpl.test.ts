@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { fetchRecentForm, rankPercentile } from "../fpl";
+import { describe, it, expect, beforeEach } from "vitest";
+import { fetchPastSeason, fetchRecentForm, rankPercentile, resetSummaryCache } from "../fpl";
 
 describe("rankPercentile", () => {
   it("uses more decimals the closer to the top you are", () => {
@@ -117,6 +117,94 @@ describe("fetchRecentForm", () => {
       const r = await fetchRecentForm([8004, 8005], 5, 2);
       expect(r.has(8004)).toBe(false);
       expect(r.has(8005)).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+});
+
+/*
+ * `element-summary/{id}/` is the most expensive thing the app does — one
+ * request per player over the whole field — and it is the only endpoint whose
+ * payload two different consumers read for two different halves.
+ */
+describe("the element-summary layer", () => {
+  let calls: number[];
+
+  /** Counts every round trip, and serves both halves of the document. */
+  function mockApi(fail = new Set<number>()) {
+    const original = globalThis.fetch;
+    calls = [];
+    globalThis.fetch = (async (url: string) => {
+      const id = Number(String(url).match(/element-summary\/(\d+)/)![1]);
+      calls.push(id);
+      if (fail.has(id)) return { ok: false, status: 503 } as Response;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          history: [{ element: id, round: 1, minutes: 90, starts: 1, total_points: 6 }],
+          history_past: [{ season_name: "2025/26", total_points: 180, minutes: 3000, starts: 34 }],
+        }),
+      } as Response;
+    }) as typeof fetch;
+    return () => {
+      globalThis.fetch = original;
+    };
+  }
+
+  beforeEach(() => resetSummaryCache());
+
+  it("reads both halves of one document from a single request", async () => {
+    // The dashboard pulls last season on mount; the recent-form pull happens
+    // when someone taps Optimize, which is minutes later and so past the URL
+    // cache's TTL. That second call used to be a fresh round trip for a payload
+    // the session had already parsed.
+    const restore = mockApi();
+    try {
+      const past = await fetchPastSeason([9101], 2);
+      expect(past.data.get(9101)!.minutes).toBe(3000);
+      expect(calls).toEqual([9101]);
+
+      const form = await fetchRecentForm([9101], 5, 2);
+      expect(form.get(9101)!.minsPerStart).toBe(90);
+      // Still one. The second consumer read the held record.
+      expect(calls).toEqual([9101]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not cache a failure, so a retry really does retry", async () => {
+    // `pastSeasonStore` refuses to treat a result with failures as final so the
+    // drafter's "Re-draft to try them again" button can mean what it says.
+    // Recording the miss here would quietly take that back: the retry would
+    // find it cached and issue no request at all.
+    const restore = mockApi(new Set([9102]));
+    try {
+      const first = await fetchPastSeason([9102], 1);
+      expect(first.failed).toBe(1);
+      // One attempt plus the one retry inside the fetcher.
+      expect(calls.length).toBe(2);
+
+      const second = await fetchPastSeason([9102], 1);
+      expect(second.failed).toBe(1);
+      expect(calls.length).toBe(4);
+    } finally {
+      restore();
+    }
+  });
+
+  it("issues nothing at all once the signal is aborted", async () => {
+    // The cost being cancelled is the QUEUE, hundreds of requests deep, not the
+    // one already on the wire.
+    const restore = mockApi();
+    try {
+      const ac = new AbortController();
+      ac.abort();
+      const r = await fetchPastSeason([9103, 9104, 9105], 2, undefined, ac.signal);
+      expect(calls).toEqual([]);
+      expect(r.data.size).toBe(0);
     } finally {
       restore();
     }
