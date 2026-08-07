@@ -368,7 +368,9 @@ function xiUpperBound(value: (id: number) => number): {
       const want = { 1: 1 - (discount[1] ?? 0), 2: d - (discount[2] ?? 0), 3: m - (discount[3] ?? 0), 4: f - (discount[4] ?? 0) };
       if (Object.values(want).some((n) => n < 0)) continue;
       let acc = tables[1][want[1]];
-      for (const pos of [2, 3, 4]) acc = conv(acc, tables[pos][want[pos]]);
+      // `as const` so `pos` is 2 | 3 | 4 rather than `number`, which is what
+      // `want`'s four literal keys can actually be indexed by.
+      for (const pos of [2, 3, 4] as const) acc = conv(acc, tables[pos][want[pos]]);
       if (acc[budget] > bestSum) bestSum = acc[budget];
     }
     return bestSum;

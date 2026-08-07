@@ -257,7 +257,13 @@ function buildPreseasonState(season: string): PreseasonState {
     // population; his end-of-season price is the only one on record and is
     // used as a fallback. Ownership falls back to zero rather than to his
     // end-of-season figure, because a late-season bandwagon is an outcome.
-    const price = priceAt1.get(id) ?? +p.now_cost ?? 50;
+    // The 50 is a fallback for a missing `now_cost` column, and it used to be
+    // written `?? +p.now_cost ?? 50`, which could never produce it: `+x` returns
+    // a number for every input, so the second `??` was dead and a missing column
+    // yielded `NaN` — a price that then propagated silently into every prior in
+    // the run. `Number.isFinite` is the test that was meant.
+    const eosPrice = +p.now_cost;
+    const price = priceAt1.get(id) ?? (Number.isFinite(eosPrice) ? eosPrice : 50);
     const ownPct = managers > 0 ? (100 * (selectedAt1.get(id) ?? 0)) / managers : 0;
     elements.push({
       id,

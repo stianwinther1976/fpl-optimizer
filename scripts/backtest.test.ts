@@ -464,6 +464,9 @@ describe(`${SEASON} p60 probe`, () => {
         nextEvent: g,
         horizon: 1,
         recentForm: st.recentForm,
+        // No last-season record; see the backtest run below for why this file
+        // has none to give and what it costs.
+        pastSeason: undefined,
       });
       const mmAll = XP_DEBUG.minutes!;
       XP_DEBUG.minutes = null;
@@ -527,6 +530,29 @@ describe(`${SEASON} season backtest`, () => {
           nextEvent: g,
           horizon: 1,
           recentForm: recentFor(st, recentMode),
+          // NO LAST-SEASON RECORD ANYWHERE IN THIS FILE, STATED RATHER THAN
+          // DEFAULTED. `pastSeason` is required-but-nullable precisely so a
+          // caller has to answer this, and the honest answer here is that the
+          // harness has nothing to hand it: `buildStateAt` is built from one
+          // season's archive and this file has no equivalent of `simulate.test.ts`'s
+          // `loadPreviousSeason`, which reads the PREVIOUS season's
+          // `players_raw.csv` by `code`.
+          //
+          // It costs less than it would there. This run starts at GW2 and grades
+          // one gameweek at a time, so from the second round on the model is
+          // reading current-season minutes, and `pastSeason` only carries real
+          // weight while those are thin — the `pastSeasonShare` blend and the
+          // pre-season minutes branch, which this file never enters. The bias is
+          // concentrated in the earliest rounds and it is a CONSTANT across the
+          // arms being compared, so the ablation gaps this file exists to measure
+          // (calibration on/off, the three `RecentMode`s) are unaffected even
+          // though the absolute mae/bias figures are slightly pessimistic for a
+          // summer signing.
+          //
+          // Wiring a loader in would change every absolute number this file has
+          // ever reported, so it is a measurement to run deliberately against the
+          // archive, not a default to flip.
+          pastSeason: undefined,
         });
 
         // Two populations, and the difference between them is the whole reason

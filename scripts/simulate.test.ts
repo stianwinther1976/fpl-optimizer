@@ -959,6 +959,29 @@ describe(`${SEASON} full-season simulation`, () => {
         nextEvent: gw,
         horizon: 5,
         recentForm: st.recentForm,
+        // `undefined` HERE WHILE THE LAUNCH SQUAD ABOVE GETS `previous`, AND
+        // THAT ASYMMETRY IS A KNOWN GAP, NOT A CHOICE. `previous` is in scope
+        // on the line above this loop. `buildLaunchSquad` is handed it and the
+        // in-season projection is not, which means three things are true that
+        // should not all be true at once:
+        //
+        //   - At GW1 the squad is CHOSEN with last season's record and SCORED
+        //     without it, so the two projections of the same gameweek disagree.
+        //   - `NO_PAST=1` and `POOL=1` only reach the launch squad. Every
+        //     in-season transfer this manager makes already runs as if NO_PAST
+        //     were set, so the flag's in-season arm has never been measured.
+        //   - `pastSeason` still bites after GW1 — `pastSeasonShare` blends it
+        //     into the anchor all season and `playerRates` reads it — so this is
+        //     not a pre-season-only omission.
+        //
+        // It is left as it stands because every figure quoted in this file and
+        // in `src/lib/pool.ts` (the managed 8805, set-and-forget 6496, launch
+        // 6315, the Spearman ladder) was measured through this call with no
+        // record, and passing `previous` moves all of them. Changing it is a
+        // re-measurement against `../../fpl-data`, done deliberately and with
+        // the comments updated in the same commit — not a one-word edit made
+        // while fixing a type error.
+        pastSeason: undefined,
       });
       const xpNext = (id: number) => xp.get(id)?.next ?? 0;
 

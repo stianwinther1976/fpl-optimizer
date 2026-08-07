@@ -19,6 +19,12 @@ export interface Element {
   event_points: number;
   status: "a" | "d" | "i" | "s" | "u" | "n";
   news: string;
+  /** When the current `news` string was published, ISO ("2026-08-06T17:30:12.1Z").
+   *  Optional because most fixtures and the demo feed do not synthesise it; the
+   *  live bootstrap always carries it, `null` when there is no news. Read only to
+   *  date a flag — a knock added after a snapshot was taken is information the
+   *  reader of that snapshot did not have. */
+  news_added?: string | null;
   chance_of_playing_next_round: number | null;
   selected_by_percent: string;
   minutes: number;
