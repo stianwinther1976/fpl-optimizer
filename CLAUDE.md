@@ -134,9 +134,20 @@ always render at 58'. `makeDemoUniverse(NOW)` builds it; tests use
 
 ## Known gaps, not yet fixed
 
-- The optimizer maximises points, never points **relative to the field**. There
-  is no template/effective-ownership reasoning anywhere. This is the biggest
-  open modelling gap.
+- The optimizer maximises points and **builds squads** with no reference to the
+  field. `src/lib/field.ts` now models the competition — ownership, the
+  template/differential split, and what the API does and does not publish about
+  armbands — and the captaincy view reports it, but `buildSquadWithinBudget`,
+  `planHorizon` and `pickBestXi` are untouched and still purely points-driven.
+
+  Read `field.ts`'s header before extending it. The argument there matters more
+  than the code: maximising expected points *already* maximises expected
+  points-against-the-field, exactly, because the field's expected score is a
+  constant with respect to your picks. Ownership changes the **variance** of
+  your margin, not its mean. So the usual `xp * (1 - EO)` reweighting is not a
+  sharper model — it silently swaps the objective. Anything rank-aware added
+  here has to be a stated appetite for spread (`differentialTolerance`, in
+  points, default 0 = off), never a fitted weight.
 - `pickBestXi` chooses the XI on expected points alone — no autosub term, no
   variance, no captain-downside. An autosub-aware objective *was* built and
   measured for `buildSquadWithinBudget` and was worse on the live model; see the

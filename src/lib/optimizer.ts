@@ -13,6 +13,13 @@ import type {
 } from "./types";
 import { MAX_FREE_TRANSFERS, MAX_PER_CLUB, TRANSFER_HIT, VALID_FORMATIONS } from "./rules";
 import { makeFixtureIndex, projectAll, XP_CONFIG, type PlayerXp, type XpContext } from "./xp";
+import {
+  preferDifferential,
+  readCaptains,
+  splitByField,
+  type CaptainRead,
+  type FieldSplit,
+} from "./field";
 
 export interface XiSlot {
   element: Element;
@@ -194,6 +201,15 @@ export interface OptimizerInput {
    * him at 4.1 while the Optimize tab refused to consider him.
    */
   pastSeason?: Map<number, PastSeasonStats>;
+  /**
+   * How many projected points the reader will trade for a pick the field is
+   * not on, when choosing a captain. Zero — the default — means "do not ask",
+   * and leaves every ordering here exactly as it was.
+   *
+   * In POINTS, deliberately. See `preferDifferential` in `field.ts` for why
+   * this is a preference rather than a constant to be swept.
+   */
+  differentialTolerance?: number;
 }
 
 export interface OptimizerResult {
@@ -202,6 +218,25 @@ export interface OptimizerResult {
   keepHorizonXp: number;
   plans: TransferPlan[]; // for 1..maxTransfers transfers (best per count)
   captainRanking: XiSlot[]; // top of current squad by next-GW xp
+  /**
+   * The same candidates read against the field — see `field.ts`. Separate from
+   * `captainRanking` on purpose: that one is ordered on projected points and
+   * still is, because ownership is not a better estimate of points. This is
+   * what the field already has, reported beside it.
+   *
+   * KEYED BY ELEMENT ID, not index-aligned with `captainRanking`. A parallel
+   * array would have been the obvious shape and is a trap: the two orderings
+   * are produced by different code, so the day someone re-sorts one of them the
+   * labels silently attach to the wrong players — an ownership figure against
+   * another man's name, which is worse than showing nothing. A lookup cannot
+   * drift.
+   */
+  captainReads: Map<number, CaptainRead>;
+  /**
+   * How much of the keep-XI's projected week the field has already banked.
+   * Exposure, not edge — see `FieldSplit`.
+   */
+  fieldSplit: FieldSplit;
   chipAdvice: ChipAdvice[];
   dreamTeam: BestXi;
   dreamSquad: Element[];
@@ -335,10 +370,24 @@ export function optimize(input: OptimizerInput): OptimizerResult {
   plans.sort((a, b) => a.transfers.length - b.transfers.length);
 
   // --- Captain ranking (next GW, current squad) ---
-  const captainRanking = squadEls
-    .map((e) => ({ element: e, xp: xp.get(e.id)?.next ?? 0 }))
-    .sort((a, b) => b.xp - a.xp)
-    .slice(0, 5);
+  //
+  // Ordered on projected points, and deliberately still ordered on projected
+  // points: the field's expected score is a constant with respect to this
+  // choice, so reweighting by ownership would not sharpen the ranking, it would
+  // answer a different question. `differentialTolerance` is how a reader asks
+  // that other question, in points, and it defaults to not asking it.
+  const captainRanking = preferDifferential(
+    squadEls
+      .map((e) => ({ element: e, xp: xp.get(e.id)?.next ?? 0 }))
+      .sort((a, b) => b.xp - a.xp),
+    input.differentialTolerance ?? 0
+  ).slice(0, 5);
+  const captainReads = new Map(
+    readCaptains(captainRanking, bootstrap).map((r) => [r.element.id, r])
+  );
+  const fieldSplit = splitByField(
+    keepXi.starters.map((s) => ({ element: s.element, xp: s.xp }))
+  );
 
   // --- Dream team (ignore current squad, £100m) ---
   const { squad: dreamSquad } = buildDreamSquad(bootstrap.elements, xp);
@@ -429,6 +478,8 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     keepHorizonXp,
     plans,
     captainRanking,
+    captainReads,
+    fieldSplit,
     chipAdvice,
     dreamTeam,
     dreamSquad,

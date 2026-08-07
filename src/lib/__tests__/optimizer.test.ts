@@ -1072,3 +1072,75 @@ describe("pickBestXi picks the formation that maximises XI + captain", () => {
     }
   });
 });
+
+/*
+ * The field reaches the result, and does not touch the ranking on its way.
+ *
+ * The whole argument for `field.ts` is that ownership is information about
+ * SPREAD, not a better estimate of points — the field's expected score is a
+ * constant with respect to this choice, so reweighting by ownership answers a
+ * different question rather than answering this one better. These tests exist
+ * so that argument stays true of the shipped code and not merely of the
+ * comment describing it.
+ */
+describe("captaincy against the field", () => {
+  const run = (differentialTolerance?: number) =>
+    optimize({
+      bootstrap,
+      fixtures,
+      owned,
+      bank: 20,
+      freeTransfers: 2,
+      nextEvent: 11,
+      horizon: 3,
+      differentialTolerance,
+    });
+
+  it("ranks on projected points by default, whatever the ownership", () => {
+    const r = run();
+    const xps = r.captainRanking.map((c) => c.xp);
+    expect(xps).toEqual([...xps].sort((a, b) => b - a));
+  });
+
+  it("carries a read for every ranked captain, keyed by id", () => {
+    // Keyed, not index-aligned — see the note on `OptimizerResult.captainReads`.
+    const r = run();
+    for (const c of r.captainRanking) {
+      const read = r.captainReads.get(c.element.id);
+      expect(read, `no field read for ${c.element.web_name}`).toBeDefined();
+      expect(read!.element.id).toBe(c.element.id);
+      expect(read!.xp).toBe(c.xp);
+    }
+  });
+
+  it("says nothing about the field's captain before a gameweek has finished", () => {
+    // `most_captained` is null on every unfinished event, which pre-season is
+    // all 38 of them. Nothing may turn that into a claim.
+    const r = run();
+    expect([...r.captainReads.values()].some((x) => x.wasTemplateCaptain)).toBe(false);
+  });
+
+  it("splits the keep XI into what the field has and what it does not", () => {
+    const r = run();
+    const total = r.keepXi.starters.reduce((a, s) => a + s.xp, 0);
+    expect(r.fieldSplit.total).toBeCloseTo(total, 6);
+    expect(r.fieldSplit.shared + r.fieldSplit.differential).toBeCloseTo(total, 6);
+    // Every mock element carries a published ownership, so none is dropped.
+    expect(r.fieldSplit.unknown).toBe(0);
+    // And the shared half is a real fraction of it, not the whole or nothing:
+    // the mock's ownership runs from 2% to 42%.
+    expect(r.fieldSplit.shared).toBeGreaterThan(0);
+    expect(r.fieldSplit.shared).toBeLessThan(total);
+  });
+
+  it("only reorders inside the tolerance the caller asked for", () => {
+    // A tolerance big enough to matter must not be able to promote a pick past
+    // one it actually trails by more than that. Stated against the default
+    // ranking so the property is checked on real optimiser output rather than
+    // on a hand-built list.
+    const base = run();
+    const bold = run(0.75);
+    const bestXp = base.captainRanking[0].xp;
+    expect(bold.captainRanking[0].xp).toBeGreaterThanOrEqual(bestXp - 0.75);
+  });
+});

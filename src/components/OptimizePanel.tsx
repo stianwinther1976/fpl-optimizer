@@ -18,6 +18,7 @@ import {
 import { projectAll } from "@/lib/xp";
 import { fmtPrice, remainingChips, CHIP_LABELS } from "@/lib/rules";
 import { priceTimingHint } from "@/lib/priceChange";
+import { TEMPLATE_LABEL } from "@/lib/field";
 import { Badge, SectionTitle } from "./ui";
 import Pitch from "./Pitch";
 import Sheet, { SheetClose } from "./Sheet";
@@ -792,7 +793,9 @@ export default function OptimizePanel({
           <div>
             <SectionTitle>©️ Captaincy (GW{squad.nextEvent})</SectionTitle>
             <div className="mt-3 card divide-y divide-border-c">
-              {result.captainRanking.map((c, i) => (
+              {result.captainRanking.map((c, i) => {
+                const read = result.captainReads.get(c.element.id);
+                return (
                 <button
                   key={c.element.id}
                   type="button"
@@ -805,6 +808,8 @@ export default function OptimizePanel({
                     <div className="text-xs text-muted">
                       {teams.get(c.element.team)?.short_name} · {c.element.selected_by_percent}%
                       owned
+                      {read?.klass ? ` · ${TEMPLATE_LABEL[read.klass].toLowerCase()}` : ""}
+                      {read?.wasTemplateCaptain ? " · the field's last captain" : ""}
                     </div>
                   </div>
                   <div className="whitespace-nowrap font-mono text-accent">
@@ -813,7 +818,45 @@ export default function OptimizePanel({
                   {i === 0 && <Badge tone="green">Captain</Badge>}
                   {i === 1 && <Badge>Vice</Badge>}
                 </button>
-              ))}
+                );
+              })}
+            </div>
+            {/*
+              Ownership is stated, never used to re-rank. The ordering above is
+              on projected points and stays that way: the field's expected score
+              does not depend on this choice, so reweighting by ownership would
+              answer a different question rather than answer this one better.
+              See the header of `field.ts`.
+            */}
+            <p className="mt-2 text-xs text-muted">
+              Ranked on projected points. Ownership is shown because it decides how
+              far this pick can move your rank, not how many points it scores:
+              against a widely-owned captain you gain and lose alongside most of the
+              field.
+            </p>
+          </div>
+
+          {/* Against the field */}
+          <div>
+            <SectionTitle>🎯 Against the field</SectionTitle>
+            <div className="mt-3 card p-4">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <span className="font-mono text-2xl text-accent">
+                  {result.fieldSplit.differential.toFixed(1)}
+                </span>
+                <span className="text-sm text-muted">
+                  of your XI&apos;s {result.fieldSplit.total.toFixed(1)} projected points are in
+                  players most of the field does not own.
+                </span>
+              </div>
+              <p className="mt-2 text-xs text-muted">
+                That is exposure, not edge — those managers hold other players in the
+                slots where they do not hold yours. It is the part of your week that
+                can move your rank a long way, in either direction.
+                {result.fieldSplit.unknown > 0
+                  ? ` ${result.fieldSplit.unknown} player${result.fieldSplit.unknown === 1 ? "" : "s"} left out: FPL has not published their ownership.`
+                  : ""}
+              </p>
             </div>
           </div>
 
