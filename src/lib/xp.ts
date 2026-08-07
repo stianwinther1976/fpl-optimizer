@@ -640,7 +640,10 @@ export const XP_CONFIG = {
    *
    * What is NOT claimed: the auto-drafted XV barely moves. Squad season points
    * over the four seasons go 6315 -> 6437, set-and-forget 6496 -> 6529, managed
-   * 8805 -> 8682. Those are single squads, they swing by hundreds on which
+   * 8805 -> 8682 (that last pair predates `inSeasonPast` in
+   * `scripts/simulate.test.ts` — reproduce with `NO_PAST_INSEASON=1`; the first
+   * two are launch-time and unaffected). Those are single squads, they swing by
+   * hundreds on which
    * premium stayed fit (2022-23 alone runs 1538/1908/1611/1614/1484/1810/1720
    * across the seven weights, with no trend in it at all), and they disagree in
    * sign with each other — managed goes DOWN while the other two go up. The
@@ -3398,6 +3401,11 @@ function fixtureXp(
   //   shipped    8805        6496            6315        .623    .577    .409
   //   B          8637        6351            6226        .623    .578    .410
   //   C          8783        6341            6171        .622    .576    .412
+  //
+  // The `managed` column predates `inSeasonPast` in `scripts/simulate.test.ts`
+  // and has not been re-measured; reproduce with `NO_PAST_INSEASON=1`. The rest
+  // of the table is launch-time and unaffected — and the finding below rests on
+  // the ranking metrics, which are flat in all three rows either way.
   //
   // Every ranking metric is flat to within 0.001 in both directions, which is
   // the finding: pre-season `points_per_game` is also "0.0", so `seasonPpg`

@@ -688,6 +688,28 @@ describe(`${SEASON} full-season simulation`, () => {
       // season points (6315) exactly; only `all` (.623 -> .594) and `cheapR`
       // (.577 -> .535) move, and they move because of players no squad
       // contains. The full sweep is recorded in `src/lib/pool.ts`.
+      //
+      // ------------------------------------------------------------------
+      // EVERY MANAGED FIGURE IN THIS REPO PREDATES `inSeasonPast` AND HAS NOT
+      // BEEN RE-MEASURED. Until it is, reproduce any of them by adding
+      // `NO_PAST_INSEASON=1`, which restores the loop's old blind projection:
+      //
+      //   NO_PAST_INSEASON=1 SEASON=2024-25 npx vitest run \
+      //     --config vitest.sim.config.ts --disable-console-intercept
+      //
+      // Affected — the managed column only, everywhere it appears:
+      //   this file, the 8805 above and the 8729 -> 8516 at the flat-bench note
+      //   src/lib/pool.ts       the quota sweep's `managed` column (all 8805)
+      //   src/lib/xp.ts         "managed 8805 -> 8682"; the shipped/B table
+      //   src/lib/optimizer.ts  the bench-weight sweep; "8805 against 12415"
+      //
+      // NOT affected, and left alone deliberately: the launch total (6315), the
+      // set-and-forget total (6496) and the Spearman ladder. The launch squad
+      // already saw `previous` and still does, set-and-forget captains on
+      // points-per-game and never calls `projectAll`, and the correlations are
+      // computed off `launch.xp` before the loop starts. Only the managed
+      // manager's weekly projection and his transfers changed.
+      // ------------------------------------------------------------------
       const keep = new Set(launchPool(s1.bootstrap.elements, sweepQuota()));
       const trimmed = new Map<number, PastSeasonStats>();
       for (const [id, v] of previous) if (keep.has(id)) trimmed.set(id, v);
@@ -950,6 +972,33 @@ describe(`${SEASON} full-season simulation`, () => {
       ? { subs: 0, subPoints: 0, blanks: 0, idealSlot: [0, 0, 0, 0], gws: 0 }
       : undefined;
 
+    /**
+     * LAST SEASON'S RECORD, IN SEASON. This used to be withheld from the loop
+     * below while `buildLaunchSquad` above was handed it, and the asymmetry was
+     * an oversight rather than a decision — one the compiler could not see,
+     * because `XpContext.pastSeason` was optional when the loop was written and
+     * `OptimizerInput.pastSeason` still is.
+     *
+     * Three things were wrong with it at once. At GW1 the squad was CHOSEN with
+     * the record and SCORED without it, so two projections of the same gameweek
+     * disagreed. `NO_PAST` and `POOL` reached only the launch squad, so every
+     * in-season transfer already ran as if `NO_PAST` were set and neither flag's
+     * in-season arm had ever been measured. And the omission was not confined to
+     * pre-season: `pastSeasonShare` blends the record into the anchor all year
+     * and `playerRates` reads it, so a summer signing stayed near-invisible to
+     * the transfer engine in October as well as August.
+     *
+     * The shipped app passes `pastSeason` on every one of these paths — that is
+     * what `XpContext` made required and what `OptimizerInput.pastSeason` was
+     * added for — so a simulation of the shipped app has to pass it too.
+     *
+     * `NO_PAST_INSEASON=1` RESTORES THE OLD BEHAVIOUR, and it exists because
+     * every managed figure recorded in this repo was measured without it. It is
+     * not a second opinion about the model; it is how those numbers stay
+     * reproducible. See the block above `POOL` for which ones and where.
+     */
+    const inSeasonPast = process.env.NO_PAST_INSEASON ? undefined : previous;
+
     for (let gw = 1; gw <= LAST; gw++) {
       const st = buildStateAt(gw, season);
       const elById = new Map(st.bootstrap.elements.map((e) => [e.id, e]));
@@ -959,29 +1008,7 @@ describe(`${SEASON} full-season simulation`, () => {
         nextEvent: gw,
         horizon: 5,
         recentForm: st.recentForm,
-        // `undefined` HERE WHILE THE LAUNCH SQUAD ABOVE GETS `previous`, AND
-        // THAT ASYMMETRY IS A KNOWN GAP, NOT A CHOICE. `previous` is in scope
-        // on the line above this loop. `buildLaunchSquad` is handed it and the
-        // in-season projection is not, which means three things are true that
-        // should not all be true at once:
-        //
-        //   - At GW1 the squad is CHOSEN with last season's record and SCORED
-        //     without it, so the two projections of the same gameweek disagree.
-        //   - `NO_PAST=1` and `POOL=1` only reach the launch squad. Every
-        //     in-season transfer this manager makes already runs as if NO_PAST
-        //     were set, so the flag's in-season arm has never been measured.
-        //   - `pastSeason` still bites after GW1 — `pastSeasonShare` blends it
-        //     into the anchor all season and `playerRates` reads it — so this is
-        //     not a pre-season-only omission.
-        //
-        // It is left as it stands because every figure quoted in this file and
-        // in `src/lib/pool.ts` (the managed 8805, set-and-forget 6496, launch
-        // 6315, the Spearman ladder) was measured through this call with no
-        // record, and passing `previous` moves all of them. Changing it is a
-        // re-measurement against `../../fpl-data`, done deliberately and with
-        // the comments updated in the same commit — not a one-word edit made
-        // while fixing a type error.
-        pastSeason: undefined,
+        pastSeason: inSeasonPast,
       });
       const xpNext = (id: number) => xp.get(id)?.next ?? 0;
 
@@ -1009,6 +1036,13 @@ describe(`${SEASON} full-season simulation`, () => {
             horizon: 5,
             maxTransfers: Math.min(ft, 2),
             recentForm: st.recentForm,
+            // The transfer engine gets the same record the projection above
+            // does. `OptimizerInput.pastSeason` is optional, so omitting it was
+            // silent — and omitting it here specifically would have left the
+            // manager scoring his squad with the record while choosing his
+            // transfers without it, which is the two-figures-for-one-player
+            // split that field was added to end.
+            pastSeason: inSeasonPast,
           });
           const free = res.plans.filter((p) => p.hitCost === 0 && p.gainVsKeep > 0.5);
           const best = free.sort((a, b) => b.gainVsKeep - a.gainVsKeep)[0];
@@ -1123,7 +1157,8 @@ describe(`${SEASON} full-season simulation`, () => {
     // model) and is +270 after it, with no change to the objective, the search,
     // the slot weights or this harness. That is not a refinement, it is the
     // opposite conclusion — and it is the strongest available evidence for what
-    // the flat experiment (8729 -> 8516 managed) and `objVsRealSpearman` both
+    // the flat experiment (8729 -> 8516 managed, pre-`inSeasonPast`) and
+    // `objVsRealSpearman` both
     // suggested: the projections, not the objective, are the binding
     // constraint. An effect that flips sign when you improve the minutes model
     // was never an effect of the objective.
@@ -1307,8 +1342,9 @@ describe(`${SEASON} full-season simulation`, () => {
   // Caveats that stay: n=4 seasons; set-and-forget only, which is the harshest
   // regime for a punted bench because it cannot transfer away from a dead one
   // (the managed run for a MILDER version of this objective was measured
-  // separately at 8729 -> 8516, and carries the same one-draw caveat this
-  // rewrite was needed to fix). `benchFloorTrue` is 165 in all four seasons
+  // separately at 8729 -> 8516 — pre-`inSeasonPast`, so reproduce with
+  // `NO_PAST_INSEASON=1` — and carries the same one-draw caveat this rewrite
+  // was needed to fix). `benchFloorTrue` is 165 in all four seasons
   // against a `benchFloorPool` of 175 — 185 in 2022-23 — so a real punt is
   // £1.0m to £2.0m cheaper than anything this experiment's top-40 pool can
   // build, which flatters the punt and points the residual the same way.

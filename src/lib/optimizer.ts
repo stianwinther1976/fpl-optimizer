@@ -469,6 +469,13 @@ function totalValue(owned: OwnedPlayer[], bank: number): number {
  *   managed        8516   8601   8441   8634   8514
  *   set-and-forget 6373   6088   6100   6205   6268
  *
+ * Every `managed` number here predates `inSeasonPast` in
+ * `scripts/simulate.test.ts` and has not been re-measured; reproduce with
+ * `NO_PAST_INSEASON=1`. The set-and-forget row is unaffected. The conclusion
+ * below survives either way: it rests on the managed and set-and-forget rows
+ * agreeing in SIGN across five weights, and the in-season record is a change to
+ * the projection every one of those columns shares.
+ *
  * The two facts together say something worth knowing about this whole app. The
  * optimiser is not the binding constraint; the projections are. A sharper
  * optimiser concentrates the budget on the players the model rates highest,
@@ -494,7 +501,8 @@ function totalValue(owned: OwnedPlayer[], bank: number): number {
  * through `actualGwPoints` for all 38 gameweeks. It also doubles as the
  * denominator for "fraction of achievable optimum": the live managed total of
  * 8805 against a 12415 ceiling is 71%, and the gap is projection error, not
- * search error.
+ * search error. (The 8805 predates `inSeasonPast` — see above. The 12415 does
+ * not move: the oracle depends only on archived prices and archived points.)
  */
 /** Greedy + repair: best 15-man squad within a budget.
  * `scoreOf` ranks players — defaults to discounted horizon xP (permanent moves

@@ -34,6 +34,12 @@ import type { Element } from "./types";
  *     420         6315           8805    .593    .533    .410
  *    none         6315           8805    .623    .577    .409
  *
+ * THE `managed` COLUMN PREDATES `inSeasonPast` in `scripts/simulate.test.ts` and
+ * has not been re-measured; run with `NO_PAST_INSEASON=1` to reproduce it. The
+ * other four columns are unaffected — they are launch-time quantities, and the
+ * launch drafter saw last season's record then and still does. The quota
+ * conclusion rests on those four, so it stands as written.
+ *
  * Read that table honestly and it does not say what picking 420 wants it to say.
  * Every point of the 43 is bought by 315, and so is .025 of the .028 of premium
  * ordering; 315 -> 420 is 105 more requests for .004 of `all`, which is inside
