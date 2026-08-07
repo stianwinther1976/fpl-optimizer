@@ -2298,19 +2298,34 @@ describe("pre-season club start mass", () => {
     // taker: no record at all, `penalties_order: 1`, so `setPieceStartFloor`
     // would put him at `penaltyTakerPStart` = 0.75 if the ceiling let it.
     //
-    // PRICED AT THE FLOOR OF THE MARKET, £4.0m, and that is load-bearing rather
-    // than flavour. At £5.5m his price prior alone already exceeds 0.55, so the
-    // clamp would land him on the ceiling whether or not the set-piece floor
-    // existed and a mutant that deleted the floor would be invisible. At £4.0m
-    // the prior is well short of the ceiling, so the only thing that can carry
-    // him to it is the floor — which is exactly the quantity under test. Id 705
-    // below is the control: same position, same £4.0m, same absent record, no
-    // set-piece order.
+    // PRICED AT £6.0m, AND THE PRICE IS LOAD-BEARING rather than flavour. It
+    // used to be £4.0m, chosen so the price prior fell well short of the ceiling
+    // and only the set-piece term could carry him to it — a mutant that deleted
+    // the term would then be visible. Recalibrating that term moved the window.
+    // Penalties are no longer a 0.75 floor but a pull toward 0.60 worth 25
+    // pseudo-games (see `penaltyTakerRate`), and free kicks floor at 0.50, not
+    // 0.62. At £4.0m the whole role lift now comes out at 0.500 — BELOW the
+    // 0.55 ceiling — so the ceiling does not bind at all and the test would be
+    // asserting a clamp that never fires.
+    //
+    // Measured across the price ladder with the club accounting off (taker
+    // first, price-matched control second): £4.0m 0.500/0.080 · £5.0m
+    // 0.509/0.131 · £5.5m 0.533/0.254 · £6.0m 0.550/0.377 · £6.5m 0.550/0.500 ·
+    // £7.0m 0.550/0.550. £6.0m is the one price that satisfies both halves: the
+    // role lift clears the ceiling so the clamp genuinely fires, and the prior
+    // alone is 0.377, far enough short that deleting the role term is still
+    // visible. By £7.0m the prior reaches the ceiling on its own and the test
+    // would be vacuous.
+    //
+    // Id 705 is the control — same position, same price, same absent record,
+    // no set-piece order — and it has to be re-priced with him or it stops
+    // being a control.
     const taker = el({
-      id: 700, web_name: "Pens", team: 16, element_type: 3, now_cost: 40,
+      id: 700, web_name: "Pens", team: 16, element_type: 3, now_cost: 60,
       penalties_order: 1, direct_freekicks_order: 1,
     });
     const rest = club(16, 701, 17, 52);
+    rest.find((e) => e.id === 705)!.now_cost = 60;
     const run = (id = 700) => {
       XP_DEBUG.minutes = new Map();
       try {
@@ -2358,10 +2373,20 @@ describe("pre-season club start mass", () => {
     // priced, identically record-less team-mate in the same position, differing
     // only in having no set-piece order, sits well short of the ceiling.
     expect(noMass(705)).toBeLessThan(XP_CONFIG.preseasonRecordlessGlobalCap - 0.05);
-    // Exempt: the floor wins and he is projected as a near-nailed starter on
-    // the strength of a penalty order alone.
-    expect(exempt).toBeCloseTo(XP_CONFIG.penaltyTakerPStart, 6);
-    expect(exempt).toBeGreaterThan(shipped + 0.15);
+    // Exempt: the role lift wins and carries him past the ceiling. The flag is
+    // still behaviourally live, which is the whole reason this test exists.
+    expect(exempt).toBeGreaterThan(shipped);
+    // AND THE MARGIN HAS COLLAPSED, WHICH IS RECORDED RATHER THAN HIDDEN. This
+    // used to read `exempt > shipped + 0.15`, and `exempt` used to land exactly
+    // on a 0.75 penalty floor. It cannot any more: the pull that replaced that
+    // floor tops out near 0.66 even at the highest prior the range allows, so
+    // the most the exemption can now buy over a 0.55 ceiling is about a tenth,
+    // and at this fixture's prior it buys under a hundredth. The refuted branch
+    // is therefore close to inert now — flipping it is no longer the large
+    // behavioural change the sweep refuted, and anyone re-opening that argument
+    // should know the thing they would be switching on is much smaller than the
+    // thing that was measured. The bound is what pins that claim.
+    expect(exempt).toBeLessThan(shipped + 0.05);
   });
 
   it("does not apply the record-less ceiling to goalkeepers", () => {

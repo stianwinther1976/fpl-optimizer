@@ -439,26 +439,51 @@ describe("availability", () => {
 });
 
 describe("set-piece duty", () => {
-  it("treats the designated penalty taker as a starter even on thin evidence", async () => {
+  it("lifts the designated penalty taker, and lifts him less the more record he has", async () => {
     // A club does not give penalties to a man it plans to leave on the bench.
-    // Both players look identical in the record; only the duty differs.
-    const [taker, other] = ids(2);
+    // Both players in each pair look identical in the record; only the duty
+    // differs.
+    //
+    // THE SECOND HALF OF THIS TEST IS THE POINT, and it is what the first half
+    // used to be asserted without. Penalty duty used to be a hard floor at
+    // 0.75, which meant the thin-record taker below was not lifted but REPLACED
+    // — his own record stopped mattering at all. Measured over four archived
+    // seasons that floor lost to having no term whatsoever in four held-out
+    // seasons out of four; see `penaltyTakerRate`. What replaced it is a pull
+    // whose weight decays as real evidence accumulates, so the lift has to be
+    // large on six starts and small on thirty-four. A constant lift of any size
+    // passes the first assertion and fails the last one.
+    const [taker, other, veteranTaker, veteran] = ids(4);
+    const thin = { minutes: 700, starts: 6, points: 40, xg: 2, xa: 1 };
+    const thick = { minutes: 3060, starts: 34, points: 150, xg: 9, xa: 6 };
     mockApi({
-      [taker]: [season("2025/26", { minutes: 700, starts: 6, points: 40, xg: 2, xa: 1 })],
-      [other]: [season("2025/26", { minutes: 700, starts: 6, points: 40, xg: 2, xa: 1 })],
+      [taker]: [season("2025/26", thin)],
+      [other]: [season("2025/26", thin)],
+      [veteranTaker]: [season("2025/26", thick)],
+      [veteran]: [season("2025/26", thick)],
     });
-    const past = (await fetchPastSeason([taker, other], 2)).data;
+    const past = (await fetchPastSeason([taker, other, veteranTaker, veteran], 4)).data;
+    const mid = (id: number, team: number, pens: boolean) =>
+      el({
+        id, web_name: pens ? "Penalties" : "No duty", team, element_type: 3, now_cost: 60,
+        ...(pens ? { penalties_order: 1 } : {}),
+      });
     const xp = project(
       [
-        el({
-          id: taker, web_name: "Penalties", team: 1, element_type: 3, now_cost: 60,
-          penalties_order: 1,
-        }),
-        el({ id: other, web_name: "No duty", team: 2, element_type: 3, now_cost: 60 }),
+        mid(taker, 1, true), mid(other, 2, false),
+        mid(veteranTaker, 3, true), mid(veteran, 4, false),
       ],
       past
     );
-    expect(xp.get(taker)!.next).toBeGreaterThan(xp.get(other)!.next * 1.5);
+    const lift = (a: number, b: number) => xp.get(a)!.next / xp.get(b)!.next;
+    // Thin record: the duty is most of what is known about him, so it moves him.
+    expect(lift(taker, other)).toBeGreaterThan(1.25);
+    // Thick record: his own thirty-four starts have already answered the
+    // question the duty was evidence for, so the term is nearly inert.
+    expect(lift(veteranTaker, veteran)).toBeLessThan(1.05);
+    // And the lift is strictly ordered, which is the decay itself rather than
+    // two thresholds that happen to hold.
+    expect(lift(taker, other)).toBeGreaterThan(lift(veteranTaker, veteran));
   });
 });
 

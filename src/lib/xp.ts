@@ -1448,12 +1448,78 @@ export const XP_CONFIG = {
   /** Weight of a season's evidence per year of age (0.55 = last season counts
    *  roughly twice what the one before it does). */
   preseasonSeasonDecay: 0.55,
-  /** Start probability floors for set-piece duty. Clubs do not hand penalties
-   *  or corners to squad players, so an order of 1 is a strong statement about
-   *  a player's standing that his raw start count may not yet reflect — a
-   *  regular who missed half of last season injured, for instance. */
-  penaltyTakerPStart: 0.75,
-  setPieceTakerPStart: 0.62,
+  /**
+   * What a designated penalty taker's start rate is pulled TOWARD, and how much
+   * evidence that pull is worth. Not a floor. It used to be one, at 0.75, and
+   * the floor was the single worst-calibrated number in this file.
+   *
+   * Measured over 2022-23..2025-26, taking `penalties_order === 1` from each
+   * season's own end-of-season dump (a survivorship-INFLATED upper bound — a
+   * taker who lost his place is no longer listed) and scoring realised starts
+   * over team fixtures: 71 taker-seasons, mean start rate 0.642. Against the
+   * previous season's dump instead, which is the only version of this signal
+   * genuinely knowable in July: 47 seasons, 0.541. So 0.75 sat above even the
+   * optimistic bound for the WHOLE population — and the floor never applied to
+   * the whole population, only to the subset whose blend came out below it,
+   * where the realised rate is 0.558 (EOS) and 0.470 (ex-ante).
+   *
+   * Split by the record the floor was overriding, EOS, realised full season:
+   *
+   *   prior starts   no PL rec.  absent  1-9   10-19  20-29  30+
+   *   realised          0.705     0.493  0.358  0.520  0.617  0.768
+   *   n                     5         8      5      8     16    29
+   *
+   * Only the 30+ bucket reaches 0.75, and those players clear it on their own
+   * record anyway, so the floor did not bind for them. Every bucket the floor
+   * actually rescued realised 0.36-0.62. It overrode the blend for about two
+   * thirds of all penalty takers, mean lift +0.254, and on RMSE against
+   * realised start rate it lost to HAVING NO TERM AT ALL in four held-out
+   * seasons out of four.
+   *
+   * The archive contains this file's own worst live case already: George Hirst,
+   * Ipswich 2024-25, GBP 5.5m, 0.0% owned, no starts the season before — blend
+   * 0.108, floored to 0.750, realised 0 starts in GW1-5 and 5 in 38. Also
+   * Milner 2025-26 (0.178 -> 0.750, actual 7/38), Callum Wilson 2024-25 (0.423
+   * -> 0.750, actual 2/38), Lanzini 2022-23 (0.436 -> 0.750, actual 2/38). The
+   * floor did win occasionally and it won big — Palmer 2023-24, 0.051 -> 0.750,
+   * actual 29/38 — but one hit does not pay for that list.
+   *
+   * The shape the data has is NOT a floor. Penalty takers with no record to
+   * read are UNDER-rated by the blend (bias -0.31 on GW1-5); penalty takers
+   * with a thin record are OVER-rated by it (+0.18 at 1-9 starts, +0.16 at
+   * 10-19). A constant lift has the wrong shape for that; a lift that decays as
+   * real evidence accumulates has exactly the right one. See `preseasonMinutes`
+   * for the form and for why it stayed one-sided.
+   *
+   * NEITHER NUMBER IS IDENTIFIED. The RMSE surface is flat to +/-0.010 across
+   * rate in [0.50, 0.65] against pseudo-games in [8, 45] — 0.65/15 is nominally
+   * best at 1.301 and 0.60/25 scores 1.302. This is an interior point of a flat
+   * region, not a fitted optimum, and it should not be re-tuned on this n.
+   */
+  penaltyTakerRate: 0.6,
+  penaltyTakerPriorGames: 25,
+  /**
+   * Start probability floor for the other set-piece duties — corners, direct
+   * free kicks. Clubs do not hand those to squad players either, so an order of
+   * 1 is a statement about a player's standing that his raw start count may not
+   * yet reflect.
+   *
+   * STILL A FLOOR, unlike penalties above, and that asymmetry is measured
+   * rather than assumed. The decaying-pull form was scored here too and lost:
+   * 1.369 at its best parameters against 1.358 for a plain floor, with every
+   * floor in [0.45, 0.55] beating every pull. The reason is visible in the
+   * buckets — a set-piece taker with no PL record realises 0.509 and one with
+   * 30+ prior starts realises 0.782, a spread of 0.27, whereas penalty takers
+   * run 0.705 against 0.768 and barely spread at all. Decay-by-evidence is the
+   * right shape only for a group whose outcome does not track evidence mass,
+   * and this group does.
+   *
+   * 0.50, not the 0.62 this shipped with. The affected subset realises 0.607 on
+   * the inflated EOS proxy and 0.355 on the clean ex-ante one; 0.62 survives
+   * only on the first. [0.45, 0.55] is flat, so 0.50 is the middle of the band
+   * rather than a point fitted to 102 observations.
+   */
+  setPieceTakerPStart: 0.5,
   // --- Defensive contribution priors (used only when the whole league's DC
   // data is missing, i.e. the bootstrap has been reset for the new season) ---
   priorDc90: { 1: 0, 2: 5.5, 3: 4.0, 4: 1.5 } as Record<number, number>,
@@ -2199,12 +2265,15 @@ interface MinutesModel {
  */
 function setPieceStartFloor(el: Element): number {
   const cfg = XP_CONFIG;
-  let floor = 0;
-  if (el.penalties_order === 1) floor = Math.max(floor, cfg.penaltyTakerPStart);
+  // PENALTIES ARE NOT HANDLED HERE ANY MORE. They used to be, at a floor of
+  // 0.75, and that floor lost to having no term at all in four held-out seasons
+  // out of four — see `penaltyTakerRate` for the measurement and
+  // `preseasonMinutes` for what replaced it. Corners and free kicks keep the
+  // floor form because the same measurement says they should.
   if (el.direct_freekicks_order === 1 || el.corners_and_indirect_freekicks_order === 1) {
-    floor = Math.max(floor, cfg.setPieceTakerPStart);
+    return cfg.setPieceTakerPStart;
   }
-  return floor;
+  return 0;
 }
 
 /**
@@ -2391,8 +2460,60 @@ function preseasonMinutes(
   const prior = priorPStart(el, ownPct);
   const floor = setPieceStartFloor(el);
   const ev = preseasonEvidence(el, past, seasonStartYear);
+  const k = cfg.preseasonPriorGames;
+  /**
+   * Penalty duty, as a lift on the start rate that DECAYS as real evidence
+   * accumulates. `penaltyTakerRate` carries the measurement; this is the form.
+   *
+   * Written out, against the plain blend below:
+   *
+   *   plain    = (starts + prior*k)                    / (games + k)
+   *   withDuty = (starts + prior*k + rate*m)           / (games + k + m)
+   *   pStart   = max(plain, withDuty)
+   *
+   * so the duty enters as `m` pseudo-games of a taker starting at `rate`, and
+   * its weight is m/(games + k + m) — everything for a player with no record,
+   * almost nothing for one with 38 starts behind him. That is the shape the
+   * archive has: takers with no record are under-rated by the blend, takers
+   * with a thin record are over-rated by it.
+   *
+   * THE `max` IS LOAD-BEARING AND IT IS NOT THE SAME MISTAKE THE BLEND BELOW
+   * REFUSES TO MAKE. Folding the pull in unconditionally scores BETTER on
+   * aggregate RMSE — 1.280 against 1.302 over four cells, and it wins 7 of 14
+   * leave-one-season-out cells against this form's 2 — and it is still the
+   * wrong thing to ship, for two reasons that RMSE at n=71 cannot see.
+   *
+   * First, the two-sided version moves 40 of 71 archive takers DOWNWARD, mean
+   * -0.069, and the group it marks down is the one group the pre-season model
+   * does not over-rate: at blend >= 0.75 the GW1-5 bias is +0.138 for players
+   * with no set-piece duty and -0.041 for penalty takers. It buys full-season
+   * accuracy in the 30+ bucket by damaging LAUNCH accuracy in the same bucket,
+   * which is the horizon the drafter actually runs on. If high-blend
+   * over-confidence wants fixing it should be fixed in the shrinkage for
+   * everyone, not smuggled in through a term that touches twenty players.
+   *
+   * Second, its worst behaviour is invisible to the metric. With `games` at
+   * zero the pull does not adjust a record-less player, it OVERWRITES him: the
+   * two-sided form takes Haaland 2022-23 from 0.791 to 0.590 against a realised
+   * 0.868, because he takes penalties. Five such players exist in the archive,
+   * which is not enough to move a four-cell sum and is more than enough to
+   * wreck a launch squad. One-sided, `max` returns 0.791 and the term is inert.
+   *
+   * So this is deliberately the second-best variant by the aggregate number and
+   * the best one by what the aggregate number is made of.
+   */
+  const m = el.penalties_order === 1 ? cfg.penaltyTakerPriorGames : 0;
+  const withDuty = (starts: number, games: number, plain: number) =>
+    m === 0
+      ? plain
+      : Math.max(plain, (starts + prior * k + cfg.penaltyTakerRate * m) / (games + k + m));
   if (!ev) {
     const mps = cfg.preseasonUnknownMinsPerStart;
+    // No record at all: the blend degenerates to the prior, so the duty term is
+    // at full strength — m/(k + m) of it — which is exactly the bucket the
+    // archive says takers are under-rated in. `role` is that lift, floor and
+    // pull together, and it is what the cap below is applied to.
+    const role = Math.max(floor, withDuty(0, 0, prior));
     // THE RECORD-LESS CAP BINDS THE SET-PIECE FLOOR TOO. It was proposed that
     // it should not — that a designated penalty taker has role evidence even
     // without a Premier League record — and measured, the exemption is worse in
@@ -2400,13 +2521,19 @@ function preseasonMinutes(
     // player-gameweeks it moves started 34.5% of the time. See
     // `preseasonRecordlessCapExemptsSetPieces`, which keeps the losing branch
     // executable, for why the argument fails.
+    //
+    // The penalty pull that replaced the 0.75 floor is bound by the cap on the
+    // same evidence and for the same reason: it is role evidence about a player
+    // with no Premier League record, which is the exact population that
+    // measurement covers. It also makes the pull's ceiling here 0.55, so the
+    // record-less half of `penaltyTakerRate`'s 0.60 never fully lands — that is
+    // the cap winning an argument it has already won once, not an oversight.
     const capped = cfg.preseasonRecordlessCapExemptsSetPieces
-      ? Math.max(Math.min(prior, cfg.preseasonRecordlessGlobalCap), floor)
-      : Math.min(Math.max(prior, floor), cfg.preseasonRecordlessGlobalCap);
+      ? Math.max(Math.min(prior, cfg.preseasonRecordlessGlobalCap), role)
+      : Math.min(role, cfg.preseasonRecordlessGlobalCap);
     const pStart = clamp(capped, 0, 1);
     return { pStart, minsPerStart: mps, share: clamp((pStart * mps) / 90, 0, 1) };
   }
-  const k = cfg.preseasonPriorGames;
   // A CONVEX COMBINATION, and it has to stay one. Writing it out:
   //
   //     (ev.starts + prior * k) / (ev.games + k)
@@ -2436,10 +2563,13 @@ function preseasonMinutes(
   // is the one to try first, since the wide form fails half the file and can
   // be waved away as obviously broken.
   //
-  // `floor` below is a genuine one-sided term and does not contradict this.
-  // Set-piece duty is EXTERNAL evidence, not the same record read twice.
+  // `floor` and `withDuty` below are genuine one-sided terms and do not
+  // contradict this. Set-piece duty is EXTERNAL evidence, not the same record
+  // read twice — which is also why the duty pull is allowed to be one-sided
+  // where flooring the blend at its own observed rate is not.
+  const plain = (ev.starts + prior * k) / (ev.games + k);
   const pStart = clamp(
-    Math.max((ev.starts + prior * k) / (ev.games + k), floor),
+    Math.max(withDuty(ev.starts, ev.games, plain), floor),
     0,
     cfg.preseasonMaxPStart
   );
