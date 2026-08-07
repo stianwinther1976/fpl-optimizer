@@ -25,11 +25,11 @@
 // projection horizon at all, on the grounds that an expected-points figure
 // twenty weeks out is a number with no evidence in it. That was measured and
 // it is the wrong objection. Projecting the whole first-half chip window on the
-// live 2026/27 snapshot, with a squad the app drafted itself:
+// 2026-08-07 snapshot, with a squad the app drafted itself:
 //
-//   bench xP by gameweek, GW1-19: 11.30 .. 12.20 — a spread of 0.90 across
-//   nineteen gameweeks. Best inside a five-week horizon is GW2 at 12.08; best
-//   over the whole window is GW9 at 12.20. A difference of 0.12 points.
+//   bench xP by gameweek, GW1-19: 11.37 .. 12.28 — a spread of 0.91 across
+//   nineteen gameweeks. Best inside a five-week horizon is GW2 at 12.16; best
+//   over the whole window is GW9 at 12.28. A difference of 0.12 points.
 //
 //   The Triple Captain's best gameweek over all nineteen is GW1 — the same one
 //   a five-week horizon already finds.
@@ -43,13 +43,21 @@
 // though it were a finding. Picking an argmax off a surface that flat is
 // fitting noise, which is the thing this repo is most careful about.
 //
-// The cost objection was wrong too, and is recorded so nobody re-litigates it:
-// `projectAll` at horizon 5 took 58 ms and at horizon 29 took 63 ms on the same
-// snapshot. It is dominated by per-player setup, not by gameweeks.
+// COST IS SMALL BUT NOT FREE, and this comment used to say otherwise. It cited
+// 58 ms at horizon 5 against 63 ms at horizon 29 and concluded the work was
+// dominated by per-player setup rather than by gameweeks. Both figures were
+// measured cold, so each was mostly first-call overhead and the comparison
+// meant nothing. Re-measured properly — nine interleaved runs after warmup,
+// medians — `projectAll` costs 9.7 ms at horizon 5, 19.5 at 12, 27.9 at 19 and
+// 37.6 at 29. It scales with the horizon, roughly linearly above a fixed offset.
+//
+// That does not change what is done here, because 38 ms was never the
+// constraint; the flat surface above is. But the reason had to be corrected
+// rather than left standing as a measurement nobody could reproduce.
 //
 // What DOES move the number is fixture structure, and it moves it enormously.
 // Injecting a double gameweek into GW30 for the squad's clubs took the bench
-// from 11.09 to 15.26 and the XI from 45.62 to 82.50.
+// from 11.16 to 15.41 and the XI from 45.62 to 82.50.
 //
 // Hence the shape here. The calendar is scanned over the chip's whole window —
 // cheap, and trustworthy months ahead because it is a schedule rather than a
@@ -235,15 +243,20 @@ export interface ChipTiming {
  * The smallest gain worth reporting as a better gameweek.
  *
  * MEASURED, and it is a noise floor rather than a tuned parameter. Projecting
- * the whole first-half window on the live 2026/27 snapshot with a calendar
+ * the whole first-half window on the 2026-08-07 snapshot with a calendar
  * containing no blanks and no doubles, the app's own drafted squad produced a
- * bench-xP spread of 0.90 points across nineteen gameweeks — that is what
+ * bench-xP spread of 0.91 points across nineteen gameweeks — that is what
  * "identical weeks" looks like through this model. A recommendation resting on
  * less than that is reporting the shape of the flat surface, not a fixture.
  *
  * Real structure clears it by a distance and is in no danger from it: the
- * injected GW30 double moved the bench by 4.17 points, more than four times
+ * injected GW30 double moved the bench by 4.25 points, more than four times
  * this.
+ *
+ * The constant stays at 0.9 rather than tracking the spread to two decimals.
+ * It is the order of magnitude that carries the argument, and re-fitting a
+ * noise floor to each week's snapshot is the sort of false precision the value
+ * exists to prevent.
  */
 export const MATERIAL_GAIN = 0.9;
 

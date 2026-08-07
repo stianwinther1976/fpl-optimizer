@@ -164,14 +164,18 @@ and scored.
 Do not "simplify" this into projecting the whole window. It was measured, and
 the reason is not cost:
 
-- Over GW1–19 on the live snapshot with no blank or double anywhere, bench xP
-  ran 11.30–12.20 — the best week beat the best-inside-five by **0.12 points**.
-  A far-out projection does not go wild, it goes **flat**, and an argmax over a
-  surface that flat is fitting noise.
-- Cost is *not* the objection: `projectAll` at horizon 5 took 58 ms and at
-  horizon 29 took 63 ms. It is dominated by per-player setup.
+- Over GW1–19 on the 2026-08-07 snapshot with no blank or double anywhere,
+  bench xP ran 11.37–12.28 — the best week beat the best-inside-five by
+  **0.12 points**. A far-out projection does not go wild, it goes **flat**, and
+  an argmax over a surface that flat is fitting noise.
+- Cost is small but *does* scale with the horizon: `projectAll` medians are
+  9.7 ms at horizon 5, 19.5 at 12, 27.9 at 19, 37.6 at 29 (nine interleaved
+  runs after warmup). An earlier version of this note claimed 58 ms against
+  63 ms and concluded the cost was flat in the horizon — both figures were
+  measured cold and were mostly first-call overhead. Cost still is not the
+  constraint; the flat surface is.
 - Structure, by contrast, moves it hugely: injecting a GW30 double took the
-  bench from 11.09 to 15.26.
+  bench from 11.16 to 15.41 and the XI from 45.62 to 82.50.
 
 Hence `MATERIAL_GAIN` (0.9) — a measured **noise floor**, not a tuned constant.
 It is the no-structure spread above; a flagged week must beat the in-horizon
