@@ -617,9 +617,18 @@ describe("nothing projects without last season's record", () => {
         takesRecord: true,
       });
     }
-    // ...and actually hands it on. Three engines project: optimize (via its
-    // XpContext), planHorizon, chipScenario.
-    expect(opt.match(/pastSeason: input\.pastSeason/g)?.length ?? 0).toBe(3);
+    // ...and actually hands it on. FOUR projection sites, not four engines:
+    // optimize projects twice — once over the transfer horizon (via its
+    // XpContext) and once over the chip windows, which run to the end of the
+    // half-season and so cannot share the shorter one — plus planHorizon and
+    // chipScenario.
+    //
+    // The second `optimize` projection spells `pastSeason` out instead of
+    // letting `{ ...ctx }` carry it. The compiler is satisfied either way; the
+    // brace-scanning backstop above is not, because it reads how the call is
+    // written. An exact count is what makes a silently-added fifth projection
+    // that forgets the record show up here.
+    expect(opt.match(/pastSeason: input\.pastSeason/g)?.length ?? 0).toBe(4);
   });
 
   it("keeps the stats table on the projection the pitch is drawn from", () => {

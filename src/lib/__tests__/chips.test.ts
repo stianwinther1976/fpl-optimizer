@@ -166,3 +166,99 @@ describe("chipTiming pre-season", () => {
     expect(t.note).toMatch(/GW6 and GW19/);
   });
 });
+
+/*
+ * Scoring a flagged gameweek.
+ *
+ * The measurement that motivates all of this: projecting the whole first-half
+ * window on the live 2026/27 snapshot, with no blank or double anywhere in the
+ * calendar, bench xP ran 11.30 to 12.20 across nineteen gameweeks — the best
+ * week beat the best-inside-five by 0.12 points. A far-out projection does not
+ * go wild, it goes flat, and an argmax over a surface that flat is noise. So a
+ * scored gameweek has to clear `MATERIAL_GAIN` before it is allowed to become
+ * a recommendation.
+ */
+describe("chipTiming scores the gameweeks the calendar flagged", () => {
+  const fx = fixturesFrom({
+    12: [[2, 3]],
+    25: [
+      [1, 2],
+      [1, 3],
+    ],
+  });
+
+  it("does not score anything when the calendar flagged nothing", () => {
+    // The point of scoring only flagged weeks: pre-season this never runs.
+    let calls = 0;
+    const clean: Record<number, [number, number][]> = {};
+    for (let gw = 1; gw <= 38; gw++) clean[gw] = [[1, 2], [3, 4]];
+    const t = chipTiming("bboost", fixturesFrom(clean), squad, LEAGUE, 1, 38, CHIPS, 5, {
+      scoreGw: () => {
+        calls++;
+        return 99;
+      },
+      inHorizonBest: 1,
+    });
+    expect(calls).toBe(0);
+    expect(t.scored).toEqual([]);
+  });
+
+  it("scores the flagged gameweeks and no others", () => {
+    // The efficiency claim the whole design rests on, and it is a claim about
+    // MEANING as much as cost: an unflagged gameweek has nothing to separate it
+    // from its neighbours, so scoring it produces a number whose only job would
+    // be to lose an argmax by noise. Here GW22 through GW38 are ordinary and
+    // only GW25 is a double; the scorer must see GW25 alone.
+    const many: Record<number, [number, number][]> = {};
+    for (let gw = 21; gw <= 30; gw++) many[gw] = [[1, 2], [3, 4]];
+    many[25] = [
+      [1, 2],
+      [1, 3],
+      [2, 4],
+    ];
+    const seen: number[] = [];
+    chipTiming("bboost", fixturesFrom(many), squad, LEAGUE, 20, 38, CHIPS, 21, {
+      scoreGw: (gw) => {
+        seen.push(gw);
+        return 20;
+      },
+      inHorizonBest: 1,
+    });
+    expect(seen).toEqual([25]);
+  });
+
+  it("recommends a flagged gameweek that clears the noise floor", () => {
+    const t = chipTiming("bboost", fx, squad, LEAGUE, 20, 38, CHIPS, 23, {
+      scoreGw: () => 16,
+      inHorizonBest: 11,
+    });
+    expect(t.verdict).toBe("structural-window-ahead");
+    expect(t.scored[0]).toMatchObject({ gw: 25, gain: 16 });
+    expect(t.note).toMatch(/GW25/);
+    expect(t.note).toMatch(/16\.0 pts there against 11\.0/);
+    // The caveat travels with the number, every time.
+    expect(t.note).toMatch(/no team news/);
+  });
+
+  it("refuses to recommend a gameweek that only wins by noise", () => {
+    // THE CASE THAT MATTERS. A double gameweek is a real fact about the
+    // calendar and is still named — but if it projects no better than what the
+    // horizon already found, the app must not tell anyone to wait for it.
+    const t = chipTiming("bboost", fx, squad, LEAGUE, 20, 38, CHIPS, 23, {
+      scoreGw: () => 11.4,
+      inHorizonBest: 11.0,
+    });
+    expect(t.verdict).toBe("nothing-structural");
+    expect(t.note).toMatch(/GW25 is a double gameweek/);
+    expect(t.note).toMatch(/not a difference worth waiting for/);
+  });
+
+  it("stays a purely structural read when the caller offers no scorer", () => {
+    // `planHorizon` and any future caller without a long projection must still
+    // get the calendar read, not a crash or an empty note.
+    const t = chipTiming("bboost", fx, squad, LEAGUE, 20, 38, CHIPS, 23);
+    expect(t.verdict).toBe("structural-window-ahead");
+    expect(t.scored).toEqual([]);
+    expect(t.note).toMatch(/GW25/);
+  });
+});
