@@ -844,9 +844,17 @@ export default function OptimizePanel({
                 <span className="font-mono text-2xl text-accent">
                   {result.fieldSplit.differential.toFixed(1)}
                 </span>
+                {/*
+                  NOT "points from players the field does not own". The sum is
+                  `xp * (1 - ownership)` per player, so it is a FRACTION OF EACH
+                  man's points, not a subset of the men — a 54%-owned striker
+                  still contributes 46% of his projection here. The first
+                  wording said the former and a reader would have concluded the
+                  XI was full of differentials.
+                */}
                 <span className="text-sm text-muted">
-                  of your XI&apos;s {result.fieldSplit.total.toFixed(1)} projected points are in
-                  players most of the field does not own.
+                  of your XI&apos;s {result.fieldSplit.total.toFixed(1)} projected points are
+                  not already shared with the rest of the field.
                 </span>
               </div>
               <p className="mt-2 text-xs text-muted">
