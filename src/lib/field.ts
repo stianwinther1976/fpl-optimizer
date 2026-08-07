@@ -82,11 +82,11 @@ export function ownershipShare(el: Element): number | null {
  * sweep them, and do not let a future change quietly promote them into the
  * objective.
  *
- * For scale, over the 2026/27 pre-season snapshot (564 elements, every one of
- * them with a published ownership): 4 land in `template`, 23 in `popular`, 46
- * in `mid` and 491 in `differential`. The long tail is the point — most of the
- * game is owned by almost nobody, which is why "differential" on its own is a
- * weak statement and the number beside it is the one that matters.
+ * For scale, over the 2026/27 pre-season snapshot of 2026-08-07 (573 elements,
+ * every one of them with a published ownership): 4 land in `template`, 24 in
+ * `popular`, 45 in `mid` and 500 in `differential`. The long tail is the point —
+ * most of the game is owned by almost nobody, which is why "differential" on its
+ * own is a weak statement and the number beside it is the one that matters.
  */
 export type TemplateClass = "template" | "popular" | "mid" | "differential";
 
@@ -128,9 +128,9 @@ export interface FieldSplit {
    * DO NOT PUT THIS ON SCREEN AS A BARE PERCENTAGE. It has a floor a long way
    * above zero and reads as far bolder than it is. Ownership is spread across
    * the whole element list, so no legal XI can be mostly-shared: measured on
-   * the 2026/27 pre-season snapshot (564 elements, GW1 next), the most-owned
-   * legal 3-4-3 in the game still comes out at 0.604, while the app's own
-   * £100m launch XI sits at 0.782. The usable range is therefore roughly
+   * the 2026/27 pre-season snapshot of 2026-08-07 (573 elements, GW1 next), the
+   * most-owned legal 3-4-3 in the game still comes out at 0.603, while the app's
+   * own £100m launch XI sits at 0.783. The usable range is therefore roughly
    * [0.6, 1.0] and a reader shown "78% differential" with no floor will hear
    * something the number does not say.
    *

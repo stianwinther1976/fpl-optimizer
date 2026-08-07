@@ -171,8 +171,8 @@ describe("chipTiming pre-season", () => {
  * Scoring a flagged gameweek.
  *
  * The measurement that motivates all of this: projecting the whole first-half
- * window on the live 2026/27 snapshot, with no blank or double anywhere in the
- * calendar, bench xP ran 11.30 to 12.20 across nineteen gameweeks — the best
+ * window on the 2026-08-07 snapshot, with no blank or double anywhere in the
+ * calendar, bench xP ran 11.37 to 12.28 across nineteen gameweeks — the best
  * week beat the best-inside-five by 0.12 points. A far-out projection does not
  * go wild, it goes flat, and an argmax over a surface that flat is noise. So a
  * scored gameweek has to clear `MATERIAL_GAIN` before it is allowed to become
