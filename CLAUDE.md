@@ -155,14 +155,28 @@ always render at 58'. `makeDemoUniverse(NOW)` builds it; tests use
   `pickBestXi` itself.
 ## Chip timing: two registers that must not mix
 
-`src/lib/chips.ts` reasons about chips over the rest of the season; the chip
-advisor in `optimizer.ts` still scores them in expected points over the
-projection horizon. These are deliberately separate and must stay so:
+`src/lib/chips.ts` reasons about chips over the rest of the season. **Structure
+finds the candidate gameweeks; scoring resolves them.** The calendar is scanned
+over the chip's whole window (cheap, and trustworthy months ahead because it is
+a schedule, not a forecast); only the gameweeks it *flags* are then projected
+and scored.
 
-- **Scored** — inside the horizon. Expected points, from `projectAll`.
-- **Structural** — beyond it. Fixture *counts* only, from the published
-  calendar. Never a points claim, because `perGw` twenty weeks out would be a
-  number with no evidence in it.
+Do not "simplify" this into projecting the whole window. It was measured, and
+the reason is not cost:
+
+- Over GW1–19 on the live snapshot with no blank or double anywhere, bench xP
+  ran 11.30–12.20 — the best week beat the best-inside-five by **0.12 points**.
+  A far-out projection does not go wild, it goes **flat**, and an argmax over a
+  surface that flat is fitting noise.
+- Cost is *not* the objection: `projectAll` at horizon 5 took 58 ms and at
+  horizon 29 took 63 ms. It is dominated by per-player setup.
+- Structure, by contrast, moves it hugely: injecting a GW30 double took the
+  bench from 11.09 to 15.26.
+
+Hence `MATERIAL_GAIN` (0.9) — a measured **noise floor**, not a tuned constant.
+It is the no-structure spread above; a flagged week must beat the in-horizon
+best by more than that before the app recommends waiting for it. Below it the
+double is still *named* (it is a fact about the calendar) but not recommended.
 
 Two rules the tests pin, both of which produce actively wrong advice if broken:
 

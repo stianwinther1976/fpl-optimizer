@@ -20,7 +20,7 @@ import {
   type CaptainRead,
   type FieldSplit,
 } from "./field";
-import { chipTiming, type ChipTiming } from "./chips";
+import { chipTiming, type ChipScoring, type ChipTiming } from "./chips";
 
 export interface XiSlot {
   element: Element;
@@ -455,6 +455,75 @@ export function optimize(input: OptimizerInput): OptimizerResult {
   }
   const horizonEnd = gws.length > 0 ? gws[gws.length - 1] : nextEvent;
   const leagueTeamIds = bootstrap.teams.map((t) => t.id);
+
+  /*
+   * A PROJECTION REACHING THE END OF THE CHIP WINDOWS, BUILT ONLY IF ASKED.
+   *
+   * The transfer planner's `xp` runs to `horizonEnd` and must keep doing so —
+   * lengthening it would change how every transfer plan is scored, which is a
+   * different decision from chip timing and one nobody asked to revisit here.
+   * So chip scoring gets its own projection.
+   *
+   * It is lazy because it is usually wasted. `chipTiming` scores a gameweek
+   * only when the calendar has flagged it, and pre-season the calendar flags
+   * nothing at all: the opening fixture list is one match per club per
+   * gameweek. Building this eagerly would spend the time on every Optimize run
+   * to answer a question the fixtures have not raised.
+   */
+  let longXp: Map<number, PlayerXp> | null = null;
+  const chipXp = (): Map<number, PlayerXp> => {
+    if (longXp) return longXp;
+    const stop = Math.min(
+      lastEvent,
+      Math.max(...(bootstrap.chips ?? []).map((c) => c.stop_event), horizonEnd)
+    );
+    // `pastSeason` is spelled out rather than left to the spread. It is already
+    // in `ctx` and the compiler would be satisfied either way, but the
+    // source-level scan in `componentInvariants` reads how the call is WRITTEN,
+    // and a spread is invisible to it. Weakening that backstop to fit one call
+    // site is the wrong trade.
+    longXp =
+      stop > horizonEnd
+        ? projectAll({ ...ctx, horizon: stop - nextEvent + 1, pastSeason: input.pastSeason })
+        : xp;
+    return longXp;
+  };
+
+  const benchAt = (gw: number, m: Map<number, PlayerXp>) =>
+    pickBestXi(squadEls, (id) => m.get(id)?.perGw.get(gw) ?? 0).bench.reduce(
+      (s, p) => s + p.xp,
+      0
+    );
+  const bestPlayerAt = (gw: number, m: Map<number, PlayerXp>) =>
+    squadEls.reduce((best, e) => Math.max(best, m.get(e.id)?.perGw.get(gw) ?? 0), 0);
+
+  const scoringFor = (chip: string): ChipScoring | undefined => {
+    switch (chip) {
+      case "bboost":
+        return { scoreGw: (gw) => benchAt(gw, chipXp()), inHorizonBest: bbBest.gain };
+      case "3xc":
+        return { scoreGw: (gw) => bestPlayerAt(gw, chipXp()), inHorizonBest: tcBest.gain };
+      case "freehit":
+        return {
+          scoreGw: (gw) => {
+            const m = chipXp();
+            const at = (id: number) => m.get(id)?.perGw.get(gw) ?? 0;
+            const fh = buildSquadWithinBudget(bootstrap.elements, m, fhBudget, at).squad;
+            return pickBestXi(fh, at).totalXp - pickBestXi(squadEls, at).totalXp;
+          },
+          inHorizonBest: Math.max(0, fhBest.gain),
+          // A squad build per gameweek is the one expensive scorer here, and a
+          // blank gameweek run rarely offers more than a couple of candidates
+          // worth separating anyway.
+          limit: 2,
+        };
+      default:
+        // The Wildcard is not a one-week chip: there is no single gameweek whose
+        // score answers "when should I rebuild", so it stays a structural read.
+        return undefined;
+    }
+  };
+
   const timingFor = (chip: string) =>
     chipTiming(
       chip,
@@ -464,7 +533,8 @@ export function optimize(input: OptimizerInput): OptimizerResult {
       nextEvent,
       lastEvent,
       bootstrap.chips,
-      horizonEnd
+      horizonEnd,
+      scoringFor(chip)
     );
 
   chipAdvice.push({

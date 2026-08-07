@@ -18,25 +18,49 @@
 // was no quantity anywhere in the advisor that could ever come out as "hold".
 //
 // ---------------------------------------------------------------------------
-// WHAT CAN BE SCORED AND WHAT CAN ONLY BE FLAGGED
+// STRUCTURE FINDS THE CANDIDATES; SCORING RESOLVES THEM
 // ---------------------------------------------------------------------------
 //
-// The fix is NOT to run the projection out to GW38. `projectAll` builds
-// `perGw` over the horizon it is given, and a per-gameweek expected-points
-// figure twenty weeks out would be a number with no evidence in it — the model
-// has no team news, no form, and no idea who will be injured. Quoting one would
-// break the rule this repo runs on.
+// The first version of this module refused to score anything beyond the
+// projection horizon at all, on the grounds that an expected-points figure
+// twenty weeks out is a number with no evidence in it. That was measured and
+// it is the wrong objection. Projecting the whole first-half chip window on the
+// live 2026/27 snapshot, with a squad the app drafted itself:
 //
-// So this module keeps two registers, and never mixes them:
+//   bench xP by gameweek, GW1-19: 11.30 .. 12.20 — a spread of 0.90 across
+//   nineteen gameweeks. Best inside a five-week horizon is GW2 at 12.08; best
+//   over the whole window is GW9 at 12.20. A difference of 0.12 points.
 //
-//   SCORED     — inside the projection horizon. Expected points, as before.
-//   STRUCTURAL — beyond it. Fixture COUNTS only: who blanks, who plays twice.
-//                Never a points claim.
+//   The Triple Captain's best gameweek over all nineteen is GW1 — the same one
+//   a five-week horizon already finds.
 //
-// The fixture list is the one input that is trustworthy months ahead, because
-// it is a schedule rather than a forecast. "Six of your clubs play twice in
-// GW29" is a fact about a published calendar. "Your bench will score 14.2 in
-// GW29" is not a fact about anything.
+// So a far-out projection does not go WILD, it goes FLAT. Nothing in the model
+// varies much by gameweek once availability has converged (injured players
+// decay toward `recoveryCeiling`, bans toward the tail of `banAvail`) and the
+// only per-gameweek input left is the fixture. Extending the horizon blindly
+// would not produce a wrong answer; it would produce an answer with no
+// discriminating power, and then invite a reader to act on 0.12 points as
+// though it were a finding. Picking an argmax off a surface that flat is
+// fitting noise, which is the thing this repo is most careful about.
+//
+// The cost objection was wrong too, and is recorded so nobody re-litigates it:
+// `projectAll` at horizon 5 took 58 ms and at horizon 29 took 63 ms on the same
+// snapshot. It is dominated by per-player setup, not by gameweeks.
+//
+// What DOES move the number is fixture structure, and it moves it enormously.
+// Injecting a double gameweek into GW30 for the squad's clubs took the bench
+// from 11.09 to 15.26 and the XI from 45.62 to 82.50.
+//
+// Hence the shape here. The calendar is scanned over the chip's whole window —
+// cheap, and trustworthy months ahead because it is a schedule rather than a
+// forecast. Only the gameweeks it FLAGS are then scored, and a scored gameweek
+// is reported only when it beats what the horizon already found by more than
+// the flat-surface spread above. Pre-season nothing is flagged, so nothing
+// extra is computed and nothing is claimed.
+//
+// One caveat travels with every scored figure out here, and the copy says so:
+// it is fixture-driven. It carries no team news, no form and no idea who will
+// be injured in November.
 //
 // ---------------------------------------------------------------------------
 // THE WINDOW IS A HARD BOUND, NOT A DETAIL
@@ -182,14 +206,54 @@ export type ChipTimingVerdict =
   | "nothing-structural"
   | "unknown-window";
 
+/** A flagged gameweek that was worth scoring, and what it scored. */
+export interface ScoredWindow {
+  gw: number;
+  structure: GwStructure;
+  /** Expected points for this chip in this gameweek. Fixture-driven only. */
+  gain: number;
+}
+
 export interface ChipTiming {
   chip: string;
   window: { start: number; stop: number } | null;
   /** Gameweeks inside the chip's own window whose shape favours it. */
   windows: GwStructure[];
+  /**
+   * The flagged gameweeks that were also scored, best first.
+   *
+   * Empty whenever the calendar flagged nothing — which pre-season is always,
+   * and which is why this costs nothing until there is a reason to spend it.
+   */
+  scored: ScoredWindow[];
   verdict: ChipTimingVerdict;
   /** One sentence, in the app's voice. Empty when there is nothing to add. */
   note: string;
+}
+
+/**
+ * The smallest gain worth reporting as a better gameweek.
+ *
+ * MEASURED, and it is a noise floor rather than a tuned parameter. Projecting
+ * the whole first-half window on the live 2026/27 snapshot with a calendar
+ * containing no blanks and no doubles, the app's own drafted squad produced a
+ * bench-xP spread of 0.90 points across nineteen gameweeks — that is what
+ * "identical weeks" looks like through this model. A recommendation resting on
+ * less than that is reporting the shape of the flat surface, not a fixture.
+ *
+ * Real structure clears it by a distance and is in no danger from it: the
+ * injected GW30 double moved the bench by 4.17 points, more than four times
+ * this.
+ */
+export const MATERIAL_GAIN = 0.9;
+
+export interface ChipScoring {
+  /** Expected points for this chip in a given gameweek. */
+  scoreGw: (gw: number) => number;
+  /** The best this chip scored inside the projection horizon. */
+  inHorizonBest: number;
+  /** How many flagged gameweeks to score. The calendar rarely offers many. */
+  limit?: number;
 }
 
 /**
@@ -210,17 +274,24 @@ export function chipTiming(
   lastEvent: number,
   bootstrapChips: { name: string; start_event: number; stop_event: number }[] | null | undefined,
   /** Gameweeks already scored on expected points, which need no flagging. */
-  horizonEnd: number
+  horizonEnd: number,
+  /**
+   * How to score a flagged gameweek. Optional: without it this stays a purely
+   * structural read, which is all the caller can offer if it has no projection
+   * reaching that far.
+   */
+  scoring?: ChipScoring
 ): ChipTiming {
   const window = chipWindow(chip, bootstrapChips, nextEvent);
   if (window === null) {
-    return { chip, window: null, windows: [], verdict: "unknown-window", note: "" };
+    return { chip, window: null, windows: [], scored: [], verdict: "unknown-window", note: "" };
   }
   if (nextEvent > window.stop) {
     return {
       chip,
       window,
       windows: [],
+      scored: [],
       verdict: "closed",
       note: `This chip's window closed after GW${window.stop}.`,
     };
@@ -235,6 +306,7 @@ export function chipTiming(
       chip,
       window,
       windows: [],
+      scored: [],
       verdict: "nothing-structural",
       note:
         window.start > nextEvent
@@ -249,6 +321,7 @@ export function chipTiming(
       chip,
       window,
       windows: [],
+      scored: [],
       verdict: "nothing-structural",
       // Pre-season this is the honest answer for every chip and every gameweek:
       // the opening fixture list is one match per club per gameweek, so there
@@ -256,16 +329,66 @@ export function chipTiming(
       // and postponements force rescheduling. Saying "no better week ahead"
       // would read as a finding; this says the calendar has not spoken yet.
       note: `No blank or double gameweeks are scheduled yet between GW${from} and GW${to}.`,
-      };
+    };
   }
-  const best = windows[0];
+
+  const shortlist = windows.slice(0, 3);
+  // SCORE ONLY WHAT THE CALENDAR FLAGGED. Scoring the whole window would be
+  // affordable — horizon 29 costs about the same as horizon 5 — and useless:
+  // with no blank or double in it the surface is flat to within `MATERIAL_GAIN`
+  // and an argmax over it is noise. A flagged gameweek is a reason to spend the
+  // computation, and there is no reason without one.
+  const scored: ScoredWindow[] = scoring
+    ? shortlist
+        .slice(0, scoring.limit ?? 3)
+        .map((s) => ({ gw: s.gw, structure: s, gain: scoring.scoreGw(s.gw) }))
+        .sort((a, b) => b.gain - a.gain)
+    : [];
+
+  const best = scored[0];
+  if (best && scoring) {
+    const edge = best.gain - scoring.inHorizonBest;
+    // A scored gameweek only earns a recommendation if it beats what the
+    // horizon already found by more than the flat-surface spread. Otherwise the
+    // structure is still worth naming — it is a fact about the calendar — but
+    // the app must not pretend it has found a better week.
+    if (edge < MATERIAL_GAIN) {
+      return {
+        chip,
+        window,
+        windows: shortlist,
+        scored,
+        verdict: "nothing-structural",
+        note: `${describeStructureOnly(best.structure, chip)} — but it projects ${best.gain.toFixed(1)} pts against ${scoring.inHorizonBest.toFixed(1)} for the best week already in range, which is not a difference worth waiting for.`,
+      };
+    }
+    return {
+      chip,
+      window,
+      windows: shortlist,
+      scored,
+      verdict: "structural-window-ahead",
+      note: `${describeWindow(chip, best.structure, window.stop)} It projects ~${best.gain.toFixed(1)} pts there against ${scoring.inHorizonBest.toFixed(1)} now — on fixtures alone, with no team news that far out.`,
+    };
+  }
+
   return {
     chip,
     window,
-    windows: windows.slice(0, 3),
+    windows: shortlist,
+    scored,
     verdict: "structural-window-ahead",
-    note: describeWindow(chip, best, window.stop),
+    note: describeWindow(chip, shortlist[0], window.stop),
   };
+}
+
+function describeStructureOnly(s: GwStructure, chip: string): string {
+  if (chip === "freehit" && s.yourBlanks > 0) {
+    return `GW${s.gw} leaves ${s.yourBlanks} of your clubs without a fixture`;
+  }
+  if (s.yourDoubles > 0) return `GW${s.gw} is a double gameweek for ${s.yourDoubles} of your clubs`;
+  if (s.leagueBlanks > 0) return `GW${s.gw} is a blank gameweek for ${s.leagueBlanks} clubs`;
+  return `GW${s.gw} has ${s.leagueDoubles} clubs playing twice`;
 }
 
 function describeWindow(chip: string, s: GwStructure, stop: number): string {
