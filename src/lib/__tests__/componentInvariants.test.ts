@@ -695,3 +695,21 @@ describe("the captain's field read is looked up, never indexed", () => {
     expect(src).not.toMatch(/captainReads\[/);
   });
 });
+
+describe("the reader's line-up calls are hydrated per feed", () => {
+  // A call saved against the demo's id 42 must never be applied to the real
+  // id 42, who is a different footballer. `lineup.ts` keys storage on the feed;
+  // this is the other half of that contract, and it is the half a refactor can
+  // silently drop — losing the dependency turns the hydration into a
+  // mount-once, and the demo's overrides then survive into the real squad.
+  it("re-hydrates when the entry changes", () => {
+    const dash = read("Dashboard.tsx");
+    const at = dash.indexOf("hydrateStartCalls(");
+    expect(at).toBeGreaterThan(0);
+    // The effect's dependency array, within a few lines of the call.
+    const tail = dash.slice(at, at + 200);
+    expect(tail).toMatch(/\}, \[entryId\]\)/);
+    // And it is told WHICH feed, rather than assuming one.
+    expect(dash.slice(at, at + 80)).toMatch(/DEMO_ENTRY_ID/);
+  });
+});

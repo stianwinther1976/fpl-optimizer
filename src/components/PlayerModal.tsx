@@ -1,11 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, type ElementSummary } from "@/lib/fpl";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { api, currentFeed, type ElementSummary } from "@/lib/fpl";
 import type { Element, EventLive, Fixture, Team } from "@/lib/types";
 import { fmtPrice, POSITION_NAMES } from "@/lib/rules";
 import { teamFixtures } from "@/lib/xp";
 import { readPriceChange } from "@/lib/priceChange";
+import {
+  activeStartCalls,
+  setStartCall,
+  startCallsVersion,
+  subscribeStartCalls,
+  type StartCall,
+} from "@/lib/lineup";
 import { Badge, PriceTrendBar } from "./ui";
 import { PlayerAvatar } from "./Pitch";
 import Sheet, { SheetClose } from "./Sheet";
@@ -55,6 +62,18 @@ export default function PlayerModal({
   teams?: Map<number, Team>;
   nextEvent?: number | null;
 }) {
+  // Re-render when the reader changes a call anywhere — the button state and
+  // the note below it both have to follow the store rather than local state,
+  // or two open sheets could disagree about the same player.
+  const callsVersion = useSyncExternalStore(
+    subscribeStartCalls,
+    startCallsVersion,
+    startCallsVersion
+  );
+  void callsVersion;
+  const myCall = activeStartCalls().get(element.id) ?? null;
+  const demo = currentFeed() === "demo";
+
   // Next three gameweeks of fixtures for this player's club.
   const upcoming: { gw: number; opp: string; home: boolean; fdr: number }[] = [];
   if (nextEvent != null && teams) {
@@ -277,6 +296,43 @@ export default function PlayerModal({
             </div>
           </div>
         )}
+
+        {/* Team news the model cannot read */}
+        <div className="mt-4">
+          <div className="text-sm font-semibold">Do you know if he starts?</div>
+          <p className="mt-1 text-xs text-muted">
+            The model works this out from price, last season&apos;s starts and ownership.
+            It has not seen a press conference. If you have, say so and the projection
+            follows you.
+          </p>
+          <div className="mt-2 flex gap-2">
+            {([
+              ["starts", "Starts"],
+              ["benched", "Not in the XI"],
+            ] as [StartCall, string][]).map(([call, label]) => (
+              <button
+                key={call}
+                type="button"
+                aria-pressed={myCall === call}
+                onClick={() => setStartCall(demo, element.id, myCall === call ? null : call)}
+                className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                  myCall === call
+                    ? "border-accent bg-accent/15 text-accent"
+                    : "border-border-c bg-panel-2 text-muted hover:border-accent"
+                }`}
+              >
+                {myCall === call ? "✓ " : ""}
+                {label}
+              </button>
+            ))}
+          </div>
+          {myCall && (
+            <p className="mt-2 text-xs text-warn">
+              You set this, not the model — every projection for {element.web_name} now
+              follows it. Tap again to hand him back to the model.
+            </p>
+          )}
+        </div>
 
         {/* Season stats */}
         <div className="mt-4">

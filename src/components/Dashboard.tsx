@@ -22,6 +22,11 @@ import {
   seedDemoCalibration,
   snapshotPredictions,
 } from "@/lib/calibration";
+import {
+  hydrateStartCalls,
+  startCallsVersion,
+  subscribeStartCalls,
+} from "@/lib/lineup";
 import PlayerModal from "./PlayerModal";
 import KpiHistoryModal, { type KpiMetric } from "./KpiHistoryModal";
 import Pitch from "./Pitch";
@@ -205,6 +210,22 @@ export default function Dashboard({
     pastSeasonVersion,
     pastSeasonVersion
   );
+  /*
+   * The reader's own team news, restored from this device.
+   *
+   * Hydrated per FEED and re-hydrated whenever it changes: a call saved against
+   * the demo's id 42 must not survive into the real feed, where 42 is a
+   * different footballer. `lineup.ts` keys storage the same way, so this is the
+   * one place the two have to agree.
+   */
+  const callsVersion = useSyncExternalStore(
+    subscribeStartCalls,
+    startCallsVersion,
+    startCallsVersion
+  );
+  useEffect(() => {
+    hydrateStartCalls(entryId === DEMO_ENTRY_ID);
+  }, [entryId]);
   useEffect(() => {
     if (!data) return;
     let cancelled = false;
@@ -311,12 +332,14 @@ export default function Dashboard({
   }, [liveData]);
 
   // xP for the pitch view's "xP" mode (next gameweek). calVersion re-projects
-  // after the calibration factors update.
+  // after the calibration factors update; callsVersion after the reader
+  // overrides someone's line-up status.
   const xpOf = useMemo(() => {
     const nextEv = data?.bootstrap.events.find((e) => e.is_next)?.id ?? null;
     if (!data || nextEv == null) return null;
     void calVersion;
     void pastReady;
+    void callsVersion;
     const past = cachedPastSeason();
     return projectAll({
       bootstrap: data.bootstrap,
@@ -324,7 +347,7 @@ export default function Dashboard({
       nextEvent: nextEv,
       pastSeason: past ?? undefined,
     });
-  }, [data, calVersion, pastReady]);
+  }, [data, calVersion, pastReady, callsVersion]);
 
   const liveMinutesOf = useMemo(() => {
     const m = new Map<number, number>();

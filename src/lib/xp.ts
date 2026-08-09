@@ -28,6 +28,7 @@ import type {
   Team,
 } from "./types";
 import { activeCalibration, calibrationMultiplier } from "./calibration";
+import { activeStartCalls, applyStartCall, type StartCall } from "./lineup";
 
 export const XP_CONFIG = {
   horizon: 5, // number of future GWs to project
@@ -1674,6 +1675,16 @@ export interface PlayerXp {
   total: number; // raw sum over horizon
   totalDiscounted: number; // decayed sum — use for transfer decisions
   next: number; // xP next GW
+  /**
+   * Set when the READER, not the model, decided whether this player starts.
+   *
+   * Carried out of the projection so the UI can say so. Every other number in
+   * this struct is the model's opinion and is allowed to be quoted as such;
+   * this one is the reader's, and quoting it back at them unlabelled would be
+   * the app claiming credit for their team news. `undefined` means the model
+   * decided, which is the normal case.
+   */
+  startCall?: StartCall;
 }
 
 /**
@@ -1708,6 +1719,18 @@ export interface XpContext {
    * hooked on the hour — is priced correctly within a week instead of a month.
    */
   recentForm?: Map<number, RecentForm>;
+  /**
+   * elementId -> the reader's own statement about whether he starts.
+   *
+   * Optional, and when omitted the module-level active set in `lineup.ts` is
+   * used — the same arrangement `calibration.ts` has, for the same reason:
+   * `projectAll` has several callers and threading a fifth argument through
+   * all of them is how one of them silently ends up projecting without it.
+   *
+   * Passing it explicitly is for tests and for any caller that needs a
+   * projection deliberately free of overrides.
+   */
+  startCalls?: Map<number, StartCall>;
   /**
    * elementId -> last completed season's stat line (element-summary
    * history_past). The grounded pre-season signal for who actually played and
@@ -3469,6 +3492,10 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
   const horizon = ctx.horizon ?? cfg.horizon;
   const events = ctx.bootstrap.events;
   const lastEvent = events.length > 0 ? events[events.length - 1].id : 38;
+  // Read ONCE per projection, not once per player. The set can be mutated from
+  // the UI while a projection is in flight, and a run that saw one answer for
+  // Thomas and a different one for Kluivert would be a squad nobody chose.
+  const startCalls = ctx.startCalls ?? activeStartCalls();
   const st = buildStrengths(ctx.bootstrap, ctx.fixtures);
   const fxIndex = makeFixtureIndex(ctx.fixtures);
   const cal = activeCalibration(); // self-learned correction from past GWs
@@ -3764,6 +3791,23 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
     // allocation of one shirt is the wrong place to express "we have never seen
     // this man play", and `preseason.test.ts` for the test that pins it.
     mm = gkMm(0) ?? mm;
+    /*
+     * THE READER'S OWN TEAM NEWS, AND IT WINS.
+     *
+     * Applied last, after the club start-mass allocation and after the keeper
+     * depth chart, because everything above it is inference from price, last
+     * season and ownership — and this is not inference. Someone has seen the
+     * team sheet. Letting a zero-sum allocation of one club's starts move a
+     * player the reader has just named would be the model overruling evidence
+     * with a prior.
+     *
+     * It is also the one place in this file whose output is not a model
+     * opinion, which is why `PlayerXp.startCall` carries it to the UI: a
+     * projection the reader moved has to be labelled as such, or the app is
+     * quoting a number back at them as though it had worked it out.
+     */
+    const call = startCalls.get(el.id);
+    if (call) mm = applyStartCall(mm, call);
     if (XP_DEBUG.minutes) {
       XP_DEBUG.minutes.set(el.id, {
         ...mm,
@@ -4020,6 +4064,7 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
       total,
       totalDiscounted,
       next: perGw.get(ctx.nextEvent) ?? 0,
+      startCall: startCalls.get(el.id),
     });
   }
   return result;
