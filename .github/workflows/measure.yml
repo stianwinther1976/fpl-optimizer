@@ -109,6 +109,19 @@ jobs:
           ls data
           du -sh .
 
+      # The harness's `LIVE=1` block reads ../fpl-live/snapshot. That is THIS
+      # repository's own data branch, produced by fpl-snapshot.yml, so unlike
+      # the archive there is nothing to weigh up about republishing it.
+      # Best-effort: the branch may not exist yet in a fresh fork, and every
+      # archive-based suite runs fine without it.
+      - name: Fetch the live snapshot (optional)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch fpl-snapshot-out \
+            "https://github.com/${GITHUB_REPOSITORY}.git" ../fpl-live
+          ls -la ../fpl-live/snapshot
+
       - name: Run the harness
         env:
           HARNESS: ${{ inputs.harness }}
