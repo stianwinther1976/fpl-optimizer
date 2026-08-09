@@ -132,7 +132,19 @@ jobs:
           GRID: ${{ inputs.grid }}
         run: |
           set -euo pipefail
-          # A push-triggered run has no inputs at all, so everything defaults.
+          # AN EMPTY ENV VAR IS A SET ENV VAR, and the harnesses read theirs
+          # with `??`, which falls back on null/undefined and NOT on "". A
+          # push-triggered run supplies no inputs, so GitHub sets every one of
+          # these to the empty string — and `PRESEASONS ?? "2023-24,..."` then
+          # yielded `"".split(",")` = `[""]`: one season with no name, whose
+          # path collapsed to `data/teams.csv` and failed on every suite.
+          #
+          # The harness is right and this was wrong: unset them here rather than
+          # weaken `??` to `||` there, where a caller deliberately passing an
+          # empty value would then silently get the default instead.
+          for v in SEASON PRESEASONS PRESEASON_GWS GRID; do
+            if [ -z "${!v:-}" ]; then unset "$v"; fi
+          done
           H="${HARNESS:-preseason}"
           if [ "${SWEEP:-none}" != "none" ] && [ -n "${SWEEP:-}" ]; then
             export "$SWEEP=1"
