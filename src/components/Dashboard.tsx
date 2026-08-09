@@ -266,6 +266,23 @@ export default function Dashboard({
           fixtures: data.fixtures,
           nextEvent: nextEv,
           pastSeason: past && past.size > 0 ? past : undefined,
+          /*
+           * THE MODEL'S OWN OPINION, DELIBERATELY WITHOUT THE READER'S.
+           *
+           * This projection exists only to be graded once the gameweek
+           * finishes, and the grade drives a per-POSITION multiplier applied to
+           * every player in the game. Snapshotting an overridden run would feed
+           * the reader's own team news into that: set a £4.0m defender to
+           * "starts", have him not play, and the calibration concludes the
+           * MODEL over-rates defenders and scales all of them down. The
+           * correction would be real, applied globally, and sourced from
+           * somebody else's mistake.
+           *
+           * Note this is the one place the rule "grade the model we actually
+           * ship" is knowingly not followed, because what is being measured
+           * here is the model's bias, and an override is not the model.
+           */
+          startCalls: new Map(),
         });
         snapshotPredictions(demo, nextEv, xp);
       }
