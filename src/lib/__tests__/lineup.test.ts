@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import {
   applyStartCall,
   pStartFor,
@@ -178,5 +180,35 @@ describe("the active set", () => {
     expect(activeStartCalls().size).toBe(1);
     resetStartCalls();
     expect(activeStartCalls().size).toBe(0);
+  });
+});
+
+/*
+ * THE CALIBRATION MUST NOT LEARN FROM THE READER.
+ *
+ * `snapshotPredictions` stores a projection to be graded once the gameweek
+ * finishes, and the grade moves a per-POSITION multiplier applied to every
+ * player in the game. If that snapshot carried overrides, a reader who set a
+ * £4.0m defender to "starts" and was wrong would teach the model that IT
+ * over-rates defenders — a real correction, applied globally, sourced from
+ * somebody else's mistake.
+ *
+ * The separation lives at the Dashboard call site, so this is a source-level
+ * guard. It is pinned here rather than in componentInvariants because the
+ * behaviour it protects is this module's, not the component's.
+ */
+describe("the calibration snapshot is taken without overrides", () => {
+  it("passes an explicit empty set where it grades the model", () => {
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../../components/Dashboard.tsx"),
+      "utf8"
+    );
+    const at = src.indexOf("snapshotPredictions(");
+    expect(at).toBeGreaterThan(0);
+    // The projectAll that feeds it is the one immediately above.
+    const before = src.slice(Math.max(0, at - 1400), at);
+    const call = before.lastIndexOf("projectAll({");
+    expect(call).toBeGreaterThanOrEqual(0);
+    expect(before.slice(call)).toMatch(/startCalls:\s*new Map\(\)/);
   });
 });
