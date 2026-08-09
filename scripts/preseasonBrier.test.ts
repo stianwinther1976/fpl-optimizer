@@ -1673,11 +1673,34 @@ const SNAP = path.resolve(__dirname, "../../fpl-live/snapshot");
 const HAVE_SNAP = fs.existsSync(path.join(SNAP, "bootstrap-static.json"));
 
 describe.runIf(process.env.LIVE && HAVE_SNAP)("live 2026/27 snapshot", () => {
-  const readSnap = <T,>(f: string): T =>
-    JSON.parse(fs.readFileSync(path.join(SNAP, f), "utf8")) as T;
-  const bootstrap = readSnap<Bootstrap>("bootstrap-static.json");
-  const fixtures = readSnap<Fixture[]>("fixtures.json");
-  const summaries = readSnap<Record<string, SnapSummary>>("element-summaries.json");
+  /*
+   * `runIf(false)` SKIPS THE TESTS, NOT THE BODY.
+   *
+   * Vitest executes a describe callback to build the suite tree and only then
+   * decides not to run it, so everything at this level happens whether or not
+   * the snapshot exists. An unguarded `readFileSync` here therefore throws
+   * during COLLECTION, which fails the whole FILE — taking the archive-based
+   * suites above it down with it, none of which need a snapshot at all.
+   *
+   * That is not hypothetical. It is exactly what happens on a runner that has
+   * `../fpl-data` and not `../fpl-live`, which is the arrangement
+   * `.github/workflows/measure.yml` creates: the first run of it failed here
+   * with ENOENT before a single archive test had been collected. On a laptop
+   * with both directories present the bug is invisible.
+   *
+   * The fallbacks only have to be CONSTRUCTIBLE, never correct: when
+   * `HAVE_SNAP` is false this suite does not run, so nothing reads them.
+   */
+  const readSnap = <T,>(f: string, fallback: T): T =>
+    HAVE_SNAP ? (JSON.parse(fs.readFileSync(path.join(SNAP, f), "utf8")) as T) : fallback;
+  const bootstrap = readSnap<Bootstrap>("bootstrap-static.json", {
+    events: [],
+    teams: [],
+    elements: [],
+    total_players: 0,
+  });
+  const fixtures = readSnap<Fixture[]>("fixtures.json", []);
+  const summaries = readSnap<Record<string, SnapSummary>>("element-summaries.json", {});
   const clubOf = new Map(bootstrap.teams.map((t) => [t.id, t.short_name]));
 
   /** `fetchPastSeason` goes through `fetch`; serve it from the snapshot. */
