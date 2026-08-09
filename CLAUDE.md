@@ -38,6 +38,15 @@ These read data from sibling directories, not from this repo:
 
 - `../fpl-data` — a clone of `github.com/vaastav/Fantasy-Premier-League`, the
   archived seasons (~200 MB). Backtests need it.
+
+  A sandbox whose GitHub access is scoped to this repository cannot fetch it.
+  `.github/workflows/measure.yml` is the way round that: a runner clones it
+  (sparse — the harnesses read only `teams.csv`, `players_raw.csv`,
+  `fixtures.csv` and `gws/`), runs a harness, and prints the numbers to the job
+  log. **It publishes nothing.** Mirroring somebody else's compilation into this
+  repository is a licensing decision, not a workflow's to make; check the
+  archive's LICENSE first if that is ever wanted. Fire it from the Actions tab,
+  or by pushing to `run-measurement`.
 - `../fpl-live/snapshot` — a snapshot of the live FPL API
   (`bootstrap-static.json`, `fixtures.json`, `element-summaries.json`,
   `meta.json`). Produced by `.github/workflows/fpl-snapshot.yml`, which publishes

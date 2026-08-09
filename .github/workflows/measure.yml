@@ -1,0 +1,138 @@
+# Run a measurement harness against the archived seasons, on a runner.
+#
+# WHY THIS EXISTS, AND WHY IT PUBLISHES NOTHING
+# ---------------------------------------------------------------------------
+# The archived seasons live in github.com/vaastav/Fantasy-Premier-League, which
+# the development sandbox cannot reach: its GitHub access is scoped to this
+# repository. `fpl-snapshot.yml` already solves the same shape of problem for
+# the live API — a runner has no such restriction — and this is the other half
+# of that idea, applied to the archive.
+#
+# The important difference from the snapshot job: THIS ONE WRITES NO DATA BACK.
+# The snapshot job publishes `snapshot/` to a branch because that payload is the
+# official FPL API's, fetched by the repository's owner for their own use. The
+# archive is somebody else's compilation, and mirroring it into this repository
+# would make this repository a distributor of it — a licensing decision that is
+# not a workflow's to make. So the clone lives and dies inside the job, exactly
+# as it does on a laptop, and the only thing that leaves is the harness's own
+# OUTPUT: numbers this repository computed.
+#
+# Attribution: the archive is Vaastav Anand's Fantasy-Premier-League dataset.
+# Check its LICENSE before doing anything with it beyond reading, and if that
+# ever changes to mirroring, put the attribution in the published tree.
+#
+# WHAT IT IS FOR
+# ---------------------------------------------------------------------------
+# `CLAUDE.md`'s rule is that no constant is tuned without a sweep. Several
+# things worth doing to this app — a rank-aware squad builder above all — need
+# one, and a sweep needs the archive. Without this, the only honest options are
+# "measure it on your own machine" or "do not ship it".
+#
+# The harnesses are parameterised by environment variable already, so every
+# input below is passed through `env:` rather than interpolated into a shell
+# command. `${{ }}` inside a `run:` block is a script-injection hole; inside
+# `env:` it is not.
+name: Measure
+
+on:
+  workflow_dispatch:
+    inputs:
+      harness:
+        description: Which harness to run
+        type: choice
+        default: preseason
+        options: [preseason, backtest]
+      season:
+        description: "backtest only — season, e.g. 2025-26"
+        type: string
+        default: "2025-26"
+      preseasons:
+        description: "preseason only — comma-separated seasons"
+        type: string
+        default: "2023-24,2024-25,2025-26"
+      preseason_gws:
+        description: "preseason only — how many opening gameweeks to grade"
+        type: string
+        default: "5"
+      sweep:
+        description: "preseason only — which sweep block to enable"
+        type: choice
+        default: none
+        options:
+          [none, MASS_SWEEP, CEILING_SWEEP, GLOBAL_SWEEP, SCOPE_SWEEP, SETPIECE_SWEEP, UNIFORM_SWEEP, FINAL]
+      grid:
+        description: "sweep grid, comma-separated (MASSES for MASS_SWEEP, CAPS for CEILING_SWEEP)"
+        type: string
+        default: ""
+  # The sandbox cannot call the Actions API, so a push is the only handle it
+  # has — the same reason `fpl-snapshot.yml` watches `data-snapshot`.
+  push:
+    branches: [run-measurement]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: measure
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Sparse: the harnesses read four files per season and nothing else —
+      # `teams.csv`, `players_raw.csv`, `fixtures.csv` and `gws/`. The rest of
+      # the archive is per-player directories and understat dumps, which is
+      # most of its size and none of its use here.
+      - name: Fetch the archived seasons
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/vaastav/Fantasy-Premier-League.git ../fpl-data
+          cd ../fpl-data
+          git sparse-checkout set --no-cone \
+            'data/*/teams.csv' \
+            'data/*/players_raw.csv' \
+            'data/*/fixtures.csv' \
+            'data/*/gws/*'
+          echo "--- seasons present ---"
+          ls data
+          du -sh .
+
+      - name: Run the harness
+        env:
+          HARNESS: ${{ inputs.harness }}
+          SEASON: ${{ inputs.season }}
+          PRESEASONS: ${{ inputs.preseasons }}
+          PRESEASON_GWS: ${{ inputs.preseason_gws }}
+          SWEEP: ${{ inputs.sweep }}
+          GRID: ${{ inputs.grid }}
+        run: |
+          set -euo pipefail
+          # A push-triggered run has no inputs at all, so everything defaults.
+          H="${HARNESS:-preseason}"
+          if [ "${SWEEP:-none}" != "none" ] && [ -n "${SWEEP:-}" ]; then
+            export "$SWEEP=1"
+            # Both grid-taking sweeps read their own variable name.
+            if [ -n "${GRID:-}" ]; then
+              case "$SWEEP" in
+                MASS_SWEEP) export MASSES="$GRID" ;;
+                CEILING_SWEEP) export CAPS="$GRID" ;;
+              esac
+            fi
+          fi
+          if [ "$H" = "backtest" ]; then
+            npx vitest run -c vitest.backtest.config.ts --disable-console-intercept --reporter=verbose
+          else
+            npx vitest run -c vitest.preseason.config.ts --disable-console-intercept --reporter=verbose
+          fi
