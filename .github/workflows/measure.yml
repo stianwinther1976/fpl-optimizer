@@ -142,9 +142,37 @@ jobs:
           # The harness is right and this was wrong: unset them here rather than
           # weaken `??` to `||` there, where a caller deliberately passing an
           # empty value would then silently get the default instead.
-          for v in SEASON PRESEASONS PRESEASON_GWS GRID; do
+          for v in SEASON PRESEASONS PRESEASON_GWS GRID SWEEP HARNESS; do
             if [ -z "${!v:-}" ]; then unset "$v"; fi
           done
+
+          # PARAMETERS FOR A PUSH-TRIGGERED RUN.
+          #
+          # `workflow_dispatch` inputs are unavailable to anything that cannot
+          # call the Actions API — which includes the sandbox this repo is
+          # developed from, so a push is its only handle and a push carries no
+          # inputs. An optional `.github/measure.env` on the pushed branch fills
+          # that gap: commit one to `run-measurement` to choose a sweep, and the
+          # branch itself becomes the record of what was asked for.
+          #
+          # Deliberately NOT `source`d. It is parsed as whitelisted KEY=VALUE
+          # lines, so a stray backtick in the file cannot become a command, and
+          # a key nobody recognises is ignored rather than exported.
+          #
+          # Applied only where nothing is set already, so an explicit dispatch
+          # input always beats the file.
+          CFG=.github/measure.env
+          if [ -f "$CFG" ]; then
+            while IFS='=' read -r k v || [ -n "$k" ]; do
+              case "$k" in
+                HARNESS|SEASON|PRESEASONS|PRESEASON_GWS|SWEEP|GRID)
+                  if [ -z "${!k:-}" ]; then export "$k=$v"; fi ;;
+              esac
+            done < "$CFG"
+            echo "--- from $CFG ---"
+            printf '  %s\n' "HARNESS=${HARNESS:-}" "SWEEP=${SWEEP:-}" "GRID=${GRID:-}" "PRESEASONS=${PRESEASONS:-}"
+          fi
+
           H="${HARNESS:-preseason}"
           if [ "${SWEEP:-none}" != "none" ] && [ -n "${SWEEP:-}" ]; then
             export "$SWEEP=1"
