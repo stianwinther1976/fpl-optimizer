@@ -5,6 +5,9 @@ import {
   pickBestXi,
   buildLaunchSquad,
   buildLaunchVariants,
+  rankLaunchVariants,
+  type LaunchVariant,
+  type BestXi,
   buildSquadWithinBudget,
   buildBenchAwareSquad,
   benchAwarePool,
@@ -1183,5 +1186,135 @@ describe("chip advice carries season-long timing", () => {
     // the size of a gap, and the copy has to say so.
     const wc = result.chipAdvice.find((a) => a.chip === "wildcard")!;
     expect(wc.detail).toMatch(/not a reason to play the chip this week/);
+  });
+});
+
+/*
+ * THE CARD'S NUMBER USED TO RANK THE DRAFTS BACKWARDS.
+ *
+ * `xi.totalXp` is next-GW only, and the launch cards showed it as each draft's
+ * headline figure. Measured on the 2026-08-07 snapshot the two orderings are
+ * close to reversed: `value` tops GW1 at 46.31 and comes last over five
+ * gameweeks at 217.98, while `stars` is last on GW1 at 44.87 and first over
+ * five at 223.00. A reader picking the biggest number on screen was picking
+ * the squad that scores least over the period they will hold it.
+ *
+ * `horizonXp` is the number that answers the question actually being asked.
+ */
+describe("launch drafts carry a horizon score", () => {
+  const b = makeMockBootstrap();
+  b.events.forEach((e) => {
+    e.finished = false;
+    e.is_current = false;
+    e.is_next = e.id === 1;
+  });
+  b.elements.forEach((e) => {
+    e.minutes = 0;
+    e.starts = 0;
+    e.total_points = 0;
+    e.form = "0.0";
+    e.points_per_game = "0.0";
+  });
+  const fx = makeMockFixtures().map((f) => ({ ...f, event: (f.event ?? 11) - 10, finished: false }));
+
+  it("reports one covering the whole horizon it was asked for", () => {
+    const { variants } = buildLaunchVariants(b, fx, 1, 5);
+    for (const v of variants) {
+      expect(v.horizonGws).toBe(5);
+      // Summed over five gameweeks, so it must exceed any single one of them.
+      expect(v.horizonXp).toBeGreaterThan(v.xi.totalXp);
+    }
+  });
+
+  it("tracks the horizon it is given, not a fixed five", () => {
+    const three = buildLaunchVariants(b, fx, 1, 3).variants;
+    const five = buildLaunchVariants(b, fx, 1, 5).variants;
+    for (const v of three) expect(v.horizonGws).toBe(3);
+    // A shorter horizon cannot score more, draft for draft.
+    for (const v of three) {
+      const same = five.find((f) => f.key === v.key);
+      if (same) expect(v.horizonXp).toBeLessThanOrEqual(same.horizonXp + 1e-9);
+    }
+  });
+
+  it("is a re-picked XI each week, not the opening eleven held", () => {
+    // Holding GW1's XI would understate every draft. The floor here is what
+    // that mistake would produce: re-picking can only ever score more.
+    const { variants, xp } = buildLaunchVariants(b, fx, 1, 5);
+    for (const v of variants) {
+      let held = 0;
+      const openingIds = new Set(v.xi.starters.map((s) => s.element.id));
+      for (let gw = 1; gw <= 5; gw++) {
+        for (const s of v.xi.starters) held += xp.get(s.element.id)?.perGw.get(gw) ?? 0;
+        // The captain doubles in `totalXp`, so add the best starter again.
+        held += Math.max(
+          ...v.xi.starters.map((s) => xp.get(s.element.id)?.perGw.get(gw) ?? 0)
+        );
+      }
+      expect(openingIds.size).toBe(11);
+      expect(v.horizonXp).toBeGreaterThanOrEqual(held - 1e-6);
+    }
+  });
+});
+
+/*
+ * THE BADGE MUST NOT CONTRADICT THE NUMBER PRINTED BESIDE IT.
+ *
+ * On the 2026-08-07 snapshot the top two drafts came out at 223.00 and 222.99.
+ * The card printed both as "223 xp/5gw" and badged one BEST — 0.01 points over
+ * five gameweeks presented as a winner. `rankLaunchVariants` owns the tie rule,
+ * and the rule is the PRINTED PRECISION rather than any fitted threshold, so
+ * two drafts shown as equal are badged as equal whatever the numbers are.
+ */
+describe("rankLaunchVariants", () => {
+  const v = (key: string, horizonXp: number, gw1: number): LaunchVariant => ({
+    key,
+    label: key,
+    description: "",
+    squad: [],
+    cost: 1000,
+    xi: { starters: [], bench: [], captain: null, viceCaptain: null, totalXp: gw1 } as unknown as BestXi,
+    horizonXp,
+    horizonGws: 5,
+  });
+
+  it("orders by the horizon, not by the opening gameweek", () => {
+    const r = rankLaunchVariants([v("a", 217.98, 46.31), v("b", 223.0, 44.87), v("c", 219.7, 45.94)]);
+    expect(r.order).toEqual(["b", "c", "a"]);
+  });
+
+  it("names one leader when the top is clear", () => {
+    const r = rankLaunchVariants([v("a", 217.98, 46.31), v("b", 223.0, 44.87)]);
+    expect([...r.leaders]).toEqual(["b"]);
+    expect(r.bestIndex).toBe(1);
+  });
+
+  it("names every leader that is level at the printed precision", () => {
+    // The measured case: 223.00 and 222.99 both print as 223.0.
+    const r = rankLaunchVariants([v("stars", 223.0, 44.87), v("strongxi", 222.99, 47.1)]);
+    expect(r.leaders).toEqual(new Set(["stars", "strongxi"]));
+  });
+
+  it("separates drafts that differ at the printed precision", () => {
+    // 223.0 vs 222.9 — one decimal apart, so not a tie.
+    const r = rankLaunchVariants([v("stars", 223.0, 44.87), v("strongxi", 222.9, 47.1)]);
+    expect(r.leaders).toEqual(new Set(["stars"]));
+  });
+
+  it("breaks a tie on the opening gameweek, not on construction order", () => {
+    // `stars` is built first and is a leader, so plain argmax would keep it.
+    const r = rankLaunchVariants([v("stars", 223.0, 44.87), v("strongxi", 222.99, 47.1)]);
+    expect(r.bestIndex).toBe(1);
+  });
+
+  it("never pre-selects a draft that is not a leader", () => {
+    const r = rankLaunchVariants([v("a", 100, 99), v("b", 223.0, 1), v("c", 222.99, 2)]);
+    expect(r.leaders.has(r.order[0])).toBe(true);
+    expect(r.leaders.has(["a", "b", "c"][r.bestIndex])).toBe(true);
+    expect(r.bestIndex).toBe(2);
+  });
+
+  it("survives an empty list", () => {
+    expect(rankLaunchVariants([])).toEqual({ order: [], leaders: new Set(), bestIndex: 0 });
   });
 });

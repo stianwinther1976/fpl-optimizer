@@ -8,6 +8,8 @@ import { launchPool } from "@/lib/pool";
 import {
   optimize,
   buildLaunchVariants,
+  rankLaunchVariants,
+  HORIZON_DECIMALS,
   planHorizon,
   chipScenario,
   type LaunchVariant,
@@ -108,7 +110,11 @@ export default function OptimizePanel({
           past.data.size > 0 ? past.data : undefined
         );
         setLaunch(variants);
-        setLaunchPick(0);
+        // Pre-select the draft that scores most over the horizon. Index 0 is
+        // construction order, which is not a recommendation and used to look
+        // like one. `rankLaunchVariants` owns the tie rule so the pre-selection
+        // and the badge below cannot disagree.
+        setLaunchPick(rankLaunchVariants(variants).bestIndex);
       } catch {
         setGap({ failed: -1, requested: 0 });
       } finally {
@@ -116,6 +122,20 @@ export default function OptimizePanel({
         setPhase(null);
       }
     };
+    /*
+     * RANK BY THE HORIZON, NOT BY THE OPENING WEEK.
+     *
+     * The drafts are returned in construction order and stay that way — the
+     * library test that lists them by name is a completeness check and should
+     * not be turned into a presentation one. The ranking the READER needs is
+     * applied here instead: `horizonXp` is what a launch squad is kept for, and
+     * it ranks these close to the reverse of `xi.totalXp`.
+     *
+     * The rule itself lives in `rankLaunchVariants`, not here, because the
+     * pre-selection above needs the same answer — and because a tie has to be
+     * shown as a tie rather than resolved into a winner. Read its note.
+     */
+    const launchLeaders = launch ? rankLaunchVariants(launch).leaders : new Set<string>();
     const chosen = launch?.[launchPick] ?? null;
     return (
       <div className="space-y-4">
@@ -168,9 +188,46 @@ export default function OptimizePanel({
                       <div className="flex items-center justify-between gap-2">
                         <span className="flex items-center gap-1.5 text-sm font-semibold">
                           {selected && <span className="text-accent">✓</span>}
+                          {launchLeaders.has(v.key) && (
+                            <span
+                              className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-white"
+                              title={
+                                launchLeaders.size > 1
+                                  ? `Level on projected points over ${v.horizonGws} gameweeks with ${launchLeaders.size - 1} other draft${launchLeaders.size > 2 ? "s" : ""} — take either`
+                                  : `Highest projected points over ${v.horizonGws} gameweeks`
+                              }
+                            >
+                              BEST
+                            </span>
+                          )}
                           {v.label}
                         </span>
-                        <span className="font-mono text-xs text-accent">{v.xi.totalXp.toFixed(1)} xp</span>
+                        {/*
+                          THE HORIZON NUMBER IS THE HEADLINE, NOT NEXT-GW.
+                          `xi.totalXp` is one gameweek and it ranks these drafts
+                          close to backwards — the draft that tops GW1 scores
+                          least over five. See `LaunchVariant.horizonXp` for the
+                          measurement. Next-GW is kept underneath because it is
+                          a real answer to a different question.
+
+                          PRINTED AT `HORIZON_DECIMALS`, WHICH IS NOT COSMETIC.
+                          `rankLaunchVariants` calls two drafts level when they
+                          round equal at that precision, so printing fewer
+                          decimals here would show two identical figures with
+                          only one badged. It did: at `toFixed(0)` the top two
+                          both read "223" and one wore BEST.
+                        */}
+                        <span className="whitespace-nowrap text-right">
+                          <span className="font-mono text-xs text-accent">
+                            {v.horizonXp.toFixed(HORIZON_DECIMALS)} xp
+                          </span>
+                          <span className="ml-1 text-[10px] text-muted">
+                            /{v.horizonGws}gw
+                          </span>
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-right font-mono text-[10px] text-muted">
+                        GW{squad?.nextEvent ?? upcomingEvent}: {v.xi.totalXp.toFixed(1)}
                       </div>
                       <div className="mt-1 text-[11px] leading-tight text-muted">{v.description}</div>
                       {selected ? (
