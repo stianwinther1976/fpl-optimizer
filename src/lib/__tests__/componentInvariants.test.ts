@@ -696,6 +696,30 @@ describe("the captain's field read is looked up, never indexed", () => {
   });
 });
 
+describe("the launch card's BEST badge cannot contradict its own number", () => {
+  // `rankLaunchVariants` calls two drafts level when they round equal at
+  // `HORIZON_DECIMALS`. That rule is only honest if the card prints at the same
+  // precision: at `toFixed(0)` the measured top two both read "223" while one
+  // carried the badge, which is the bug this pair of checks exists to stop
+  // coming back. There is no DOM here, so the coupling is guarded at the token.
+  it("prints the horizon figure at HORIZON_DECIMALS", () => {
+    const src = read("OptimizePanel.tsx");
+    expect(src).toMatch(/horizonXp\.toFixed\(HORIZON_DECIMALS\)/);
+    // Not a literal. A literal is what it was, and it drifted from the rule.
+    expect(src).not.toMatch(/horizonXp\.toFixed\(\s*\d/);
+  });
+
+  it("badges from the shared ranking rather than its own argmax", () => {
+    const src = read("OptimizePanel.tsx");
+    // Both the badge and the pre-selection come from one call, so a tie cannot
+    // be recognised in one place and ignored in the other.
+    expect(src).toMatch(/rankLaunchVariants\(launch\)\.leaders/);
+    expect(src).toMatch(/rankLaunchVariants\(variants\)\.bestIndex/);
+    // And nothing re-derives a winner locally by sorting on the horizon.
+    expect(src).not.toMatch(/sort\([^)]*horizonXp/);
+  });
+});
+
 describe("the reader's line-up calls are hydrated per feed", () => {
   // A call saved against the demo's id 42 must never be applied to the real
   // id 42, who is a different footballer. `lineup.ts` keys storage on the feed;

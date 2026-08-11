@@ -1021,6 +1021,100 @@ export interface LaunchVariant {
   squad: Element[];
   cost: number;
   xi: BestXi;
+  /**
+   * The XI's projected points summed over the whole horizon, re-picking the
+   * eleven each gameweek — which is what a launch squad is actually kept for.
+   *
+   * THIS EXISTS BECAUSE `xi.totalXp` RANKS THE DRAFTS THE OTHER WAY ROUND.
+   * That field is next-GW only, and the card used to show it as the draft's
+   * headline number. Measured on the 2026-08-07 snapshot:
+   *
+   *   draft       GW1 XI    XI summed over GW1-5
+   *   value        46.31          217.98   <- best on GW1, worst on the horizon
+   *   balanced     45.94          219.70
+   *   strongxi     47.10          222.99
+   *   stars        44.87          223.00   <- worst on GW1, best on the horizon
+   *
+   * A reader picking the biggest number on screen was picking the draft that
+   * scores least over the period they will actually hold it. The note above
+   * `buildLaunchVariants` already said the card's number and the drafts' own
+   * objective were different things; this is how much that difference was
+   * worth.
+   *
+   * Both numbers are kept and both are shown, because they answer different
+   * questions and neither is wrong — one is "how does my first week look",
+   * the other "how does the month look".
+   */
+  horizonXp: number;
+  /** How many gameweeks `horizonXp` covers, so the UI can name it. */
+  horizonGws: number;
+}
+
+/**
+ * How many decimals of `horizonXp` the app prints, and therefore the precision
+ * at which two drafts count as level. `rankLaunchVariants` and the launch card
+ * are pinned to the same value by `componentInvariants`, and that coupling is
+ * the whole point — see `rankLaunchVariants`.
+ */
+export const HORIZON_DECIMALS = 1;
+
+export interface LaunchRanking {
+  /** Variant keys, best horizon first. */
+  order: string[];
+  /**
+   * Every key level with the best one. Usually a single key; more than one
+   * when the leaders are indistinguishable at the printed precision.
+   */
+  leaders: Set<string>;
+  /** Index into the input array the app should pre-select. */
+  bestIndex: number;
+}
+
+/**
+ * Rank the launch drafts for a reader, and — the part that matters — say when
+ * the top is a TIE rather than manufacturing a winner.
+ *
+ * WHY A TIE RULE AT ALL, AND WHY IT IS THE PRINTED PRECISION.
+ * On the 2026-08-07 snapshot the top two drafts came out at 223.00 (stars) and
+ * 222.99 (strongxi): 0.01 points over five gameweeks, i.e. 0.002 a week. The
+ * card printed both as "223 xp/5gw" and hung a BEST badge on one of them, so
+ * the badge contradicted the number printed an inch to its right. A reader can
+ * only read that as the app knowing something it is not showing them, and it
+ * does not — the two drafts are level and the honest answer is "either".
+ *
+ * The tie threshold is therefore NOT a tuned constant and deliberately not a
+ * measured noise floor either. It is the precision the app prints: two drafts
+ * are level when they round to the same figure at `HORIZON_DECIMALS`. That
+ * makes the rule self-evidently right rather than fitted — the badge can never
+ * disagree with the number beside it, whatever the numbers turn out to be — and
+ * it is why the comparison below formats rather than subtracting.
+ *
+ * (A real noise floor for this quantity would be a better rule and is not
+ * available: `MATERIAL_GAIN` in `chips.ts` is a measured spread for BENCH xP
+ * over a no-structure window and says nothing about a fifteen-man draft's XI
+ * summed over five. Do not borrow it here. Measuring one means replaying the
+ * drafter across archived seasons — `.github/workflows/measure.yml` is the
+ * path — and until someone has, printed precision is the honest stand-in.)
+ *
+ * `bestIndex` still has to be exactly one draft, since something must be
+ * pre-selected. Among tied leaders it takes the best opening gameweek: if two
+ * drafts are level over the horizon, the one that starts faster is the better
+ * default, and it beats falling back on construction order, which is not a
+ * recommendation and used to read like one.
+ */
+export function rankLaunchVariants(variants: LaunchVariant[]): LaunchRanking {
+  if (variants.length === 0) return { order: [], leaders: new Set(), bestIndex: 0 };
+  const at = (v: LaunchVariant) => v.horizonXp.toFixed(HORIZON_DECIMALS);
+  const order = [...variants].sort((a, b) => b.horizonXp - a.horizonXp).map((v) => v.key);
+  const top = at([...variants].sort((a, b) => b.horizonXp - a.horizonXp)[0]);
+  const leaders = new Set(variants.filter((v) => at(v) === top).map((v) => v.key));
+  let bestIndex = 0;
+  variants.forEach((v, i) => {
+    if (!leaders.has(v.key)) return;
+    const cur = variants[bestIndex];
+    if (!leaders.has(cur.key) || v.xi.totalXp > cur.xi.totalXp) bestIndex = i;
+  });
+  return { order, leaders, bestIndex };
 }
 
 /** The "value" draft's headline price ceiling: no player above £8.5m. */
@@ -1127,6 +1221,10 @@ export function buildLaunchVariants(
 ): { xp: Map<number, PlayerXp>; variants: LaunchVariant[] } {
   const xp = projectAll({ bootstrap, fixtures, nextEvent, horizon, pastSeason });
   const score = (id: number) => xp.get(id)?.totalDiscounted ?? 0;
+  const lastEvent =
+    bootstrap.events.length > 0 ? bootstrap.events[bootstrap.events.length - 1].id : 38;
+  const gws: number[] = [];
+  for (let g = nextEvent; g < nextEvent + horizon && g <= lastEvent; g++) gws.push(g);
   const finalize = (
     key: string,
     label: string,
@@ -1139,6 +1237,16 @@ export function buildLaunchVariants(
     squad: built.squad,
     cost: built.cost,
     xi: pickBestXi(built.squad, (id) => xp.get(id)?.next ?? 0),
+    // Undiscounted, and re-picking the XI each week. Undiscounted because this
+    // is shown to a reader as "points over the next N gameweeks" and a decayed
+    // sum is not that; the decay exists to rank transfer decisions, not to be
+    // read off a card. Re-picked because a manager does pick his eleven every
+    // week, so holding GW1's would understate every draft equally but wrongly.
+    horizonXp: gws.reduce(
+      (s, g) => s + pickBestXi(built.squad, (id) => xp.get(id)?.perGw.get(g) ?? 0).totalXp,
+      0
+    ),
+    horizonGws: gws.length,
   });
 
   // Two premium picks to force in "stars & scrubs": the highest-projected
