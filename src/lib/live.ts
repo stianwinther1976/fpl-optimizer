@@ -173,9 +173,41 @@ export function projectAutoSubs(
 }
 
 /** Approximate match minute from kickoff time (display only). */
+/**
+ * The match clock for a fixture.
+ *
+ * READ IT, DO NOT ESTIMATE IT. FPL publishes `minutes` on every fixture and
+ * this function used to ignore it, deriving the number from `now - kickoff`
+ * with a flat fifteen minutes knocked off past the hour. That estimate has no
+ * way to know about stoppage time — in either half, or a long VAR check, or a
+ * delayed restart — and it only ever errs one way, because every one of those
+ * adds wall-clock time that is not match time. Measured live on ARS v COV in
+ * GW1 2026-27: FPL published 54, the estimate said 61.
+ *
+ * That error is worse than it sounds, because it does not look like an error.
+ * A reader who knows a goal went in on 50 minutes sees a clock reading 52 and a
+ * score without it, and concludes the SCORE is stale — when the score was right
+ * and the clock was seven minutes ahead of the match. This was reported exactly
+ * that way.
+ *
+ * The estimate survives as a fallback for the gap where a match has started but
+ * the feed still says 0 minutes, which is a real state for a minute or so after
+ * kickoff. It is not reached otherwise, and it stays deliberately rough: it is
+ * a stand-in for a number that is usually there, not a second opinion.
+ *
+ * Note the published clock STOPS over half time rather than reading "HT" — 45'
+ * frozen is what a scoreboard shows too, and inferring the break from a stalled
+ * counter would be guessing again.
+ */
 export function matchMinute(f: Fixture, now: Date = new Date()): string {
   if (f.finished) return "FT";
   if (!f.started || !f.kickoff_time) return "";
+  // Guard the type as well as the value: this arrives from the network, and a
+  // string "54" would render as "54'" by luck and NaN-poison any arithmetic a
+  // later caller does on it.
+  if (typeof f.minutes === "number" && Number.isFinite(f.minutes) && f.minutes > 0) {
+    return `${Math.min(Math.floor(f.minutes), 120)}'`;
+  }
   const mins = Math.floor((now.getTime() - new Date(f.kickoff_time).getTime()) / 60000);
   if (mins <= 0) return "KO";
   if (mins >= 45 && mins <= 60) return "HT~";

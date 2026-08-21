@@ -135,6 +135,15 @@ export interface Fixture {
   started?: boolean;
   team_h_score: number | null;
   team_a_score: number | null;
+  /**
+   * The match clock FPL publishes, in minutes played.
+   *
+   * The API has always sent this and the type never modelled it, so
+   * `matchMinute` estimated the same number from the wall clock instead and ran
+   * fast — measured at +7 on ARS v COV during GW1 2026-27, 61' against a
+   * published 54. Zero before kickoff, and it stops moving over half time.
+   */
+  minutes?: number;
 }
 
 /**
