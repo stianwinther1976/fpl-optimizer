@@ -6,7 +6,7 @@ import { api, entryNotFoundMessage, FplApiError, DEMO_ENTRY_ID, setDemoMode } fr
 import type { Entry } from "@/lib/types";
 import ThemeToggle from "@/components/ThemeToggle";
 import Lion from "@/components/Lion";
-import { getRecentTeams, type RecentTeam } from "@/lib/recent";
+import { getRecentTeams, removeRecentTeam, type RecentTeam } from "@/lib/recent";
 
 const FEATURES: [string, string, string, string][] = [
   ["🧠", "Team picker", "XI, formation and bench order that maximize expected points.", "optimize"],
@@ -23,6 +23,29 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
 
   const [recent, setRecent] = useState<RecentTeam[]>([]);
+  const [editing, setEditing] = useState(false);
+
+  /**
+   * Drop a team from the list on this device.
+   *
+   * The prefilled ID goes with it when it is the same team. The box sits three
+   * lines below the list and is filled from `fpl-id`, so leaving it would
+   * answer "get this team off my front page" by removing the name and keeping
+   * the number — the team still there, just harder to recognise.
+   */
+  function removeTeam(teamId: number) {
+    const left = removeRecentTeam(teamId);
+    setRecent(left);
+    if (left.length === 0) setEditing(false);
+    if (parseInt(id, 10) === teamId) {
+      setId("");
+      setEntry(null);
+      setError(null);
+      try {
+        localStorage.removeItem("fpl-id");
+      } catch {}
+    }
+  }
 
   useEffect(() => {
     const saved = localStorage.getItem("fpl-id");
@@ -89,18 +112,57 @@ export default function Home() {
           {/* One-tap re-entry: no need to remember your ID after the first visit */}
           {recent.length > 0 && (
             <div className="mb-4">
-              <div className="text-sm font-medium text-muted">Your teams</div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-medium text-muted">Your teams</div>
+                <button
+                  type="button"
+                  onClick={() => setEditing((v) => !v)}
+                  className="rounded px-2 py-1 text-xs font-semibold text-muted hover:text-accent"
+                >
+                  {editing ? "Done" : "Edit"}
+                </button>
+              </div>
+              {editing && (
+                <p className="mt-1 text-xs text-muted">
+                  Removing a team only clears it from this list — open it again any time and
+                  it comes back.
+                </p>
+              )}
               <div className="mt-2 flex flex-wrap gap-2">
+                {/*
+                  A PILL WITH TWO ACTIONS CANNOT BE ONE BUTTON.
+                  Nesting the remove control inside the open control is invalid
+                  HTML, and on a phone it puts a small target inside a large one
+                  that does something quite different. So the pill is a
+                  container and both actions are real sibling buttons, with the
+                  open half disabled while editing — otherwise a mis-tap in edit
+                  mode navigates away from the list being edited.
+                */}
                 {recent.map((t) => (
-                  <button
+                  <span
                     key={t.id}
-                    type="button"
-                    onClick={() => router.push(`/team/${t.id}`)}
-                    className="flex items-center gap-2 rounded-full border border-accent/40 bg-accent/10 px-3 py-2 text-sm font-semibold text-accent hover:bg-accent/20 active:bg-accent/20"
-                    title={`${t.manager} · ID ${t.id}`}
+                    className="flex items-center rounded-full border border-accent/40 bg-accent/10 text-sm font-semibold text-accent"
                   >
-                    ⚡ {t.name}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/team/${t.id}`)}
+                      disabled={editing}
+                      className="flex items-center gap-2 rounded-full px-3 py-2 hover:bg-accent/20 active:bg-accent/20 disabled:cursor-default disabled:opacity-70 disabled:hover:bg-transparent"
+                      title={`${t.manager} · ID ${t.id}`}
+                    >
+                      ⚡ {t.name}
+                    </button>
+                    {editing && (
+                      <button
+                        type="button"
+                        onClick={() => removeTeam(t.id)}
+                        aria-label={`Remove ${t.name} from your teams`}
+                        className="ml-0.5 flex h-9 w-9 items-center justify-center rounded-full text-base text-muted hover:bg-warn/20 hover:text-warn active:bg-warn/20"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </span>
                 ))}
               </div>
             </div>

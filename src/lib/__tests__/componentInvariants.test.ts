@@ -28,6 +28,8 @@ import path from "node:path";
 const DIR = path.resolve(__dirname, "../../components");
 const LIB = path.resolve(__dirname, "..");
 const read = (f: string) => fs.readFileSync(path.join(DIR, f), "utf8");
+/** Route files, which live beside `components/` rather than inside it. */
+const readApp = (f: string) => fs.readFileSync(path.join(DIR, "../app", f), "utf8");
 const componentFiles = fs.readdirSync(DIR).filter((f) => f.endsWith(".tsx"));
 
 describe("clickable table rows are reachable from a keyboard", () => {
@@ -717,6 +719,51 @@ describe("the launch card's BEST badge cannot contradict its own number", () => 
     expect(src).toMatch(/rankLaunchVariants\(variants\)\.bestIndex/);
     // And nothing re-derives a winner locally by sorting on the horizon.
     expect(src).not.toMatch(/sort\([^)]*horizonXp/);
+  });
+});
+
+describe("the recent-teams pill keeps its two actions apart", () => {
+  // A `<button>` inside a `<button>` is invalid HTML — React renders it and the
+  // browser reparents it, so the remove control ends up outside the pill it
+  // belongs to. It also puts a small target inside a large one that navigates
+  // away, which on a phone is the wrong way round. There is no DOM here, so
+  // both halves are guarded at the source.
+  it("does not nest the remove control inside the open control", () => {
+    const src = readApp("page.tsx");
+    const from = src.indexOf("{recent.map((t) => (");
+    expect(from).toBeGreaterThan(0);
+    // The pill runs to its own closing tag; only buttons live inside it.
+    const block = src.slice(from, src.indexOf("</span>", from));
+    expect(block).toContain("removeTeam(t.id)");
+
+    // Walk the button tags in order. Depth above 1 is a button inside a button.
+    let depth = 0;
+    let max = 0;
+    let opens = 0;
+    for (let i = 0; i < block.length; i++) {
+      if (block.startsWith("</button>", i)) depth--;
+      else if (block.startsWith("<button", i)) {
+        depth++;
+        opens++;
+        max = Math.max(max, depth);
+      }
+    }
+    expect(opens).toBe(2); // open-team and remove
+    expect(max).toBe(1);
+    expect(depth).toBe(0);
+  });
+
+  it("suppresses navigation while the list is being edited", () => {
+    const src = readApp("page.tsx");
+    const at = src.indexOf("router.push(`/team/${t.id}`)");
+    expect(src.slice(at, at + 220)).toMatch(/disabled=\{editing\}/);
+  });
+
+  it("gives the remove control an accessible name", () => {
+    // It renders as a bare "✕", which a screen reader announces as nothing.
+    const src = readApp("page.tsx");
+    const at = src.indexOf("removeTeam(t.id)");
+    expect(src.slice(at, at + 220)).toMatch(/aria-label=/);
   });
 });
 
