@@ -45,10 +45,18 @@ export default function MatchModal({
   const hClass = !fixture.started ? "" : hs > as ? "text-accent" : hs < as ? "text-danger" : "text-warn";
   const aClass = !fixture.started ? "" : as > hs ? "text-accent" : as < hs ? "text-danger" : "text-warn";
 
-  const Row = ({ el }: { el: Element }) => {
+  /*
+   * A render function, not a component declared in render — see the long note
+   * on the same pattern in `Pitch.tsx`. Declared as a component it is a new
+   * type on every render, so React remounts every row and drops focus and any
+   * per-row state with it. Lower blast radius here than in the squad list,
+   * because this sheet does not poll, but the same defect.
+   */
+  const row = (el: Element) => {
     const s = statOf.get(el.id);
     return (
       <button
+        key={el.id}
         onClick={() => onPlayerSelect(el)}
         type="button"
         className="flex w-full items-center gap-2.5 px-1 py-2 text-left text-sm hover:bg-panel-2/60 active:bg-panel-2"
@@ -105,9 +113,7 @@ export default function MatchModal({
           <div className="mt-4">
             <div className="text-sm font-semibold text-accent">Your players in this match</div>
             <div className="mt-1 divide-y divide-border-c/60">
-              {mine.map((el) => (
-                <Row key={el.id} el={el} />
-              ))}
+              {mine.map((el) => row(el))}
             </div>
           </div>
         )}
@@ -116,9 +122,7 @@ export default function MatchModal({
           <div className="mt-4">
             <div className="text-sm font-semibold">Top performers</div>
             <div className="mt-1 divide-y divide-border-c/60">
-              {top.map((el) => (
-                <Row key={el.id} el={el} />
-              ))}
+              {top.map((el) => row(el))}
             </div>
           </div>
         )}

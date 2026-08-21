@@ -283,7 +283,7 @@ export default function Pitch({
       value={info}
       onChange={(e) => changeInfo(e.target.value as PitchInfoMode)}
       aria-label="What to show for each player"
-      className="rounded-lg border border-border-c bg-panel-2 px-2 py-1.5 text-[11px] font-semibold"
+      className="min-h-11 rounded-lg border border-border-c bg-panel-2 px-2 py-1.5 text-[11px] font-semibold"
     >
       <option value="auto">Points</option>
       <option value="price">Price</option>
@@ -304,7 +304,9 @@ export default function Pitch({
               key={v}
               type="button"
               onClick={() => changeLayout(v)}
-              className={`rounded-md px-3 py-1.5 ${layout === v ? "btn-primary" : "text-muted"}`}
+              // min-h-11: measured 28px at 390px, under any usable tap target,
+              // and it sits directly above the pitch it controls.
+              className={`min-h-11 rounded-md px-3 py-1.5 ${layout === v ? "btn-primary" : "text-muted"}`}
             >
               {v === "pitch" ? "⚽ Pitch" : "☰ List"}
             </button>
@@ -476,13 +478,34 @@ function ListView({
     );
   };
 
-  const Row = ({ p, benchNo }: { p: PitchPlayer; benchNo?: number }) => {
+  /*
+   * A RENDER FUNCTION, NOT A COMPONENT DECLARED IN RENDER.
+   *
+   * `const Row = (...) => ...` inside this body creates a NEW component type on
+   * every render, so React cannot match it to the previous one and unmounts and
+   * remounts every row. Confirmed in a browser: after one 30-second live poll,
+   * 0 of 15 tagged row nodes survived and focus had fallen back to `<body>`.
+   * The pitch layout, whose card is a module-level component, kept 15 of 15.
+   *
+   * The cost is not just churn. Keyboard focus is dropped every poll during a
+   * live gameweek, `PlayerAvatar`'s `failed` state resets so a photo that 404'd
+   * flips back to a broken `<img>`, and an open sheet's focus-restore target is
+   * a detached node.
+   *
+   * Calling it as a plain function inlines the JSX instead: the element types
+   * React sees are the same ones as last render, so reconciliation works. That
+   * is why this is not a component and must not become one again — hoisting it
+   * to module level would also work but means threading `teams`, `metric`,
+   * `fixtureStr` and `onSelect` through props for no gain.
+   */
+  const row = (p: PitchPlayer, benchNo?: number) => {
     const el = p.element;
     const flag = statusFlag(el);
     const fx = fixtureStr(el);
     const Tag = onSelect ? "button" : "div";
     return (
       <Tag
+        key={el.id}
         type={onSelect ? "button" : undefined}
         onClick={onSelect ? () => onSelect(el) : undefined}
         className={`flex w-full items-center gap-2.5 px-3 py-2 text-left ${onSelect ? "hover:bg-panel-2/60 active:bg-panel-2" : ""}`}
@@ -537,9 +560,7 @@ function ListView({
               {g.label}
             </div>
             <div className="divide-y divide-border-c/60">
-              {players.map((p) => (
-                <Row key={p.element.id} p={p} />
-              ))}
+              {players.map((p) => row(p))}
             </div>
           </div>
         );
@@ -550,9 +571,7 @@ function ListView({
             Bench {POS.length ? "(in order)" : ""}
           </div>
           <div className="divide-y divide-border-c/60">
-            {bench.map((p, i) => (
-              <Row key={p.element.id} p={p} benchNo={i + 1} />
-            ))}
+            {bench.map((p, i) => row(p, i + 1))}
           </div>
         </div>
       )}

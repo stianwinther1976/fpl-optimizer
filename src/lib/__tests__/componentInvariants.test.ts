@@ -104,9 +104,29 @@ describe("clickable table rows are reachable from a keyboard", () => {
     expect(rowsWithClick.map((r) => r.file)).toContain("PointsBreakdown.tsx");
   });
 
-  it.each(["role=", "tabIndex=", "onKeyDown="])("every one declares %s", (attr) => {
+  it.each(["tabIndex=", "onKeyDown="])("every one declares %s", (attr) => {
     const missing = rowsWithClick.filter((r) => !r.block.includes(attr));
     expect(missing.map((m) => m.file)).toEqual([]);
+  });
+
+  it("none of them claims to be a button", () => {
+    /*
+     * `role="button"` WAS THE WRONG FIX AND THIS TEST USED TO REQUIRE IT.
+     *
+     * `<tr>` permits only row and presentation roles. Given `button`, Chromium
+     * exposes the enclosing `<tbody>` as role `none` and drops its rows: the
+     * sixty data rows of the Stats table became flat buttons named
+     * "BOU BOU Mid 1 BOU MID £12…", so price, xP, form, points, xGI and
+     * ownership were read as one unlabelled run-on with no column association —
+     * on the app's main comparison table. Confirmed in Chromium's AX tree.
+     *
+     * The keyboard half was never the problem: `tabIndex` and the Enter/Space
+     * handler above are what make the row operable, and they stay. Losing the
+     * role costs nothing a reader can hear, because the row's own cells carry
+     * the meaning once the table survives.
+     */
+    const claiming = rowsWithClick.filter((r) => /role=\{[^}]*"button"/.test(r.block));
+    expect(claiming.map((m) => m.file)).toEqual([]);
   });
 
   it("every one handles Enter and Space", () => {

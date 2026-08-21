@@ -155,6 +155,7 @@ export default function PointsBreakdown({
           </p>
         </div>
         <select
+          aria-label="Filter the breakdown by gameweek"
           value={gwFilter}
           onChange={(e) =>
             setGwFilter(e.target.value === "all" ? "all" : Number(e.target.value))
@@ -245,7 +246,6 @@ export default function PointsBreakdown({
                   key={r.elementId}
                   className="cursor-pointer hover:bg-panel-2/60"
                   onClick={() => onSelect?.(el)}
-                  role={onSelect ? "button" : undefined}
                   tabIndex={onSelect ? 0 : undefined}
                   onKeyDown={
                     onSelect

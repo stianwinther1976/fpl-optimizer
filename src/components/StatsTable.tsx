@@ -140,6 +140,7 @@ export default function StatsTable({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search player/club…"
+          aria-label="Search players or clubs"
           className="ml-auto rounded-lg bg-panel-2 border border-border-c px-3 py-2"
         />
       </div>
@@ -166,7 +167,6 @@ export default function StatsTable({
                 key={e.id}
                 className={`hover:bg-panel-2/60 active:bg-panel-2 ${onSelect ? "cursor-pointer" : ""}`}
                 onClick={onSelect ? () => onSelect(e) : undefined}
-                role={onSelect ? "button" : undefined}
                 tabIndex={onSelect ? 0 : undefined}
                 onKeyDown={
                   onSelect

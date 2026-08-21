@@ -615,7 +615,10 @@ export default function Dashboard({
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <Link href="/" className="text-xs text-muted hover:text-accent">
+          <Link
+            href="/"
+            className="-ml-2 inline-flex min-h-11 items-center px-2 text-xs text-muted hover:text-accent"
+          >
             ← Switch team
           </Link>
           <h1 className="text-xl font-bold sm:text-2xl">
@@ -733,16 +736,35 @@ export default function Dashboard({
       </div>
 
       {/* Tabs — full-width hit areas on mobile, ≥44px tall */}
-      <div className="sticky top-0 z-20 mt-4 -mx-4 flex border-b border-border-c bg-background/85 px-2 backdrop-blur sm:justify-start sm:gap-1 sm:px-4">
+      {/*
+          SEVEN BUTTONS ARE NOT A TAB STRIP UNTIL THEY SAY SO.
+          The accessibility tree contained no `tab` and no `tablist`, no
+          `aria-selected` and no `aria-current`, so a screen-reader user got
+          seven identically-shaped buttons with nothing stating which view they
+          were in. The only difference between selected and unselected was
+          accent green on muted grey — colour alone, which for a red/green
+          deficient reader is no difference at all. `aria-selected` fixes the
+          first; the `font-semibold` below fixes the second without needing a
+          second colour.
+      */}
+      <div
+        role="tablist"
+        aria-label="Dashboard sections"
+        className="sticky top-0 z-20 mt-4 -mx-4 flex border-b border-border-c bg-background/85 px-2 backdrop-blur sm:justify-start sm:gap-1 sm:px-4"
+      >
         {TABS.map(([key, label, short]) => (
           <button
             key={key}
             type="button"
+            role="tab"
+            id={`tab-${key}`}
+            aria-selected={tab === key}
+            aria-controls={`panel-${key}`}
             onClick={() => selectTab(key)}
-            className={`flex-1 whitespace-nowrap border-b-2 px-1 py-3 text-xs font-medium sm:flex-none sm:px-3 sm:text-sm ${
+            className={`min-h-11 flex-1 whitespace-nowrap border-b-2 px-1 py-3 text-xs sm:flex-none sm:px-3 sm:text-sm ${
               tab === key
-                ? "border-accent text-accent"
-                : "border-transparent text-muted hover:text-foreground active:text-foreground"
+                ? "border-accent font-semibold text-accent"
+                : "border-transparent font-medium text-muted hover:text-foreground active:text-foreground"
             }`}
           >
             <span className="sm:hidden">{short}</span>
@@ -752,20 +774,27 @@ export default function Dashboard({
       </div>
 
       <div className="mt-4">
-        <div hidden={tab !== "team"}>
+        <div hidden={tab !== "team"} role="tabpanel" id="panel-team" aria-labelledby="tab-team">
         {visited.has("team") &&
           (squad ? (
             <div className="space-y-4">
               {/* Gameweek time machine */}
               {history.current.length > 1 && (
                 <div className="flex flex-wrap items-center gap-2">
-                  <label className="text-sm text-muted">Gameweek:</label>
+                  {/* `htmlFor` is what makes the visible label the accessible
+                      name; without it this reads as an unnamed combo box, and
+                      it changes the entire squad view. */}
+                  <label htmlFor="gw-time-machine" className="text-sm text-muted">
+                    Gameweek:
+                  </label>
                   <select
+                    id="gw-time-machine"
+                    aria-label="View the squad as it was in an earlier gameweek"
                     value={viewGw ?? "latest"}
                     onChange={(e) =>
                       setViewGw(e.target.value === "latest" ? null : parseInt(e.target.value))
                     }
-                    className="rounded-lg border border-border-c bg-panel-2 px-3 py-1.5 text-sm"
+                    className="min-h-11 rounded-lg border border-border-c bg-panel-2 px-3 py-1.5 text-sm"
                   >
                     <option value="latest">Latest (GW{squad.currentEvent})</option>
                     {[...history.current]
@@ -958,7 +987,7 @@ export default function Dashboard({
           ))}
         </div>
         {visited.has("optimize") && (
-          <div hidden={tab !== "optimize"} className="space-y-6">
+          <div hidden={tab !== "optimize"} role="tabpanel" id="panel-optimize" aria-labelledby="tab-optimize" className="space-y-6">
             <OptimizePanel data={data} onSelect={setSelected} />
             {/* How trustworthy are the projections above? key re-reads after
                 the reconcile pass updates storage. */}
@@ -966,27 +995,27 @@ export default function Dashboard({
           </div>
         )}
         {visited.has("stats") && (
-          <div hidden={tab !== "stats"}>
+          <div hidden={tab !== "stats"} role="tabpanel" id="panel-stats" aria-labelledby="tab-stats">
             <StatsTable data={data} onSelect={setSelected} xp={xpOf} />
           </div>
         )}
         {visited.has("fixtures") && (
-          <div hidden={tab !== "fixtures"}>
+          <div hidden={tab !== "fixtures"} role="tabpanel" id="panel-fixtures" aria-labelledby="tab-fixtures">
             <FixtureTicker data={data} onSelect={setSelected} />
           </div>
         )}
         {visited.has("live") && (
-          <div hidden={tab !== "live"}>
+          <div hidden={tab !== "live"} role="tabpanel" id="panel-live" aria-labelledby="tab-live">
             <LiveTab data={data} onSelect={setSelected} active={tab === "live"} />
           </div>
         )}
         {visited.has("league") && (
-          <div hidden={tab !== "league"}>
+          <div hidden={tab !== "league"} role="tabpanel" id="panel-league" aria-labelledby="tab-league">
             <MiniLeague data={data} entryId={entryId} />
           </div>
         )}
         {visited.has("history") && (
-          <div hidden={tab !== "history"} className="space-y-6">
+          <div hidden={tab !== "history"} role="tabpanel" id="panel-history" aria-labelledby="tab-history" className="space-y-6">
             <HistoryChart data={data} entryId={entryId} />
             <PointsBreakdown data={data} entryId={entryId} onSelect={setSelected} />
           </div>

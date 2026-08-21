@@ -556,8 +556,12 @@ export default function OptimizePanel({
           />
         </div>
         <div className="flex items-center gap-2">
-          <label className="text-sm text-muted">Horizon:</label>
+          <label htmlFor="opt-horizon" className="text-sm text-muted">
+            Horizon:
+          </label>
           <select
+            id="opt-horizon"
+            aria-label="How many gameweeks to plan over"
             value={horizon}
             onChange={(e) => setHorizon(parseInt(e.target.value))}
             className="rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"

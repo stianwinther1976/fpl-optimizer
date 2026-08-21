@@ -103,12 +103,24 @@ export default function FixtureTicker({
                     </span>
                   ) : (
                     <div className="flex flex-col gap-0.5">
+                      {/*
+                          THE DIFFICULTY IS PRINTED, NOT ONLY PAINTED.
+                          This is the tab whose whole job is comparing
+                          difficulty, and the 1-5 used to live in the background
+                          colour alone — unreadable to a red/green-deficient
+                          reader, on the one screen that exists for it. Every
+                          other view already prints the number inside the badge
+                          (`Pitch`, `PlayerModal`, `ClubModal`); this one now
+                          agrees with them.
+                      */}
                       {cell.map((c, j) => (
                         <span
                           key={j}
-                          className={`flex h-7 w-full items-center justify-center whitespace-nowrap rounded px-1 text-[11px] font-semibold ${FDR_COLORS[c.fdr] ?? FDR_COLORS[3]}`}
+                          title={`Difficulty ${c.fdr} of 5`}
+                          className={`flex h-7 w-full items-center justify-center gap-1 whitespace-nowrap rounded px-1 text-[11px] font-semibold ${FDR_COLORS[c.fdr] ?? FDR_COLORS[3]}`}
                         >
                           {c.label}
+                          <span className="font-mono opacity-80">{c.fdr}</span>
                         </span>
                       ))}
                     </div>

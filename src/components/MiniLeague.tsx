@@ -228,6 +228,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
             </div>
             {myLeagues.some((l) => l.league_type !== "x") && (
               <select
+                aria-label="Choose one of your mini-leagues"
                 value={
                   myLeagues.some((l) => String(l.id) === leagueId && l.league_type !== "x")
                     ? leagueId
@@ -266,6 +267,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               onChange={(e) => setLeagueId(e.target.value.replace(/\D/g, ""))}
               onKeyDown={(e) => e.key === "Enter" && load()}
               placeholder="League ID (classic league)"
+              aria-label="Classic league ID"
               className="min-w-0 flex-1 rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
             />
             <button
@@ -329,7 +331,6 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                     key={r.entry}
                     className={`${mine ? "bg-accent/10" : "hover:bg-panel-2/60 active:bg-panel-2"} ${clickable ? "cursor-pointer" : ""}`}
                     onClick={clickable ? () => router.push(`/team/${r.entry}`) : undefined}
-                    role={clickable ? "button" : undefined}
                     tabIndex={clickable ? 0 : undefined}
                     onKeyDown={
                       clickable
