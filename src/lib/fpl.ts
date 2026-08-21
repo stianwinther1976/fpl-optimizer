@@ -59,6 +59,17 @@ const cacheTtl = (path: string): number => {
 };
 const fetchCache = new Map<string, { promise: Promise<unknown>; at: number }>();
 
+/**
+ * The two feeds whose value changes DURING a match, rather than between them.
+ *
+ * These are polled every 30 seconds while a gameweek is in play, and a poll
+ * answered from the browser's own HTTP store is not a poll. The proxy now sends
+ * `max-age=0` so no browser should do that on its own initiative — this is the
+ * belt to that pair of braces, because the failure it guards against is silent:
+ * the request resolves, `updatedAt` is stamped, and the numbers are minutes old.
+ */
+export const isLiveFeed = (path: string) => path.startsWith("fixtures") || /^event\/\d+\/live\//.test(path);
+
 const feedUrl = (path: string) => `${demoMode ? "/api/demo" : "/api/fpl"}/${path}`;
 
 /**
@@ -66,8 +77,11 @@ const feedUrl = (path: string) => `${demoMode ? "/api/demo" : "/api/fpl"}/${path
  * below, which keeps its own (far smaller) reduced records instead of parking
  * the raw payload in `fetchCache` forever.
  */
-async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, signal ? { signal } : undefined);
+async function fetchJson<T>(url: string, signal?: AbortSignal, noStore = false): Promise<T> {
+  const init: RequestInit = {};
+  if (signal) init.signal = signal;
+  if (noStore) init.cache = "no-store";
+  const res = await fetch(url, init);
   if (!res.ok) {
     throw new FplApiError(
       res.status === 404
@@ -81,13 +95,18 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-async function get<T>(path: string): Promise<T> {
+/**
+ * @param force skip the in-memory memo below. For a control the reader pressed
+ *   — "Refresh now" — which otherwise returns the same promise for up to 25
+ *   seconds and looks like a button that does nothing.
+ */
+async function get<T>(path: string, force = false): Promise<T> {
   const url = feedUrl(path);
   const cached = fetchCache.get(url);
-  if (cached && Date.now() - cached.at < cacheTtl(path)) {
+  if (!force && cached && Date.now() - cached.at < cacheTtl(path)) {
     return cached.promise as Promise<T>;
   }
-  const promise = fetchJson<T>(url);
+  const promise = fetchJson<T>(url, undefined, isLiveFeed(path));
   fetchCache.set(url, { promise, at: Date.now() });
   // Failed requests must not be cached, or a retry could never succeed.
   promise.catch(() => {
@@ -126,12 +145,12 @@ export type PastSeason = PastSeasonStats;
 
 export const api = {
   bootstrap: () => get<Bootstrap>("bootstrap-static/"),
-  fixtures: () => get<Fixture[]>("fixtures/"),
+  fixtures: (force = false) => get<Fixture[]>("fixtures/", force),
   entry: (id: number) => get<Entry>(`entry/${id}/`),
   picks: (id: number, gw: number) => get<EntryEventPicks>(`entry/${id}/event/${gw}/picks/`),
   history: (id: number) => get<EntryHistory>(`entry/${id}/history/`),
   transfers: (id: number) => get<Transfer[]>(`entry/${id}/transfers/`),
-  live: (gw: number) => get<EventLive>(`event/${gw}/live/`),
+  live: (gw: number, force = false) => get<EventLive>(`event/${gw}/live/`, force),
   league: (id: number, page = 1) =>
     get<LeagueStandings>(`leagues-classic/${id}/standings/?page_standings=${page}`),
   elementSummary: (id: number) =>
