@@ -466,6 +466,29 @@ export default function Dashboard({
   // count those subs (matches the official score before FPL processes it).
   const effectiveXiIds = useMemo(() => {
     if (!liveData || !data?.picks || currentEvent == null) return null;
+    /*
+     * THIS SET DESCRIBES `data.picks`, WHICH IS NOT ALWAYS `squad.players`.
+     *
+     * Two cases where using it to split the pitch draws the wrong team:
+     *
+     *  - FREE HIT. `loadTeamData` deliberately builds `squad.players` from the
+     *    PREVIOUS gameweek's picks, because the one-week team is not the squad
+     *    that matters for transfers. Intersecting the base squad with the Free
+     *    Hit XI leaves whoever happens to be in both — probed at 2 cards on the
+     *    pitch and 13 on the bench, in an impossible formation, possibly with
+     *    no keeper.
+     *  - BENCH BOOST. All fifteen score and FPL makes no substitution at all,
+     *    so the "effective XI" is the picked eleven. `display.ts`'s
+     *    `autoSubView` exists for this seam and `componentInvariants` has a
+     *    whole block on it — which reads only `LiveTab.tsx`, so it could not
+     *    see this call site. The time-machine branch below has the guard; the
+     *    live branch did not.
+     *
+     * Returning null in both cases sends every consumer back to
+     * `pickPosition <= 11`, which is the right answer for each.
+     */
+    if (data.picks.active_chip === "bboost") return null;
+    if (data.picks.active_chip === "freehit") return null;
     const elementById = new Map(data.bootstrap.elements.map((e) => [e.id, e]));
     const { effectiveXi } = projectAutoSubs(
       data.picks.picks,
@@ -846,7 +869,10 @@ export default function Dashboard({
                        A finished gameweek's auto-subs are settled fact, not a
                        projection, so drawing the picked eleven here is simply
                        showing the wrong team. Measured on the demo's GW5: the
-                       eleven cards summed to 30 against a caption reading 40.
+                       eleven cards summed to 30 against a caption reading 40,
+                       because a keeper who blanked was drawn in goal while the
+                       bench keeper who replaced him and scored 10 was drawn on
+                       the bench.
                        Under Bench Boost all fifteen count and no sub happens,
                        so the picked split is the right one there.
                     */
@@ -911,9 +937,11 @@ export default function Dashboard({
                   `pickPosition <= 11`. So a starter who blanked was drawn on
                   the pitch and the substitute who replaced him was drawn on
                   the bench, and the eleven cards did not add up to the number
-                  printed on the same pitch. Measured in the demo: cards summed
-                  to 30 against a corner reading 40, with a "0 pts" keeper on
-                  the pitch and the bench keeper who actually played showing 10.
+                  printed on the same pitch. Measured on the demo's live GW20:
+                  the picked eleven's cards summed to 50 while the effective
+                  eleven scored 52, so the corner read 48 after the week's
+                  4-point hit — a blanking forward drawn on the pitch and the
+                  2-point defender who replaced him drawn on the bench.
                   Two tabs away `LiveTab` renders the same gameweek correctly.
                   Falls back to the picked eleven before any live data exists.
               */}

@@ -132,30 +132,54 @@ export function applyGwOutcome(
    * otherwise multiplier = global * byPos double-counts the overall bias.
    */
   const globalRatio = sumPred > 0 ? sumAct / sumPred : 1;
-  const globalTarget = state.factors.global * globalRatio;
+  /*
+   * `byPos` STAYS RELATIVE TO `global`, AND SEPARATELY STOPS INTEGRATING WHEN
+   * `global` CANNOT MOVE.
+   *
+   * An earlier attempt divided by how much `global` actually moved rather than
+   * by the aggregate residual. It fixed the saturation bug below and broke
+   * something worse: `absorbed = 1 + alpha*(r - 1)` equals `globalRatio` only
+   * at r = 1, so in the ORDINARY regime `byPos` picked up part of the aggregate
+   * bias too — exactly the double-count the paragraph above forbids — and the
+   * applied multiplier moved 51% of the way per graded gameweek against a
+   * documented `alpha` of 0.3. Measured on a uniform bias with no positional
+   * deviation at all: byPos came out 0.97835 at r = 0.9 where it should be
+   * exactly 1. That is `CAL_CONFIG.alpha` retuned by accident, which the rules
+   * in CLAUDE.md forbid outright.
+   *
+   * So the division stays `globalRatio`, and saturation is handled where it
+   * actually happens: `global` is computed FIRST, and when the clamp stops it
+   * from taking the residual it was asked to take, the part it refused is
+   * handed to `byPos` instead. In the ordinary regime `headroom` is 1 and this
+   * is byte-for-byte the relative rule; against a bound clamp `byPos` carries
+   * the remainder because nothing else can.
+   *
+   * Without that, probed at 200 gameweeks with r = 0.5 for GK/DEF/MID and 0.2
+   * for forwards: `global` pinned at 0.75 while `byPos` ran to 1.3/1.3/1.3/0.75
+   * — a 30% UPWARD correction on three positions the model over-rates twofold.
+   */
+  const wanted = state.factors.global * globalRatio;
   const global = clamp(
-    (1 - cfg.alpha) * state.factors.global + cfg.alpha * globalTarget,
+    (1 - cfg.alpha) * state.factors.global + cfg.alpha * wanted,
     cfg.factorMin,
     cfg.factorMax
   );
   /*
-   * HOW MUCH OF THE RESIDUAL `global` ACTUALLY TOOK — which is not the same as
-   * how much it was asked to take.
+   * The aggregate residual `global` can EVENTUALLY absorb, given the clamp.
    *
-   * `byPos` divides the aggregate out on the assumption `global` absorbs it.
-   * When the clamp binds, nobody absorbs it, and dividing anyway turns `byPos`
-   * into an integrator pointing the WRONG WAY. Probed at 200 gameweeks with
-   * r = 0.5 for GK/DEF/MID and 0.2 for FWD: `global` pinned at 0.75 and
-   * `byPos` ran to 1.3/1.3/1.3/0.75 — a 30% UPWARD correction on three
-   * positions the model over-rates twofold — for a combined multiplier of
-   * 0.975 where 0.5 was needed. The rule this replaced gave 0.845 there.
-   *
-   * Measuring what `global` moved by, rather than what it was aimed at, makes
-   * `byPos` pick up exactly the remainder: in the ordinary regime the two are
-   * the same number, and against a bound clamp `byPos` carries the whole
-   * correction because it is the only thing that can.
+   * Dividing by `globalRatio` is right because `global` converges on absorbing
+   * the whole aggregate — over several EMA steps, not this one. The saturation
+   * bug is simply that at the clamp it can never get there, so `byPos` goes on
+   * dividing out a correction nobody is applying. Asking what `global` can
+   * REACH answers both: unclamped it is `globalRatio` exactly and this is
+   * byte-for-byte the relative rule, and pinned at the floor it is 1, so
+   * `byPos` picks up the whole position residual because nothing else can.
    */
-  const absorbed = state.factors.global > 0 ? global / state.factors.global : 1;
+  const reachable =
+    state.factors.global > 0
+      ? clamp(state.factors.global * globalRatio, cfg.factorMin, cfg.factorMax) /
+        state.factors.global
+      : 1;
   const byPos = { ...state.factors.byPos };
   for (const pos of [1, 2, 3, 4]) {
     const posEntries = graded.filter((e) => e.pos === pos);
@@ -163,11 +187,11 @@ export function applyGwOutcome(
     const p = posEntries.reduce((s, e) => s + e.pred, 0);
     const a = posEntries.reduce((s, e) => s + e.actual, 0);
     if (p <= 0 || a <= 0) continue;
+    // How much this position deviates BEYOND the global correction the clamp
+    // will actually allow.
+    const ratio = reachable > 0 ? a / p / reachable : 1;
     const prev = byPos[pos] ?? 1;
-    // The factor that would have made THIS position right, given what the
-    // global correction is actually about to do.
-    const target = absorbed > 0 ? (prev * (a / p)) / absorbed : prev;
-    byPos[pos] = clamp((1 - cfg.alpha) * prev + cfg.alpha * target, cfg.factorMin, cfg.factorMax);
+    byPos[pos] = clamp((1 - cfg.alpha) * prev + cfg.alpha * (prev * ratio), cfg.factorMin, cfg.factorMax);
   }
 
   const log = [...state.log, { gw, n: graded.length, mae, bias, at: now }]
@@ -177,6 +201,12 @@ export function applyGwOutcome(
     factors: { global, byPos },
     log,
     reconciled: [...new Set([...state.reconciled, gw])].slice(-30),
+    // Carried through, or the guard in `reconcileFinishedGws` that refuses to
+    // write a null season over a real one has nothing left to fall back to —
+    // and a null stamp is what makes the NEXT load clear `reconciled` and
+    // re-grade the whole season. The early return above already preserved it;
+    // this path did not, so one bad bootstrap during a grading pass was enough.
+    season: state.season,
   };
 }
 

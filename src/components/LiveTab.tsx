@@ -208,8 +208,18 @@ export default function LiveTab({
     );
   if (!live || !data.squad) return <Skeleton className="h-64" />;
 
-  const anyLive = gwFixtures.some((f) => f.started && !f.finished);
+  // `isInPlay`, not `started && !finished`: `finished` means BONUS CONFIRMED,
+  // so for hours after a Saturday the header showed a pulsing dot and
+  // "Live GW n" over fixture chips that all read "FT" in muted styling. The
+  // commit that introduced `isInPlay` converted the chips one line below this
+  // and missed the header.
+  const anyLive = gwFixtures.some(isInPlay);
   const statById = new Map(live.elements.map((e) => [e.id, e.stats]));
+  /** Projected bonus on the rows this screen actually draws — see the legend. */
+  const myStarBonus = data.squad.players.reduce(
+    (n, p) => n + (bonus?.byElement.get(p.element.id) ?? 0),
+    0
+  );
   const bboost = data.squad.activeChip === "bboost";
   const hits = data.picks?.entry_history.event_transfers_cost ?? 0;
   // Chip-aware: a Bench Boost week has no substitutions to project, so the
@@ -496,7 +506,10 @@ export default function LiveTab({
             needed. Confirmed on the real GW1 payload: FPL had already awarded
             3/2/1 and the projection was empty.
         */}
-        {(bonus?.byElement.size ?? 0) > 0 &&
+        {/* Over the rows actually drawn, not over the gameweek: the badge
+            renders only for the reader's own squad, so a ★ somewhere else in
+            the league still left the legend explaining a marker not on screen. */}
+        {myStarBonus > 0 &&
           "★ = projected bonus from live BPS (not confirmed until the match finishes). "}
         Auto-subs are projected once a starter&apos;s matches finish with 0 minutes. Captain
         doubling

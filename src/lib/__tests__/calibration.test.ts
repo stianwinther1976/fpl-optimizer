@@ -203,6 +203,34 @@ describe("convergence", () => {
     expect(calibrationMultiplier(st.factors, 4)).not.toBeCloseTo(Math.sqrt(rFwd), 2);
   });
 
+  it("leaves byPos alone for a uniform bias, and moves at the documented alpha", () => {
+    /*
+     * `CAL_CONFIG.alpha` IS A TUNED CONSTANT AND MUST NOT MOVE BY ACCIDENT.
+     *
+     * An attempt at the saturation bug below divided `byPos` by how much
+     * `global` actually moved rather than by the aggregate residual. That
+     * equals the residual only at r = 1, so `byPos` picked up part of the
+     * aggregate bias too — the double-count the module's own comment forbids —
+     * and the applied multiplier moved 51% of the way per gameweek against a
+     * documented 0.3. Measured then: byPos 0.97835 at r = 0.9 where it should
+     * be exactly 1. Retuning alpha without a sweep is what CLAUDE.md forbids
+     * outright, so both halves are pinned.
+     */
+    for (const r of [0.9, 0.8, 1.1]) {
+      const entries: GradedPlayer[] = [];
+      for (const pos of [1, 2, 3, 4]) {
+        for (let i = 0; i < 20; i++) entries.push({ pos, pred: 5, actual: 5 * r });
+      }
+      const s = applyGwOutcome(fresh(), 1, entries, 0);
+      // A bias with no positional component lives entirely in `global`.
+      for (const pos of [1, 2, 3, 4]) {
+        expect(s.factors.byPos[pos], `byPos[${pos}] at r=${r}`).toBeCloseTo(1, 9);
+      }
+      const alphaEff = (calibrationMultiplier(s.factors, 1) - 1) / (r - 1);
+      expect(alphaEff, `effective alpha at r=${r}`).toBeCloseTo(CAL_CONFIG.alpha, 6);
+    }
+  });
+
   it("does not let byPos integrate the wrong way when global saturates", () => {
     /*
      * `byPos` divides the aggregate residual out on the assumption `global`

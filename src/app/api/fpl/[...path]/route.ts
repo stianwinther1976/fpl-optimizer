@@ -61,40 +61,71 @@ export function staleSeconds(path: string): number {
  * Reported from a live match, and measured — the clock sat on 83' while FPL had
  * moved to 89'.
  *
- * That fixed the live pair but not the rest, and the two attempts after it are
- * worth reading before touching this again — see the note inside.
+ * Three attempts at the browser half got it wrong before it settled; the
+ * history is in the note on `cacheControl`, and it is worth reading before
+ * touching this again.
  */
 export function cacheControl(path: string): string {
   /*
-   * `no-cache` FOR THE BROWSER, `s-maxage` FOR THE CDN. Both halves matter and
-   * an earlier attempt got the mechanism exactly backwards.
+   * THE BROWSER'S HEADER. Three attempts got this wrong before it settled, and
+   * the history is the useful part:
    *
-   * The first bug was a missing `max-age`: `s-maxage` binds shared caches only,
-   * so with `public` and nothing else a browser had no freshness lifetime,
-   * fell back to HEURISTIC caching and picked its own — iOS Safari picked
-   * minutes. The 30-second live poll was answered from the phone's own store
-   * while `updatedAt` was stamped "now" on every hit, so the app reported
-   * refreshing and had not: the clock sat on 83' while FPL had moved to 89'.
+   *  1. `public, s-maxage=N, stale-while-revalidate=M` — `s-maxage` binds
+   *     SHARED caches only, so the browser had no freshness lifetime at all,
+   *     fell back to heuristic caching and picked its own. iOS Safari picked
+   *     minutes: the 30-second live poll was answered from the phone's own
+   *     store while `updatedAt` was stamped "now" on every hit, so the clock
+   *     sat on 83' while FPL had moved to 89'.
+   *  2. `max-age=0` — did not finish the job, because `stale-while-revalidate`
+   *     binds private caches too (Chrome, since M75), so `bootstrap-static/`
+   *     could still be served ten minutes stale.
+   *  3. `proxy-revalidate` — RFC 9111 §5.2.2.9 says it means `must-revalidate`
+   *     "except that it does not apply to private caches". Exactly backwards:
+   *     silent to the browser, and it forbade the CDN to serve stale.
    *
-   * `max-age=0` alone did not finish the job, because `stale-while-revalidate`
-   * binds PRIVATE caches too (Chrome has had it in the HTTP cache since M75),
-   * so `bootstrap-static/` could still be served ten minutes stale.
-   *
-   * `proxy-revalidate` was then tried and is the WRONG TOOL, in both
-   * directions at once. RFC 9111 §5.2.2.9: it means the same as
-   * `must-revalidate` "except that it does not apply to private caches". So it
-   * said nothing at all to the browser — the case it was added for — while
-   * forbidding the CDN to serve stale, which is precisely the
-   * `stale-while-revalidate` grace `staleSeconds` exists to buy. Under it a
-   * launch draft's ~420 element-summary fetches would go to FPL's rate-limited
-   * API together, which is the outcome the 86400 above is there to prevent.
-   *
-   * `no-cache` is the correct one: it forbids reuse without revalidation, it
-   * applies to every cache, and — the part that makes it safe here — a shared
-   * cache with `s-maxage` is explicitly allowed to keep serving inside that
-   * window, so the CDN's own freshness and its SWR grace both survive.
+   * `no-cache` is the correct directive for the BROWSER: no reuse without
+   * revalidation, no SWR loophole. It is unqualified, so by §5.2.2.4 it binds
+   * shared caches as well — which is why the CDN gets its own header below
+   * rather than relying on `s-maxage` surviving alongside it. `s-maxage`
+   * overrides `max-age`/`Expires` (§5.2.2.10); it does not override `no-cache`.
    */
   return `public, no-cache, s-maxage=${cacheSeconds(path)}, stale-while-revalidate=${staleSeconds(path)}`;
+}
+
+/**
+ * THE CDN'S HEADER, stated separately because the two layers want opposite
+ * things and one header cannot say both.
+ *
+ * The reader's browser must never reuse a live feed without asking. The edge
+ * must reuse aggressively, because a launch draft is ~420 element-summary
+ * fetches and `staleSeconds` gives them a day of grace precisely so they do not
+ * arrive at FPL's rate-limited API together.
+ *
+ * `CDN-Cache-Control` (RFC 9213 targeted caching) is how that is expressed:
+ * a CDN that understands it uses this and ignores `Cache-Control`, and one that
+ * does not falls back to `Cache-Control` — where `no-cache` makes it
+ * revalidate. That fallback is the conservative direction: more origin
+ * requests, never staler data. And the origin is not FPL in that case, because
+ * the upstream fetch below is itself cached by Next for `ttl`.
+ *
+ * WHAT IS VERIFIED, AND WHAT IS NOT. Both headers were read off a real 200
+ * from a local dev server (`FPL_API_BASE` pointed at `/api/demo`), so Next
+ * emits them side by side and rewrites neither:
+ *
+ *     /api/fpl/fixtures         cache-control: public, no-cache, s-maxage=25,  stale-while-revalidate=50
+ *                           cdn-cache-control: public,           s-maxage=25,  stale-while-revalidate=50
+ *     /api/fpl/element-summary/1  cache-control: public, no-cache, s-maxage=300, stale-while-revalidate=86400
+ *                           cdn-cache-control: public,           s-maxage=300, stale-while-revalidate=86400
+ *
+ * What that does NOT establish is the half that lives at the edge: this sandbox
+ * cannot reach Vercel's or the RFC's documentation, so the RFC semantics above
+ * are read from memory and Vercel's handling of `CDN-Cache-Control` is not
+ * confirmed. Given three wrong attempts at the header beside it, treat that as
+ * a claim to check rather than a fact — the deployed site's actual behaviour is
+ * one `curl -I` away.
+ */
+export function cdnCacheControl(path: string): string {
+  return `public, s-maxage=${cacheSeconds(path)}, stale-while-revalidate=${staleSeconds(path)}`;
 }
 
 export async function GET(
@@ -147,6 +178,7 @@ export async function GET(
     return NextResponse.json(data, {
       headers: {
         "Cache-Control": cacheControl(joined),
+        "CDN-Cache-Control": cdnCacheControl(joined),
       },
     });
   } catch {

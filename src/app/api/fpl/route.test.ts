@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { cacheControl, cacheSeconds, staleSeconds } from "./[...path]/route";
+import fs from "node:fs";
+import path from "node:path";
+import { cacheControl, cdnCacheControl, cacheSeconds, staleSeconds } from "./[...path]/route";
 
 /*
  * THE CACHE POLICY IS PART OF THE MODEL, NOT JUST PLUMBING.
@@ -99,12 +101,41 @@ describe("cacheControl", () => {
     }
   });
 
-  it("keeps the CDN's window and its stale-while-revalidate grace", () => {
-    // `no-cache` forbids reuse without revalidation, but a shared cache with
-    // `s-maxage` may still serve inside that window — which is what keeps a
-    // launch draft's ~420 element-summary fetches off FPL's rate-limited API.
-    expect(cacheControl("element-summary/1/")).toContain("s-maxage=300");
-    expect(cacheControl("element-summary/1/")).toContain("stale-while-revalidate=86400");
+  it("says the opposite thing to the CDN, in its own header", () => {
+    /*
+     * The two layers want opposite things and one header cannot say both.
+     * `no-cache` is unqualified, so by RFC 9111 §5.2.2.4 it binds SHARED caches
+     * too — `s-maxage` overrides `max-age`/`Expires`, not `no-cache`. Relying
+     * on the two coexisting in one header was the fourth wrong version of this.
+     */
+    const cdn = cdnCacheControl("element-summary/1/");
+    expect(cdn).toContain("s-maxage=300");
+    expect(cdn).toContain("stale-while-revalidate=86400");
+    // And the CDN's header must NOT carry the browser's directive, or the
+    // separation buys nothing.
+    expect(cdn).not.toContain("no-cache");
+  });
+
+  it("actually sends both headers, not just computes them", () => {
+    /*
+     * `cdnCacheControl` being correct is worth nothing if the route does not
+     * emit it — and the pure function is testable while the emission is not,
+     * which is exactly the gap where a fix looks shipped and is not.
+     */
+    const src = fs.readFileSync(
+      path.join(__dirname, "[...path]", "route.ts"),
+      "utf8"
+    );
+    expect(src).toMatch(/"Cache-Control": cacheControl\(joined\)/);
+    expect(src).toMatch(/"CDN-Cache-Control": cdnCacheControl\(joined\)/);
+  });
+
+  it("keeps the two headers on the same TTLs", () => {
+    // They answer different questions but must not drift apart on the numbers.
+    for (const p of ["fixtures/", "event/1/live/", "bootstrap-static/", "element-summary/1/"]) {
+      expect(cdnCacheControl(p)).toContain(`s-maxage=${cacheSeconds(p)}`);
+      expect(cdnCacheControl(p)).toContain(`stale-while-revalidate=${staleSeconds(p)}`);
+    }
   });
 
   it("never hands a browser a reuse window", () => {

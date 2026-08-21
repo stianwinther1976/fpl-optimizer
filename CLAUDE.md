@@ -13,7 +13,7 @@ entry id.
 ```bash
 npm run dev               # local dev server
 npm run build             # production build — run before claiming anything is done
-npm test                  # vitest run — the main suite (~457 tests)
+npm test                  # vitest run — the main suite (~637 tests)
 npm run lint              # eslint
 npx tsc --noEmit          # typecheck the app
 npm run typecheck:scripts # typecheck scripts/ — a separate tsconfig
