@@ -117,9 +117,34 @@ src/lib/xp.ts               the projection model — the heart of the app
 src/lib/optimizer.ts        squad building, best XI, transfer plans, chips
 src/lib/pool.ts             candidate shortlisting (launchPool for pre-season)
 src/lib/rules.ts            FPL rule constants
+src/lib/field.ts            the competition: ownership, template/differential
+src/lib/chips.ts            chip windows and timing (see the section above)
+src/lib/live.ts             in-play: match clock, provisional bonus, autosubs
+src/lib/lineup.ts           the READER's team-news overrides (see below)
+src/lib/display.ts          display arithmetic, extracted so it can be tested
+src/lib/recent.ts           recently-viewed teams, localStorage only
 src/lib/demo.ts             the synthetic demo universe (entry id 999999)
 scripts/                    measurement harnesses, not shipped
 ```
+
+`display.ts` exists because components cannot be rendered in tests here. Any
+arithmetic a component would otherwise inline goes there and is tested
+properly; `componentInvariants` then pins the call site to the helper, because
+extracting the arithmetic and leaving the old expression behind would pass every
+test in `display.test.ts` while shipping the original bug.
+
+`lineup.ts` is the one place the app takes an opinion from the READER rather
+than from data: a manager who has seen a press conference can mark a player as
+starting or benched, and `projectAll` applies it last. Two things about it:
+
+- The override is **asymmetric on purpose**. "Starts" raises a player's share
+  but never lowers it; "benched" lets it fall. A reader's team news is evidence
+  that someone plays, not evidence about how much.
+- **Calibration must never learn from it.** The run `Dashboard` snapshots for
+  grading is projected with `startCalls: new Map()` explicitly. Otherwise a
+  reader who marks a £4.0m defender "starts" and sees him not play teaches the
+  calibration that the MODEL over-rates defenders — a real correction, applied
+  globally, sourced from somebody else's mistake.
 
 ## FPL data conventions worth knowing
 
@@ -132,6 +157,42 @@ scripts/                    measurement harnesses, not shipped
   season; numbers measured pre-season do not transfer.
 - Transfer hit is 4 points, max 5 free transfers, £100.0m initial budget, 15-man
   squad, max 3 per club.
+- A fixture's **`minutes` stops at 90**. It tracks the real clock up to there and
+  then freezes, so a match in stoppage reads exactly 90 for as long as it runs.
+  The app shows `90+'`; claiming "90'" through four more minutes of football is a
+  claim the data cannot support.
+- **`finished` means bonus confirmed, not "the match has ended."** The final
+  whistle is `finished_provisional`, and after a Saturday afternoon the two are
+  hours apart. Use the provisional flag for anything about the MATCH, and
+  `finished` for anything about the POINTS — `gwDone` deliberately still waits
+  for `finished`, because bonus is still moving while it is provisional.
+
+### The lesson those two cost, which is the general one
+
+Both were live for a whole season for the same reason: **the FPL API sent a
+field and `types.ts` did not model it, so nobody knew it was there.** The match
+clock was estimated from `now - kickoff` with a flat 15 minutes knocked off for
+half time — measured 6 minutes fast at the death — while `minutes` sat in the
+payload unread. Then full time was read off the wrong flag while
+`finished_provisional` sat beside it, also unread.
+
+Before writing an estimator for anything, dump the actual payload and look. The
+snapshot on the `fpl-snapshot-out` branch is there precisely so you can.
+
+### Live data must not be cached by the browser
+
+`Cache-Control` on the proxy carries `max-age=0` as well as `s-maxage`. This is
+load-bearing and was missing: `s-maxage` binds shared caches only, so with
+`public` and no `max-age` a browser is given no freshness lifetime, falls back to
+heuristic caching and picks its own — iOS Safari picked minutes. The 30-second
+live poll was answered from the phone's own store while `updatedAt` was stamped
+"now" on every hit, so the app reported refreshing and had not. The client sends
+`cache: "no-store"` for `fixtures/` and `event/{id}/live/` as the second belt.
+
+A "Refresh now" control must also bypass the in-memory memo in `fpl.ts`
+(`get(path, force)`), or it returns the promise the caller already had — a
+button labelled "now" that does nothing, pressed exactly when the numbers look
+wrong.
 
 ## Demo mode
 
