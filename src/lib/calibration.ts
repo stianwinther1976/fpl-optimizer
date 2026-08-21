@@ -14,8 +14,16 @@
 //
 // The result: if the model keeps over-rating forwards by 8%, within a few
 // gameweeks forwards are scaled down ~8% — continuously, automatically.
+//
+// That sentence was false for the life of this file and is worth the warning.
+// The snapshot it grades is ALREADY calibrated, so the ratio it measures is a
+// residual, not a factor; folding it in as one made the fixed point the square
+// root of the correction needed, and an 8% bias settled at ~4% forever. See
+// `applyGwOutcome`. Anything added here has to keep asking "is this quantity
+// measured before or after the thing I am about to multiply by it?"
 
 import type { Bootstrap } from "./types";
+import { currentSeasonName } from "./seasonArchive";
 import type { PlayerXp } from "./xp";
 
 export interface CalibrationFactors {
@@ -35,6 +43,17 @@ export interface CalibrationState {
   factors: CalibrationFactors;
   log: GwAccuracy[]; // most recent last
   reconciled: number[]; // gameweeks already graded
+  /**
+   * Which season `reconciled` refers to, in FPL's "2025/26" form.
+   *
+   * WITHOUT THIS THE FEATURE DIED EVERY AUGUST. `reconciled` is capped at the
+   * last 30 entries, so a finished 38-gameweek season leaves exactly [9..38] —
+   * and with no season on the state, next season loaded that list and skipped
+   * its own GW9 through GW38. Calibration graded eight gameweeks a year and
+   * then went quiet, with nothing anywhere saying so. Absent on state written
+   * before this existed, which is treated as "not this season".
+   */
+  season?: string | null;
 }
 
 export const CAL_CONFIG = {
@@ -88,10 +107,32 @@ export function applyGwOutcome(
   const sumAct = graded.reduce((s, e) => s + e.actual, 0);
   const bias = sumAct > 0 ? sumPred / sumAct - 1 : 0;
 
-  // `global` carries the aggregate correction; `byPos` must be RELATIVE to it,
-  // otherwise multiplier = global * byPos double-counts the overall bias and the
-  // model converges to a residual bias instead of an unbiased fit.
+  /*
+   * THE RATIO IS A RESIDUAL, NOT A FACTOR, AND IT WAS FOLDED IN AS A FACTOR.
+   *
+   * `snapshotPredictions` stores `p.next`, and `projectAll` has ALREADY
+   * multiplied that by `calibrationMultiplier`. So `sumAct / sumPred` is what
+   * is left over AFTER the correction currently in force — and EMAing it in as
+   * an absolute factor makes the fixed point `g = sqrt(r)` instead of `g = r`.
+   * The loop closes half the gap and stalls at the geometric mean.
+   *
+   * Measured on a probe of 40 graded gameweeks with the raw model over-rating
+   * by 25% (r = 0.8): global converged to 0.894427 — exactly sqrt(0.8) — and
+   * 11.8% of the over-prediction was still there at the end. The header of this
+   * file used to promise that an 8% bias is corrected by ~8% within a few
+   * gameweeks; it was ~4%, permanently.
+   *
+   * The factor that WOULD have made this gameweek right is the one already
+   * applied times the residual, so that is what the EMA aims at. `byPos` has
+   * the same shape one level down, and the comment below already identified
+   * this exact failure mode for `byPos` relative to `global` while `global`
+   * itself had it relative to the shipped projection.
+   *
+   * `global` carries the aggregate correction; `byPos` must be RELATIVE to it,
+   * otherwise multiplier = global * byPos double-counts the overall bias.
+   */
   const globalRatio = sumPred > 0 ? sumAct / sumPred : 1;
+  const globalTarget = state.factors.global * globalRatio;
   const byPos = { ...state.factors.byPos };
   for (const pos of [1, 2, 3, 4]) {
     const posEntries = graded.filter((e) => e.pos === pos);
@@ -102,14 +143,15 @@ export function applyGwOutcome(
     // How much this position deviates *beyond* the global correction. 1.0 means
     // the position tracks the overall bias exactly (no position-specific tweak).
     const ratio = globalRatio > 0 ? a / p / globalRatio : 1;
+    const prev = byPos[pos] ?? 1;
     byPos[pos] = clamp(
-      (1 - cfg.alpha) * (byPos[pos] ?? 1) + cfg.alpha * ratio,
+      (1 - cfg.alpha) * prev + cfg.alpha * (prev * ratio),
       cfg.factorMin,
       cfg.factorMax
     );
   }
   const global = clamp(
-    (1 - cfg.alpha) * state.factors.global + cfg.alpha * globalRatio,
+    (1 - cfg.alpha) * state.factors.global + cfg.alpha * globalTarget,
     cfg.factorMin,
     cfg.factorMax
   );
@@ -133,15 +175,41 @@ export function calibrationMultiplier(f: CalibrationFactors, pos: number): numbe
 
 const key = (demo: boolean, k: string) => `${demo ? "demo-" : ""}fpl-${k}`;
 
-export function loadCalibration(demo: boolean): CalibrationState {
+export function loadCalibration(demo: boolean, season?: string | null): CalibrationState {
   try {
     const raw = localStorage.getItem(key(demo, "calibration"));
     if (raw) {
       const s = JSON.parse(raw) as CalibrationState;
-      if (s?.factors?.byPos) return s;
+      if (s?.factors?.byPos) {
+        /*
+         * A NEW SEASON CLEARS WHAT IS SEASON-SHAPED AND KEEPS WHAT IS NOT.
+         *
+         * `reconciled` is a list of gameweek NUMBERS, so it means nothing once
+         * the numbers start again — and left alone it silently suppressed
+         * grading for most of the new season (see `CalibrationState.season`).
+         * The factors and the log are about the MODEL, not about a particular
+         * season's gameweeks, so they carry over: what the model has learned
+         * about its own bias does not stop being true in August.
+         */
+        if (season != null && s.season != null && s.season !== season) {
+          return { ...s, reconciled: [], season };
+        }
+        return s;
+      }
     }
   } catch {}
-  return { factors: IDENTITY_FACTORS, log: [], reconciled: [] };
+  return { factors: IDENTITY_FACTORS, log: [], reconciled: [], season: season ?? null };
+}
+
+/** The season stamped on stored state, before any rollover normalisation. */
+function loadRawSeason(demo: boolean): string | null | undefined {
+  try {
+    const raw = localStorage.getItem(key(demo, "calibration"));
+    if (!raw) return undefined;
+    return (JSON.parse(raw) as CalibrationState).season ?? null;
+  } catch {
+    return undefined;
+  }
 }
 
 function saveCalibration(demo: boolean, state: CalibrationState) {
@@ -154,14 +222,18 @@ function saveCalibration(demo: boolean, state: CalibrationState) {
 export function snapshotPredictions(
   demo: boolean,
   gw: number,
-  xp: Map<number, PlayerXp>
+  xp: Map<number, PlayerXp>,
+  season?: string | null
 ): void {
   try {
     const preds: Record<number, number> = {};
     for (const [id, p] of xp) {
       if (p.next >= CAL_CONFIG.snapshotMinXp) preds[id] = Math.round(p.next * 10) / 10;
     }
-    localStorage.setItem(key(demo, `pred-${gw}`), JSON.stringify({ at: Date.now(), preds }));
+    localStorage.setItem(
+      key(demo, `pred-${gw}`),
+      JSON.stringify({ at: Date.now(), season, preds })
+    );
   } catch {}
 }
 
@@ -174,9 +246,18 @@ export async function reconcileFinishedGws(
   bootstrap: Bootstrap,
   getActuals: (gw: number) => Promise<Map<number, number>>
 ): Promise<boolean> {
-  let state = loadCalibration(demo);
-  let changed = false;
+  const season = currentSeasonName(bootstrap.events);
+  let state = loadCalibration(demo, season);
+  // The season rollover above is itself a change worth persisting: without
+  // this, the reset is recomputed on every load until something else happens
+  // to save, and any snapshot dropped below stays orphaned in the meantime.
+  let changed = state.season !== loadRawSeason(demo);
   const posOf = new Map(bootstrap.elements.map((e) => [e.id, e.element_type]));
+  const drop = (gw: number) => {
+    try {
+      localStorage.removeItem(key(demo, `pred-${gw}`));
+    } catch {}
+  };
   for (const ev of bootstrap.events) {
     if (!ev.finished || state.reconciled.includes(ev.id)) continue;
     let raw: string | null = null;
@@ -185,7 +266,24 @@ export async function reconcileFinishedGws(
     } catch {}
     if (!raw) continue;
     try {
-      const snap = JSON.parse(raw) as { preds: Record<string, number> };
+      const snap = JSON.parse(raw) as { preds: Record<string, number>; season?: string | null };
+      /*
+       * A SNAPSHOT FROM ANOTHER SEASON IS NOT EVIDENCE, IT IS POISON.
+       *
+       * The key is `pred-{gw}` with no season in it, and FPL reassigns element
+       * ids every summer — `seasonArchive.ts`'s header says so. A reader who
+       * visited before last season's GW38 deadline and came back a year later
+       * had that snapshot graded against THIS season's actuals, mapping one
+       * man's projection onto another man's return. Measured on a probe: it
+       * drove `factors.global` straight to the 0.75 clamp floor, a 25% haircut
+       * on every projection in the app, from one leftover key.
+       */
+      if (season != null && snap.season != null && snap.season !== season) {
+        drop(ev.id);
+        state = { ...state, reconciled: [...state.reconciled, ev.id] };
+        changed = true;
+        continue;
+      }
       const actuals = await getActuals(ev.id);
       const entries: GradedPlayer[] = Object.entries(snap.preds).map(([idStr, pred]) => {
         const id = parseInt(idStr, 10);
@@ -193,20 +291,25 @@ export async function reconcileFinishedGws(
       });
       state = applyGwOutcome(state, ev.id, entries, Date.now());
       changed = true;
-      try {
-        localStorage.removeItem(key(demo, `pred-${ev.id}`));
-      } catch {}
+      drop(ev.id);
     } catch {
-      // grading failed (e.g. live data gone) — skip this GW permanently
+      /*
+       * Grading failed (live data gone, malformed snapshot) — skip this GW
+       * permanently. `changed` MUST be set, and the key MUST go.
+       *
+       * Neither used to happen. If this was the only gameweek in the pass,
+       * nothing saved, so every later page load re-fetched the same dead
+       * `event/{gw}/live/` and failed again for the life of the install. And
+       * the snapshot was left behind either way — which is exactly the orphan
+       * that becomes next season's poison above.
+       */
       state = { ...state, reconciled: [...state.reconciled, ev.id] };
+      changed = true;
+      drop(ev.id);
     }
   }
-  if (changed) {
-    saveCalibration(demo, state);
-    setActiveCalibration(state.factors);
-  } else {
-    setActiveCalibration(state.factors);
-  }
+  if (changed) saveCalibration(demo, { ...state, season });
+  setActiveCalibration(state.factors);
   return changed;
 }
 

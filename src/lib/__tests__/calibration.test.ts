@@ -1,9 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
 import {
   applyGwOutcome,
   calibrationMultiplier,
   CAL_CONFIG,
   IDENTITY_FACTORS,
+  loadCalibration,
+  reconcileFinishedGws,
   type CalibrationState,
   type GradedPlayer,
 } from "../calibration";
@@ -109,5 +111,175 @@ describe("calibrationMultiplier", () => {
     const f = { global: 0.8, byPos: { 1: 1, 2: 1, 3: 0.8, 4: 1.4 } };
     expect(calibrationMultiplier(f, 3)).toBeCloseTo(0.7, 5); // 0.64 clamped up
     expect(calibrationMultiplier(f, 4)).toBeCloseTo(0.8 * 1.4, 5);
+  });
+});
+
+/*
+ * THE LOOP HAS TO CLOSE THE BIAS, NOT HALF OF IT.
+ *
+ * `snapshotPredictions` stores an already-calibrated projection, so the ratio
+ * this module measures is a RESIDUAL. Folding it in as an absolute factor made
+ * the fixed point `g = sqrt(r)`: an over-prediction of 25% settled at 0.894427
+ * — exactly sqrt(0.8) — with 11.8% of the bias still there after 40 graded
+ * gameweeks, permanently. The file's own header promised the opposite.
+ */
+describe("convergence", () => {
+  /** Grade `rounds` gameweeks of a model whose RAW output is `1/r` too high. */
+  const converge = (r: number, rounds: number) => {
+    let st = fresh();
+    for (let gw = 1; gw <= rounds; gw++) {
+      const m = calibrationMultiplier(st.factors, 3);
+      // What the reader is shown is the raw projection times the factor in
+      // force — which is exactly what gets snapshotted and graded later.
+      const shown = 5 * m;
+      const actual = 5 * r;
+      st = applyGwOutcome(st, gw, makeEntries(20, () => shown, () => actual), 0);
+    }
+    return st;
+  };
+
+  it("converges on the correction actually needed, not its square root", () => {
+    const st = converge(0.8, 60);
+    expect(calibrationMultiplier(st.factors, 3)).toBeCloseTo(0.8, 3);
+    // The bug's fixed point, which must not come back.
+    expect(calibrationMultiplier(st.factors, 3)).not.toBeCloseTo(Math.sqrt(0.8), 3);
+  });
+
+  it("closes an under-prediction the same way", () => {
+    const st = converge(1.2, 60);
+    expect(calibrationMultiplier(st.factors, 3)).toBeCloseTo(1.2, 3);
+  });
+
+  it("leaves an unbiased model alone", () => {
+    const st = converge(1, 30);
+    expect(calibrationMultiplier(st.factors, 3)).toBeCloseTo(1, 6);
+  });
+
+  it("closes a POSITION-specific bias too, not its square root", () => {
+    /*
+     * The uniform case above leaves `byPos` at 1, so it cannot see the same
+     * defect one level down — mutation-testing caught exactly that. Here
+     * forwards are wrong by a different amount from everyone else, so the
+     * correction has to live in `byPos` and `global` together.
+     */
+    const rOther = 1.0;
+    const rFwd = 0.7;
+    let st = fresh();
+    for (let gw = 1; gw <= 80; gw++) {
+      const entries: GradedPlayer[] = [];
+      for (const pos of [1, 2, 3, 4]) {
+        const m = calibrationMultiplier(st.factors, pos);
+        const r = pos === 4 ? rFwd : rOther;
+        for (let i = 0; i < 20; i++) entries.push({ pos, pred: 5 * m, actual: 5 * r });
+      }
+      st = applyGwOutcome(st, gw, entries, 0);
+    }
+    expect(calibrationMultiplier(st.factors, 4)).toBeCloseTo(rFwd, 2);
+    expect(calibrationMultiplier(st.factors, 3)).toBeCloseTo(rOther, 2);
+    // The bug's fixed point for the forward line.
+    expect(calibrationMultiplier(st.factors, 4)).not.toBeCloseTo(Math.sqrt(rFwd), 2);
+  });
+
+  it("still respects the clamp on a wild bias", () => {
+    const st = converge(0.1, 60);
+    expect(st.factors.global).toBeGreaterThanOrEqual(CAL_CONFIG.factorMin);
+    expect(calibrationMultiplier(st.factors, 3)).toBeGreaterThanOrEqual(0.7);
+  });
+});
+
+/*
+ * PERSISTENCE, WHERE THREE DEFECTS LIVED TOGETHER.
+ *
+ * `reconciled` is a list of gameweek NUMBERS capped at 30 entries, so a
+ * finished 38-gameweek season left exactly [9..38] — and with no season on the
+ * state, the next season loaded that and skipped its own GW9 through GW38.
+ * Calibration graded eight gameweeks a year and then went quiet.
+ */
+describe("persistence across a season boundary", () => {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    },
+  });
+
+  const boot = (season: number, finishedUpTo: number) =>
+    ({
+      elements: Array.from({ length: 40 }, (_, i) => ({ id: i + 1, element_type: (i % 4) + 1 })),
+      events: Array.from({ length: 38 }, (_, i) => ({
+        id: i + 1,
+        finished: i + 1 <= finishedUpTo,
+        deadline_time: `${season}-08-1${i === 0 ? "5" : "6"}T17:30:00Z`,
+      })),
+    }) as unknown as Parameters<typeof reconcileFinishedGws>[1];
+
+  beforeEach(() => store.clear());
+
+  it("clears last season's graded list but keeps what the model learned", () => {
+    store.set(
+      "fpl-calibration",
+      JSON.stringify({
+        factors: { global: 0.9, byPos: { 1: 1, 2: 1, 3: 1, 4: 1 } },
+        log: [{ gw: 38, n: 100, mae: 1, bias: 0.1, at: 0 }],
+        reconciled: Array.from({ length: 30 }, (_, i) => i + 9),
+        season: "2025/26",
+      })
+    );
+    const s = loadCalibration(false, "2026/27");
+    // The gameweek numbers are meaningless now, so they go.
+    expect(s.reconciled).toEqual([]);
+    expect(s.season).toBe("2026/27");
+    // What the model learned about its own bias does not stop being true.
+    expect(s.factors.global).toBe(0.9);
+    expect(s.log.length).toBe(1);
+  });
+
+  it("keeps the graded list within one season", () => {
+    store.set(
+      "fpl-calibration",
+      JSON.stringify({
+        factors: IDENTITY_FACTORS,
+        log: [],
+        reconciled: [1, 2, 3],
+        season: "2026/27",
+      })
+    );
+    expect(loadCalibration(false, "2026/27").reconciled).toEqual([1, 2, 3]);
+  });
+
+  it("refuses to grade a snapshot stamped with another season", async () => {
+    /*
+     * FPL reassigns element ids every summer. A snapshot left over from last
+     * season maps one man's projection onto another man's return; a probe drove
+     * `factors.global` straight to the clamp floor from one leftover key.
+     */
+    store.set(
+      "fpl-pred-1",
+      JSON.stringify({ at: 0, season: "2025/26", preds: Object.fromEntries(Array.from({ length: 40 }, (_, i) => [i + 1, 8])) })
+    );
+    const changed = await reconcileFinishedGws(false, boot(2026, 1), async () =>
+      new Map(Array.from({ length: 40 }, (_, i) => [i + 1, 0]))
+    );
+    expect(changed).toBe(true);
+    // Untouched by a snapshot it had no business grading...
+    expect(JSON.parse(store.get("fpl-calibration")!).factors.global).toBe(1);
+    // ...and the orphan key is gone, so it cannot poison a later pass either.
+    expect(store.has("fpl-pred-1")).toBe(false);
+  });
+
+  it("persists a failed grade, so it is not retried on every page load", async () => {
+    // The catch used to mutate state without setting `changed`, so nothing
+    // saved: every later load re-fetched the same dead gameweek and failed
+    // again for the life of the install, leaving the snapshot behind each time.
+    store.set("fpl-pred-1", JSON.stringify({ at: 0, season: "2026/27", preds: { 1: 8 } }));
+    const changed = await reconcileFinishedGws(false, boot(2026, 1), async () => {
+      throw new Error("live data gone");
+    });
+    expect(changed).toBe(true);
+    expect(JSON.parse(store.get("fpl-calibration")!).reconciled).toContain(1);
+    expect(store.has("fpl-pred-1")).toBe(false);
   });
 });

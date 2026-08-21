@@ -116,6 +116,29 @@ describe("an override moves the projection and is labelled", () => {
     expect(started).toBeGreaterThan(benched);
   });
 
+  it("never lowers a nailed player's pStart for being told he starts", () => {
+    /*
+     * `pStartFor("starts")` is the PRE-SEASON ceiling, 0.97. In season the model
+     * clamps to 1.0, so an ever-present carries 1.0 and taking the assertion
+     * neat DEMOTED him. Measured on the demo's mid-season universe before the
+     * fix: 141 of 300 players sat above 0.97 and every one sampled went down.
+     * `share` was already guarded one-sidedly; `pStart` was not, and it feeds
+     * `p60` and `pPlay`.
+     */
+    const nailed = { pStart: 1, minsPerStart: 90, share: 1 };
+    const after = applyStartCall(nailed, "starts");
+    expect(after.pStart).toBe(1);
+    expect(after.share).toBe(1);
+
+    // A player BELOW the ceiling is still lifted to it, which is the point.
+    const rotating = { pStart: 0.4, minsPerStart: 90, share: 0.4 };
+    expect(applyStartCall(rotating, "starts").pStart).toBe(XP_CONFIG.preseasonMaxPStart);
+
+    // And "benched" still takes a nailed player down: that direction asserts
+    // something the model does not already know, so it is not one-sided.
+    expect(applyStartCall(nailed, "benched").pStart).toBe(XP_CONFIG.priorPStartRange[0]);
+  });
+
   it("moves a PRE-SEASON GOALKEEPER, who used to be silently exempt", () => {
     /*
      * THE FEATURE DID NOTHING FOR KEEPERS, AND SAID IT HAD.

@@ -10,6 +10,7 @@ import { projectAll } from "@/lib/xp";
 import { projectAutoSubs, LIVE_REFRESH_MS } from "@/lib/live";
 import { netEventPoints, netGwDelta, netGwPoints, valueDelta } from "@/lib/display";
 import { saveRecentTeam } from "@/lib/recent";
+import { currentSeasonName } from "@/lib/seasonArchive";
 import { launchPool } from "@/lib/pool";
 import {
   cachedPastSeason,
@@ -288,7 +289,7 @@ export default function Dashboard({
            */
           startCalls: new Map(),
         });
-        snapshotPredictions(demo, nextEv, xp);
+        snapshotPredictions(demo, nextEv, xp, currentSeasonName(data.bootstrap.events));
       }
       if (changed || demo) setCalVersion((v) => v + 1);
     })();
