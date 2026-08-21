@@ -204,7 +204,7 @@ export default function StatsTable({
                 </td>
                 <td className="px-2 py-2 text-muted">{POSITION_NAMES[e.element_type]}</td>
                 <td className="px-2 py-2 text-right font-mono">
-                  £{fmtPrice(e.now_cost)}
+                  £{fmtPrice(e.now_cost)}m
                   {netT > 25_000 && (
                     <span className="ml-0.5 text-accent" title={`${netT.toLocaleString("en-GB")} net transfers in this GW — price-rise pressure`}>
                       ▲

@@ -487,8 +487,19 @@ export default function LiveTab({
         })}
       </div>
       <p className="text-xs text-muted">
-        ★ = projected bonus from live BPS (not confirmed until the match finishes). Auto-subs are
-        projected once a starter&apos;s matches finish with 0 minutes. Captain doubling
+        {/*
+            EXPLAIN THE MARKER ONLY WHEN THERE IS ONE. Since 2026/27 FPL
+            publishes its own projected bonus past the 20-minute mark, and
+            `provisionalBonus` correctly adds nothing on top of that — so for
+            most of a live gameweek there is no ★ anywhere, and a legend for it
+            reads as a feature that is missing rather than one not currently
+            needed. Confirmed on the real GW1 payload: FPL had already awarded
+            3/2/1 and the projection was empty.
+        */}
+        {(bonus?.byElement.size ?? 0) > 0 &&
+          "★ = projected bonus from live BPS (not confirmed until the match finishes). "}
+        Auto-subs are projected once a starter&apos;s matches finish with 0 minutes. Captain
+        doubling
         {data.squad.activeChip === "3xc" ? " (3x — Triple Captain active)" : ""} included in the
         total.
       </p>
