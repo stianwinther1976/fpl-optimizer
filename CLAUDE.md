@@ -49,7 +49,9 @@ These read data from sibling directories, not from this repo:
   or by pushing to `run-measurement`.
 - `../fpl-live/snapshot` — a snapshot of the live FPL API
   (`bootstrap-static.json`, `fixtures.json`, `element-summaries.json`,
-  `meta.json`). Produced by `.github/workflows/fpl-snapshot.yml`, which publishes
+  `event-live.json`, `meta.json`). `event-live.json` is not a model input; it
+  is there so the live payload can be read, which is what three shipped defects
+  turned on — see "The lesson those two cost" below. Produced by `.github/workflows/fpl-snapshot.yml`, which publishes
   to the `fpl-snapshot-out` branch. Trigger it by pushing to the `data-snapshot`
   branch, or run `scripts/snapshot/fetch-snapshot.mjs` directly if the machine
   can reach `fantasy.premierleague.com`.
