@@ -264,3 +264,22 @@ export function scoreTier(points: number): ScoreTier {
   if (points === 0) return "blank";
   return points >= RETURN_THRESHOLD ? "returned" : "played";
 }
+
+/**
+ * A fixture's kickoff as the reader should see it.
+ *
+ * FPL publishes a PLACEHOLDER `kickoff_time` for a fixture awaiting
+ * rescheduling and flags it with `provisional_start_time`. Both places that
+ * render a kickoff printed the placeholder as a settled time — "Sat 15:00" for
+ * a match nobody has scheduled — because the type did not carry the flag, so
+ * nobody knew to look. A provisional time is marked, not hidden: the date is
+ * still the best guide there is, it just is not a promise.
+ */
+export function kickoffLabel(
+  f: { kickoff_time: string | null; provisional_start_time?: boolean },
+  fmt: (iso: string) => string
+): string {
+  if (!f.kickoff_time) return "TBC";
+  const when = fmt(f.kickoff_time);
+  return f.provisional_start_time ? `${when} (TBC)` : when;
+}

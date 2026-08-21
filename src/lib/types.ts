@@ -145,6 +145,15 @@ export interface Fixture {
    * settled the bonus.
    */
   finished_provisional?: boolean;
+  /**
+   * True while FPL's published `kickoff_time` is a PLACEHOLDER, not a fixed
+   * time — a fixture awaiting rescheduling after a cup run or a postponement.
+   *
+   * The app renders `kickoff_time` as fact in two places. It is `false` on all
+   * 380 fixtures of an opening calendar and only appears once rescheduling
+   * starts, which is why it has not bitten, and why the type never carried it.
+   */
+  provisional_start_time?: boolean;
   started?: boolean;
   team_h_score: number | null;
   team_a_score: number | null;

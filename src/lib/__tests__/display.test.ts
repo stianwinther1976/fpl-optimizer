@@ -13,6 +13,7 @@ import {
   teamValue,
   valueDelta,
   type BenchRow,
+  kickoffLabel,
 } from "../display";
 
 /**
@@ -409,5 +410,35 @@ describe("scoreTier", () => {
     // per-row colour on it is what caused the original problem, so the tier
     // takes one argument and there is nowhere to put the clock.
     expect(scoreTier.length).toBe(1);
+  });
+});
+
+/*
+ * FPL PUBLISHES A PLACEHOLDER KICKOFF FOR A FIXTURE AWAITING RESCHEDULING and
+ * flags it with `provisional_start_time`. Both places that render a kickoff
+ * printed the placeholder as a settled time — "Sat 15:00" for a match nobody
+ * has scheduled — because the `Fixture` type did not carry the flag, so nobody
+ * knew to look. Same shape as the `minutes` and `finished_provisional` misses.
+ */
+describe("kickoffLabel", () => {
+  const fmt = () => "Sat 15:00";
+
+  it("prints a confirmed time as fact", () => {
+    expect(kickoffLabel({ kickoff_time: "2026-01-01T15:00:00Z" }, fmt)).toBe("Sat 15:00");
+    expect(
+      kickoffLabel({ kickoff_time: "2026-01-01T15:00:00Z", provisional_start_time: false }, fmt)
+    ).toBe("Sat 15:00");
+  });
+
+  it("marks a provisional time rather than hiding it", () => {
+    // The date is still the best guide there is; it just is not a promise.
+    expect(
+      kickoffLabel({ kickoff_time: "2026-01-01T15:00:00Z", provisional_start_time: true }, fmt)
+    ).toBe("Sat 15:00 (TBC)");
+  });
+
+  it("says TBC when there is no time at all", () => {
+    expect(kickoffLabel({ kickoff_time: null }, fmt)).toBe("TBC");
+    expect(kickoffLabel({ kickoff_time: null, provisional_start_time: true }, fmt)).toBe("TBC");
   });
 });

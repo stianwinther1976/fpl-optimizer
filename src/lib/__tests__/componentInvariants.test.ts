@@ -871,6 +871,38 @@ describe("the squad view's live poll can actually stop", () => {
   });
 });
 
+describe("the launch drafter reads the store, not the transport", () => {
+  /*
+   * `loadPastSeason` resolves with the answer THAT load fetched, even when the
+   * store rejected it as thinner than what it already holds. The other call
+   * site in this file reads `cachedPastSeason()` for exactly this reason and
+   * says so in a long note; `runLaunch` read `past.data` directly, so a
+   * re-draft that came back worse (300 held, 250 returned) drafted from the
+   * 250 while the pitch beside it projected from the 300 — the split the store
+   * exists to close.
+   */
+  const src = read("OptimizePanel.tsx");
+
+  it("prefers the held records when they are fuller", () => {
+    expect(src).toMatch(/const held = cachedPastSeason\(\);/);
+    expect(src).toMatch(/held\.size > past\.data\.size \? held : past\.data/);
+  });
+
+  it("drafts from those records rather than the transport's map", () => {
+    const at = src.indexOf("buildLaunchVariants(");
+    expect(at).toBeGreaterThan(0);
+    const call = src.slice(at, src.indexOf(");", at));
+    expect(call).toContain("records");
+    expect(call).not.toContain("past.data");
+  });
+
+  it("counts the gap against what is actually being drafted from", () => {
+    // Reporting `past.failed` beside a fuller set of records tells the reader
+    // players are missing that the draft in front of them does have.
+    expect(src).toMatch(/past\.requested - records\.size/);
+  });
+});
+
 describe("the recent-teams pill keeps its two actions apart", () => {
   // A `<button>` inside a `<button>` is invalid HTML — React renders it and the
   // browser reparents it, so the remove control ends up outside the pill it
