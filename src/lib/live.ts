@@ -1,7 +1,7 @@
 // Live-gameweek helpers: provisional bonus from BPS, auto-substitution
 // projection and live match state.
 
-import type { Bootstrap, Element, EventLive, Fixture, Pick } from "./types";
+import type { Bootstrap, Element, EventLive, Fixture, Pick as FplPick } from "./types";
 import { isValidFormation } from "./rules";
 
 /**
@@ -16,6 +16,19 @@ import { isValidFormation } from "./rules";
  * and anything much slower wastes the freshness already paid for.
  */
 export const LIVE_REFRESH_MS = 30_000;
+
+/**
+ * Is the ball actually rolling?
+ *
+ * `started && !finished` is NOT this question — `finished` means bonus
+ * confirmed, so between the whistle and FPL settling the bonus (hours, after a
+ * Saturday) it stays true. `matchMinute` learned that and started rendering
+ * "FT"; the styling beside it did not, so a finished match sat there in the
+ * in-play accent with an in-play border. Both read this now.
+ */
+export function isInPlay(f: Pick<Fixture, "started" | "finished" | "finished_provisional">): boolean {
+  return !!f.started && !f.finished && !f.finished_provisional;
+}
 
 export interface ProvisionalBonus {
   /** elementId -> projected bonus (1..3) for fixtures where bonus isn't final yet */
@@ -164,7 +177,7 @@ export interface AutoSubResult {
  * "final" score matches FPL before it is officially processed.
  */
 export function projectAutoSubs(
-  picks: Pick[],
+  picks: FplPick[],
   elements: Map<number, Element>,
   live: EventLive,
   fixtures: Fixture[],

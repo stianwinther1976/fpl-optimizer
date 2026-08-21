@@ -168,6 +168,10 @@ export default function StatsTable({
                 className={`hover:bg-panel-2/60 active:bg-panel-2 ${onSelect ? "cursor-pointer" : ""}`}
                 onClick={onSelect ? () => onSelect(e) : undefined}
                 tabIndex={onSelect ? 0 : undefined}
+                /* The row keeps its ROW role so the table survives in the
+                   accessibility tree (see `componentInvariants`), which
+                   leaves nothing saying it is operable. The label does. */
+                aria-label={onSelect ? `${e.web_name} — open player details` : undefined}
                 onKeyDown={
                   onSelect
                     ? (ev) => {

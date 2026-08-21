@@ -84,7 +84,16 @@ export default function KpiHistoryModal({
               {transferGws.map((gw) => {
                 const moves = transfersByGw.get(gw)!;
                 const chip = chipAt(gw);
-                const hit = chip ? 0 : hitAt(gw);
+                /*
+                 * ONLY WILDCARD AND FREE HIT MAKE TRANSFERS FREE. Bench Boost,
+                 * Triple Captain and Assistant Manager do not, and treating
+                 * every chip as free showed "Bench Boost — free" over a real
+                 * -4 while the Gameweek scores table inside this same modal
+                 * printed the red -4 for that week. The app contradicted itself
+                 * about one gameweek, on the same screen.
+                 */
+                const freeTransferChip = chip === "wildcard" || chip === "freehit";
+                const hit = freeTransferChip ? 0 : hitAt(gw);
                 return (
                   <div key={gw} className="rounded-lg border border-border-c bg-panel-2/50 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -97,7 +106,8 @@ export default function KpiHistoryModal({
                       <span className="flex items-center gap-1.5 text-xs">
                         {chip && (
                           <span className="rounded bg-accent-2/15 px-1.5 py-0.5 font-bold text-accent-2">
-                            {CHIP_LABELS[chip] ?? chip} — free
+                            {CHIP_LABELS[chip] ?? chip}
+                            {freeTransferChip ? " — free" : ""}
                           </span>
                         )}
                         {hit > 0 && <span className="font-semibold text-danger">−{hit} hit</span>}

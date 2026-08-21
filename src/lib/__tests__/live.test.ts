@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchMinute, projectAutoSubs, provisionalBonus } from "../live";
+import { matchMinute, projectAutoSubs, provisionalBonus, isInPlay } from "../live";
 import { availabilityAt, XP_CONFIG } from "../xp";
 import { makeElement } from "./mockdata";
 import type { Bootstrap, Element, EventLive, Fixture, Pick } from "../types";
@@ -594,5 +594,26 @@ describe("provisionalBonus across a double gameweek", () => {
     // by element 2's settled bonus in a different match.
     expect(res.byElement.get(1)).toBe(3);
     expect(res.byElement.get(3)).toBe(2);
+  });
+});
+
+describe("isInPlay", () => {
+  const f = (over: Partial<Fixture>) =>
+    ({ started: true, finished: false, ...over }) as Fixture;
+
+  it("is false once the whistle has gone, even before bonus is settled", () => {
+    // `started && !finished` stayed true for hours after full time, so a
+    // finished match was styled as in-play beside a clock already reading FT.
+    expect(isInPlay(f({ finished_provisional: true }))).toBe(false);
+    expect(isInPlay(f({ finished: true }))).toBe(false);
+  });
+
+  it("is true while the match is actually running", () => {
+    expect(isInPlay(f({ finished_provisional: false }))).toBe(true);
+    expect(isInPlay(f({}))).toBe(true);
+  });
+
+  it("is false before kickoff", () => {
+    expect(isInPlay(f({ started: false }))).toBe(false);
   });
 });

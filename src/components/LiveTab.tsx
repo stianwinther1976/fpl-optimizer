@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type TeamData } from "@/lib/fpl";
 import type { EventLive, Fixture, Pick } from "@/lib/types";
-import { matchMinute, projectAutoSubs, provisionalBonus, LIVE_REFRESH_MS } from "@/lib/live";
+import { matchMinute, projectAutoSubs, provisionalBonus, isInPlay, LIVE_REFRESH_MS } from "@/lib/live";
 import { autoSubView, benchPoints, kickoffLabel } from "@/lib/display";
 import { ErrorBox, Skeleton, Badge } from "./ui";
 import MatchModal from "./MatchModal";
@@ -364,7 +364,7 @@ export default function LiveTab({
         <div className="grid grid-flow-col grid-rows-2 gap-1.5 overflow-x-auto pb-1 auto-cols-max">
           {gwFixtures.map((f) => {
             const minute = matchMinute(f, updatedAt ?? undefined);
-            const liveNow = f.started && !f.finished;
+            const liveNow = isInPlay(f);
             const hs = f.team_h_score ?? 0;
             const as = f.team_a_score ?? 0;
             // Result colors (live and FT): winner green, loser red, draw yellow.

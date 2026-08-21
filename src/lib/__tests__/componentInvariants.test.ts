@@ -109,6 +109,17 @@ describe("clickable table rows are reachable from a keyboard", () => {
     expect(missing.map((m) => m.file)).toEqual([]);
   });
 
+  it("every one says what activating it does", () => {
+    /*
+     * Dropping `role="button"` is right for table semantics, but it leaves the
+     * row a focus stop that announces only "row" with nothing saying it is
+     * operable. `tabIndex` and the Enter/Space handler make it work; the label
+     * is what makes it discoverable.
+     */
+    const unlabelled = rowsWithClick.filter((r) => !r.block.includes("aria-label="));
+    expect(unlabelled.map((m) => m.file)).toEqual([]);
+  });
+
   it("none of them claims to be a button", () => {
     /*
      * `role="button"` WAS THE WRONG FIX AND THIS TEST USED TO REQUIRE IT.

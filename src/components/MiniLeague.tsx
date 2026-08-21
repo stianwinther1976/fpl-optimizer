@@ -93,18 +93,33 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
       // Follow pagination so leagues larger than one page (~50 entries)
       // still include everyone — capped to keep request counts sane.
       const MAX_PAGES = 6;
+      /*
+       * PAGINATE INTO A COPY. `api.league` memoises its answer for two minutes
+       * (`fetchCache`), so pushing page 2 into page 1's `results` array mutates
+       * the CACHED object — and the next load within that window appends to an
+       * array that already has the extra pages in it. Probed: replaying this
+       * three times against a two-page league gave 2, then 3, then 4 rows from
+       * two network fetches. In a 250-member league that is duplicate managers,
+       * duplicate React keys, and a corrupted payload that also feeds the Live
+       * tab's rank-band safety score.
+       */
       const first = await api.league(num);
+      const results = [...first.standings.results];
       let page = 1;
       let hasNext = first.standings.has_next;
       while (hasNext && page < MAX_PAGES) {
         page += 1;
         const next = await api.league(num, page);
-        first.standings.results.push(...next.standings.results);
+        results.push(...next.standings.results);
         hasNext = next.standings.has_next;
       }
-      setStandings(first);
+      const merged = {
+        ...first,
+        standings: { ...first.standings, results, has_next: hasNext },
+      };
+      setStandings(merged);
       localStorage.setItem("fpl-league-id", String(num));
-      loadDetails(first);
+      loadDetails(merged);
     } catch {
       setError("League not found — check the ID.");
     } finally {
@@ -332,6 +347,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                     className={`${mine ? "bg-accent/10" : "hover:bg-panel-2/60 active:bg-panel-2"} ${clickable ? "cursor-pointer" : ""}`}
                     onClick={clickable ? () => router.push(`/team/${r.entry}`) : undefined}
                     tabIndex={clickable ? 0 : undefined}
+                    aria-label={clickable ? `${r.entry_name} — open this team` : undefined}
                     onKeyDown={
                       clickable
                         ? (ev) => {
@@ -400,7 +416,19 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
           const threats = ranked
             .filter(([id, v]) => !myIds.has(id) && v >= 0.4)
             .slice(0, 5);
-          const shields = ranked.filter(([id]) => myIds.has(id)).slice(0, 5);
+          /*
+           * A SHIELD AND A DIFFERENTIAL CANNOT BE THE SAME PLAYER.
+           * Threats need `>= 0.4` and differentials `<= 0.2`, but shields were
+           * just "my players, top five by ownership" with no floor at all — so
+           * in a small league where nobody clears 40%, three 11%-owned players
+           * were listed under both "protect your rank" and "your edge" at once.
+           * The reader is told the same man both shields them and sets them
+           * apart, which cannot both be true.
+           *
+           * The threshold is `threats`' own: a player the field is on is one
+           * you are protected by holding, and the same number decides both.
+           */
+          const shields = ranked.filter(([id, v]) => myIds.has(id) && v >= 0.4).slice(0, 5);
           const diffs = data.squad.players
             .filter((p) => p.pickPosition <= 11 && (ownership.eo.get(p.element.id) ?? 0) <= 0.2)
             .slice(0, 5);
