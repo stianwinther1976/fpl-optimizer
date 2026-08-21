@@ -29,3 +29,28 @@ export function saveRecentTeam(t: Omit<RecentTeam, "at">): void {
     localStorage.setItem(KEY, JSON.stringify(list.slice(0, MAX)));
   } catch {}
 }
+
+/**
+ * Drop one team from the list, and hand back what is left.
+ *
+ * IT RETURNS THE NEW LIST RATHER THAN VOID, on purpose. `getRecentTeams` reads
+ * and re-parses storage, so a caller that removed and then re-read would be
+ * trusting a second read to agree with the first — and in the one case that
+ * matters, a `setItem` that threw on a full or blocked store, it would not.
+ * Returning the list the caller is about to render keeps the screen and the
+ * storage telling the same story even when the write fails.
+ *
+ * Removal is not a deletion in any lasting sense: this list is a convenience
+ * cache of ids the reader has typed, and opening the team again re-adds it.
+ * Nothing about the team, its history or its saved line-up calls is touched.
+ */
+export function removeRecentTeam(id: number): RecentTeam[] {
+  const left = getRecentTeams().filter((t) => t.id !== id);
+  try {
+    if (left.length > 0) localStorage.setItem(KEY, JSON.stringify(left));
+    // An empty array round-trips fine, but leaving `[]` behind means every
+    // later visit parses a value that means nothing. Drop the key instead.
+    else localStorage.removeItem(KEY);
+  } catch {}
+  return left;
+}
