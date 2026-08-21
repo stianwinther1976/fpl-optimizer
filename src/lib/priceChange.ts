@@ -84,13 +84,37 @@ export function priceTimingHint(
 ): string | null {
   const read = readPriceChange(el);
   if (!read || read.direction === 0) return null;
-  const when = read.imminent ? "tonight" : "soon";
+  /*
+   * SAY "IF" WHEN IT IS AN IF.
+   *
+   * The hint fires from `NOTABLE` (85%), but `imminent` needs 100 — so between
+   * the two the move is explicitly NOT expected tonight, and the copy stated
+   * the 0.1 as fact anyway: "buy before 00:00 UK and he costs you 0.1 less."
+   * A reader acting on that at 85% is being told the outcome of something the
+   * read does not claim. The only hedge was the adverb "soon", buried inside a
+   * sentence whose main clause was a promise.
+   *
+   * The two registers are now different sentences, not the same sentence with
+   * one word swapped: at 100% the move is expected and the copy commits; below
+   * it the copy says the move is approaching and what it WOULD be worth.
+   */
+  const soon = read.imminent;
   if (side === "in") {
-    return read.direction === 1
-      ? `Rising ${when} — buy before 00:00 UK and he costs you 0.1 less.`
-      : `Falling ${when} — waiting a day gets him 0.1 cheaper.`;
+    if (read.direction === 1) {
+      return soon
+        ? "Rising tonight — buy before 00:00 UK and he costs you 0.1 less."
+        : "Rising soon — not expected tonight, but if it lands before you buy he costs 0.1 more.";
+    }
+    return soon
+      ? "Falling tonight — waiting a day gets him 0.1 cheaper."
+      : "Falling soon — not expected tonight, but waiting would get him 0.1 cheaper if it lands.";
   }
-  return read.direction === -1
-    ? `Falling ${when} — sell before 00:00 UK to keep 0.1 of your team value.`
-    : `Rising ${when} — worth little to wait for: you bank only half of a profit, rounded down.`;
+  if (read.direction === -1) {
+    return soon
+      ? "Falling tonight — sell before 00:00 UK to keep 0.1 of your team value."
+      : "Falling soon — not expected tonight, but selling before it lands keeps 0.1 of your team value.";
+  }
+  return soon
+    ? "Rising tonight — worth little to wait for: you bank only half of a profit, rounded down."
+    : "Rising soon — worth little to wait for either way: you bank only half of a profit, rounded down.";
 }

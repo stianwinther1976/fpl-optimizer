@@ -57,6 +57,73 @@ describe("ownershipShare", () => {
  * decide what the app calls "template" and what it calls a differential, which
  * is the only thing this module is for.
  */
+/*
+ * TWO DEFECTS AROUND UNPUBLISHED OWNERSHIP, WHICH FPL DOES PUBLISH FOR
+ * EVERYONE TODAY — so neither has bitten, and both would be silent when it
+ * does. `ownershipShare` abstains on an unparseable value; these pin what the
+ * two consumers do with an abstention.
+ */
+describe("an abstention is not an answer", () => {
+  const noOwn = (id: number, xp: number) => ({
+    element: { id, selected_by_percent: "n/a" } as unknown as Element,
+    xp,
+  });
+  const withOwn = (id: number, xp: number, pct: string) => ({
+    element: { id, selected_by_percent: pct } as unknown as Element,
+    xp,
+  });
+
+  it("does not count an unknown player as 100% differential", () => {
+    /*
+     * `differential` is `total - shared`. Adding an unknown player to `total`
+     * and skipping `shared` put his WHOLE projection into `differential` — the
+     * loudest possible reading of "we do not know", on the number the UI leads
+     * with, and against `FieldSplit.unknown`'s own doc.
+     */
+    const split = splitByField([withOwn(1, 10, "50.0"), noOwn(2, 10)]);
+    expect(split.unknown).toBe(1);
+    // Only the known player is in the split at all.
+    expect(split.total).toBe(10);
+    expect(split.shared).toBeCloseTo(5, 9);
+    expect(split.differential).toBeCloseTo(5, 9);
+    // The bug's answer: 20 total, 5 shared, 15 differential.
+    expect(split.differential).not.toBeCloseTo(15, 9);
+  });
+
+  it("orders the band transitively when some ownership is missing", () => {
+    /*
+     * The old comparator returned `b.xp - a.xp` whenever EITHER side was
+     * unknown, mixing two orderings: A(9.5, unknown), B(10, 0.9), C(9, 0.1)
+     * gives C < B, A < C, B < A — a cycle, and `Array#sort` may then return
+     * anything. This is the exact triple.
+     */
+    const a = noOwn(1, 9.5);
+    const b = withOwn(2, 10, "90.0");
+    const c = withOwn(3, 9, "10.0");
+    const out = preferDifferential([b, a, c], 2);
+    expect(out.length).toBe(3);
+    // Known players first, least-owned first; the abstainer keeps his place
+    // behind them rather than winning a tie-break he cannot justify.
+    expect(out.map((r) => r.element.id)).toEqual([3, 2, 1]);
+  });
+
+  it("is a total order, so the result does not depend on input order", () => {
+    const a = noOwn(1, 9.5);
+    const b = withOwn(2, 10, "90.0");
+    const c = withOwn(3, 9, "10.0");
+    const perms = [
+      [a, b, c],
+      [b, a, c],
+      [c, b, a],
+      [a, c, b],
+      [b, c, a],
+      [c, a, b],
+    ];
+    const results = perms.map((p) => preferDifferential(p, 2).map((r) => r.element.id).join(","));
+    expect(new Set(results).size).toBe(1);
+  });
+});
+
 describe("templateClass boundaries", () => {
   it("puts a share exactly on a boundary in the HIGHER class", () => {
     expect(templateClass(0.4)).toBe("template");

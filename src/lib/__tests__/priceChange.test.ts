@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { Element } from "../types";
 import { readPriceChange, priceTimingHint } from "../priceChange";
 
 const p = (v: string | undefined) => ({ price_change_percent: v });
@@ -71,5 +72,42 @@ describe("priceTimingHint", () => {
   it("softens the wording before the threshold is crossed", () => {
     expect(priceTimingHint(p("104"), "in")).toMatch(/tonight/);
     expect(priceTimingHint(p("90"), "in")).toMatch(/soon/);
+  });
+});
+
+/*
+ * THE HINT FIRES AT 85% AND ONLY COMMITS AT 100%.
+ *
+ * Between the two the move is explicitly NOT expected tonight, and the copy
+ * stated the 0.1 as fact anyway. A reader acting on "buy before 00:00 UK and
+ * he costs you 0.1 less" at 85% is being told the outcome of something the
+ * read does not claim.
+ */
+describe("priceTimingHint hedges when the read does", () => {
+  const at = (pct: number) =>
+    ({ price_change_percent: String(pct) }) as Pick<Element, "price_change_percent">;
+
+  it("commits only when the move is imminent", () => {
+    const rising = priceTimingHint(at(100), "in")!;
+    expect(rising).toContain("tonight");
+    expect(rising).not.toMatch(/not expected/);
+  });
+
+  it("says the move is not expected tonight when it is not", () => {
+    for (const [pct, side] of [
+      [90, "in"],
+      [-90, "in"],
+      [-90, "out"],
+      [90, "out"],
+    ] as const) {
+      const hint = priceTimingHint(at(pct), side)!;
+      expect(hint, `${pct}% ${side}`).toMatch(/not expected tonight|either way/);
+      expect(hint, `${pct}% ${side}`).not.toContain("tonight —");
+    }
+  });
+
+  it("still says nothing at all when the price is not moving", () => {
+    expect(priceTimingHint(at(10), "in")).toBeNull();
+    expect(priceTimingHint(at(0), "out")).toBeNull();
   });
 });
