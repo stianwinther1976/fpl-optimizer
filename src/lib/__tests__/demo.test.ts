@@ -814,6 +814,29 @@ describe("the demo live feed is self-consistent", () => {
     }
   });
 
+  it("publishes a match clock, so the demo runs the path production runs", () => {
+    /*
+     * `matchMinute` prefers the fixture's published `minutes` and estimates
+     * from the wall clock only when the feed has not supplied one. The demo's
+     * kickoff is set so that the ESTIMATE also lands on 58, which is a trap:
+     * drop the published clock and every test below still passes while the demo
+     * quietly exercises the fallback instead of the branch the live app takes.
+     * That is what happened when this was mutation-tested, so it is pinned.
+     */
+    const u = universe();
+    const inPlay = u.fixtures.filter((f) => f.event === CURRENT_GW && f.started && !f.finished);
+    expect(inPlay.length).toBeGreaterThan(0);
+    for (const f of inPlay) {
+      expect({ id: f.id, published: typeof f.minutes }).toEqual({ id: f.id, published: "number" });
+      expect(f.minutes).toBeGreaterThan(0);
+    }
+    // And it must be the clock, not the estimate wearing its clothes: freeze
+    // the wall clock far past the match and the answer cannot move.
+    for (const f of inPlay) {
+      expect(matchMinute(f, new Date(NOW + 6 * 3_600_000))).toBe(matchMinute(f, new Date(NOW)));
+    }
+  });
+
   it("puts the clock and the minutes played on the same match", () => {
     const u = universe();
     const inPlay = u.fixtures.filter((f) => f.event === CURRENT_GW && f.started && !f.finished);

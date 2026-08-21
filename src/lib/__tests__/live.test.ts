@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { projectAutoSubs, provisionalBonus } from "../live";
+import { matchMinute, projectAutoSubs, provisionalBonus } from "../live";
 import { availabilityAt, XP_CONFIG } from "../xp";
 import { makeElement } from "./mockdata";
 import type { Bootstrap, Element, EventLive, Fixture, Pick } from "../types";
@@ -308,5 +308,88 @@ describe("availabilityAt", () => {
   it("players who left the club stay at zero", () => {
     const el = makeElement({ id: 1, status: "u", chance_of_playing_next_round: 100 });
     expect(availabilityAt(el, 3)).toBe(0);
+  });
+});
+
+/*
+ * THE CLOCK RAN FAST, AND THAT MADE A CORRECT SCORE LOOK STALE.
+ *
+ * `matchMinute` estimated the minute from `now - kickoff` with a flat fifteen
+ * minutes knocked off past the hour, ignoring the `minutes` FPL publishes on
+ * every fixture — which the `Fixture` type did not even declare. Measured live
+ * on ARS v COV in GW1 2026-27 at 20:16:59Z: FPL published 54, the estimate said
+ * 61. A reader who knew a goal had gone in on 50 minutes saw a clock reading 52
+ * beside a score without it and reported the SCORE as stale. It was not.
+ */
+describe("matchMinute", () => {
+  const KO = "2026-08-21T19:00:00Z";
+  const fx = (over: Partial<Fixture>): Fixture =>
+    ({
+      id: 1,
+      event: 1,
+      team_h: 1,
+      team_a: 2,
+      team_h_difficulty: 3,
+      team_a_difficulty: 3,
+      kickoff_time: KO,
+      finished: false,
+      started: true,
+      team_h_score: 3,
+      team_a_score: 0,
+      ...over,
+    }) as Fixture;
+
+  it("reads the published clock rather than the wall clock", () => {
+    // The measured case, exactly: 76 minutes of wall clock, 54 on the pitch.
+    const now = new Date("2026-08-21T20:16:00Z");
+    expect(matchMinute(fx({ minutes: 54 }), now)).toBe("54'");
+  });
+
+  it("no longer runs ahead of the match it is describing", () => {
+    // What the estimate produced for that same moment, and must not again.
+    const now = new Date("2026-08-21T20:16:00Z");
+    expect(matchMinute(fx({ minutes: 54 }), now)).not.toBe("61'");
+  });
+
+  it("is unmoved by wall-clock time the match did not spend playing", () => {
+    // Stoppage, a VAR check, a delayed restart: all add to `now - kickoff` and
+    // none of them to the match clock. The estimate could only ever err one way.
+    const a = matchMinute(fx({ minutes: 54 }), new Date("2026-08-21T20:16:00Z"));
+    const b = matchMinute(fx({ minutes: 54 }), new Date("2026-08-21T20:31:00Z"));
+    expect(a).toBe(b);
+  });
+
+  it("falls back to the estimate only while the feed still says nothing", () => {
+    // A started match reading 0 minutes is a real state for a minute or so.
+    const now = new Date("2026-08-21T19:20:00Z");
+    expect(matchMinute(fx({ minutes: 0 }), now)).toBe("20'");
+    expect(matchMinute(fx({ minutes: undefined }), now)).toBe("20'");
+  });
+
+  it("prefers a published clock even when the estimate would agree", () => {
+    // Guards the ORDER, not just the output: an implementation that computed
+    // the estimate first and only consulted `minutes` on failure would pass a
+    // test where the two happen to match.
+    const now = new Date("2026-08-21T19:20:00Z");
+    expect(matchMinute(fx({ minutes: 7 }), now)).toBe("7'");
+  });
+
+  it("does not trust the network's word that a number is a number", () => {
+    // A string "54" would render as "54'" by luck here and poison arithmetic in
+    // any later caller.
+    const now = new Date("2026-08-21T19:20:00Z");
+    expect(matchMinute(fx({ minutes: "54" as unknown as number }), now)).toBe("20'");
+    expect(matchMinute(fx({ minutes: NaN }), now)).toBe("20'");
+  });
+
+  it("still calls a finished match finished, published clock or not", () => {
+    expect(matchMinute(fx({ finished: true, minutes: 90 }), new Date())).toBe("FT");
+    expect(matchMinute(fx({ started: false, minutes: 0 }), new Date())).toBe("");
+  });
+
+  it("caps a runaway clock without cutting normal stoppage short", () => {
+    const now = new Date("2026-08-21T20:16:00Z");
+    expect(matchMinute(fx({ minutes: 97 }), now)).toBe("97'"); // extra time is real
+    expect(matchMinute(fx({ minutes: 400 }), now)).toBe("120'");
   });
 });

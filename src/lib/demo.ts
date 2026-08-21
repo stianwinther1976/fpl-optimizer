@@ -41,6 +41,19 @@ const TEAM_CODES = [
 ];
 
 const CURRENT_GW = 20;
+
+/**
+ * How far into the two in-play matches the demo is pinned.
+ *
+ * Named because three things have to agree on it and used to hold it as a
+ * literal each: the minutes credited to the men on those pitches, the fixture's
+ * published `minutes`, and — before `matchMinute` read the published clock — a
+ * kickoff time reverse-engineered to render this number. `demo.test.ts` asserts
+ * the clock equals the highest minutes any player in the fixture is credited
+ * with, so a change to one literal and not the others fails there rather than
+ * shipping a scoreboard that disagrees with the team sheet beneath it.
+ */
+const IN_PLAY_MINUTE = 58;
 const DAY = 86_400_000;
 // Roughly the size of the real FPL playerbase — the ceiling any rank must obey.
 const PLAYER_COUNT = 11_000_000;
@@ -720,7 +733,7 @@ export function makeDemoUniverse(now: number) {
         if (inPlay) {
           // 58 minutes gone, nobody withdrawn yet: 11 × 58, and the bench is
           // still the bench.
-          for (const e of [gk, ...xi]) minutesOf.set(e.id, 58);
+          for (const e of [gk, ...xi]) minutesOf.set(e.id, IN_PLAY_MINUTE);
           continue;
         }
         if (!finished) continue;
@@ -1513,6 +1526,11 @@ export function makeDemoUniverse(now: number) {
     for (const { f } of ranked.slice(0, Math.min(2, ranked.length - 1))) {
       f.finished = false;
       f.kickoff_time = new Date(now - 73 * 60_000).toISOString();
+      // The published match clock, which is what `matchMinute` now reads. Set
+      // it to the same 58 the kickoff above was chosen to produce, so the demo
+      // exercises the path production takes instead of the fallback — and so
+      // the clock keeps agreeing with the minutes the player cards credit.
+      f.minutes = IN_PLAY_MINUTE;
     }
   }
 
