@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type TeamData } from "@/lib/fpl";
 import type { EventLive, Fixture, Pick } from "@/lib/types";
-import { matchMinute, projectAutoSubs, provisionalBonus } from "@/lib/live";
+import { matchMinute, projectAutoSubs, provisionalBonus, LIVE_REFRESH_MS } from "@/lib/live";
 import { autoSubView, benchPoints } from "@/lib/display";
 import { ErrorBox, Skeleton, Badge } from "./ui";
 import MatchModal from "./MatchModal";
 
-const REFRESH_MS = 30_000;
+// Interval lives in `lib/live.ts` so this and the squad view stay in step.
 
 export default function LiveTab({
   data,
@@ -73,7 +73,7 @@ export default function LiveTab({
     // Skip ticks while the browser tab is hidden; catch up when it returns.
     const t = setInterval(() => {
       if (!document.hidden) refresh();
-    }, REFRESH_MS);
+    }, LIVE_REFRESH_MS);
     const onVisible = () => {
       if (document.visibilityState === "visible") refresh();
     };
