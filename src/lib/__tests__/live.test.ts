@@ -387,9 +387,37 @@ describe("matchMinute", () => {
     expect(matchMinute(fx({ started: false, minutes: 0 }), new Date())).toBe("");
   });
 
-  it("caps a runaway clock without cutting normal stoppage short", () => {
+  it("says 90+ rather than claiming the match is exactly on 90", () => {
+    /*
+     * FPL stops counting at 90. Measured on ARS v COV: the feed read 89 in the
+     * 89th minute and then 90 for the rest of a match that ran to 94, so the
+     * app showed "90'" through four more minutes of football. That was queried,
+     * and rightly — it is a claim the data cannot support.
+     */
     const now = new Date("2026-08-21T20:16:00Z");
-    expect(matchMinute(fx({ minutes: 97 }), now)).toBe("97'"); // extra time is real
-    expect(matchMinute(fx({ minutes: 400 }), now)).toBe("120'");
+    expect(matchMinute(fx({ minutes: 90 }), now)).toBe("90+'");
+    expect(matchMinute(fx({ minutes: 94 }), now)).toBe("90+'");
+    // And below the cap the exact minute is still exact.
+    expect(matchMinute(fx({ minutes: 89 }), now)).toBe("89'");
+  });
+
+  it("does not lie about a runaway value either", () => {
+    const now = new Date("2026-08-21T20:16:00Z");
+    expect(matchMinute(fx({ minutes: 400 }), now)).toBe("120+'");
+  });
+
+  it("calls full time at the whistle, not when the bonus is settled", () => {
+    /*
+     * `finished` means BONUS CONFIRMED. `finished_provisional` is the final
+     * whistle, and after a Saturday afternoon the two are hours apart — for
+     * that whole window the clock had nothing to tell it the match was over.
+     * Measured four minutes after full time on ARS v COV: minutes 90, finished
+     * false, finished_provisional false — FPL had not caught up yet, but when
+     * it does it sets the provisional flag first.
+     */
+    const now = new Date("2026-08-21T21:30:00Z");
+    expect(matchMinute(fx({ finished: false, finished_provisional: true, minutes: 90 }), now)).toBe("FT");
+    // Still ticking while neither flag is set.
+    expect(matchMinute(fx({ finished: false, finished_provisional: false, minutes: 62 }), now)).toBe("62'");
   });
 });
