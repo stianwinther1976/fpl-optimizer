@@ -15,10 +15,14 @@
 // This is a transport workaround, not a data source change: everything below
 // comes from the official public API and nothing else.
 //
-// The three files written are exactly the three inputs `XpContext` needs:
+// Three of the files written are exactly the three inputs `XpContext` needs:
 // `bootstrap-static`, `fixtures`, and one `element-summary` per player (reduced
 // to the rows `fetchPastSeason` and `fetchRecentForm` actually read, because the
 // full summaries are ~40x larger and the rest is never looked at).
+//
+// The fourth, `event-live.json`, is not a model input at all — it is there so
+// the live payload can be READ. Three defects shipped for a season because it
+// could not be; see the note beside the fetch below.
 
 import { writeFile, mkdir } from "node:fs/promises";
 
@@ -96,8 +100,38 @@ async function main() {
   // The count is written into the file rather than only logged. A snapshot that
   // silently dropped 200 players would produce a projection that looks fine and
   // is quietly running on price priors for a third of the league.
+  /*
+   * THE LIVE FEED, WHICH THIS SNAPSHOT DID NOT CARRY AND SHOULD HAVE.
+   *
+   * Three defects shipped for a season because nobody could look at
+   * `event/{gw}/live/`: the match clock was estimated while `minutes` sat
+   * unread in the fixtures payload, full time was read off the wrong flag while
+   * `finished_provisional` sat beside it, and provisional bonus was computed
+   * from gameweek-total BPS as if it described one match. All three were
+   * answerable from the payload. None was answerable from this snapshot.
+   *
+   * Best-effort and non-fatal: off-season there is no current event, and a
+   * failure here must not lose the bootstrap and summaries that took minutes to
+   * fetch. `explain` makes this the biggest file of the four during a live
+   * gameweek, and it is worth it.
+   */
+  const liveEvent =
+    bootstrap.events.find((e) => e.is_current)?.id ??
+    [...bootstrap.events].reverse().find((e) => e.finished)?.id ??
+    null;
+  let live = null;
+  if (liveEvent != null) {
+    try {
+      live = await getJson(`event/${liveEvent}/live/`);
+      console.log(`live: GW${liveEvent}, ${live.elements?.length ?? 0} elements`);
+    } catch (err) {
+      console.log(`live: GW${liveEvent} unavailable (${String(err)})`);
+    }
+  }
+
   const meta = {
     fetchedAt: new Date().toISOString(),
+    liveEvent: live ? liveEvent : null,
     elements: ids.length,
     summariesOk: Object.keys(summaries).length,
     summariesFailed: failed.length,
@@ -110,6 +144,7 @@ async function main() {
   await writeFile(`${OUT}/bootstrap-static.json`, JSON.stringify(bootstrap));
   await writeFile(`${OUT}/fixtures.json`, JSON.stringify(fixtures));
   await writeFile(`${OUT}/element-summaries.json`, JSON.stringify(summaries));
+  if (live) await writeFile(`${OUT}/event-live.json`, JSON.stringify(live));
   await writeFile(`${OUT}/meta.json`, JSON.stringify(meta, null, 2));
 
   console.log(JSON.stringify(meta, null, 2));
