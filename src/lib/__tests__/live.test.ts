@@ -421,3 +421,144 @@ describe("matchMinute", () => {
     expect(matchMinute(fx({ finished: false, finished_provisional: false, minutes: 62 }), now)).toBe("62'");
   });
 });
+
+/*
+ * DOUBLE GAMEWEEKS, WHERE EVERY FIGURE IN THE LIVE FEED CHANGES MEANING.
+ *
+ * `stats.bps` and `stats.minutes` are gameweek TOTALS across all of a player's
+ * fixtures. Read as if they described one match they produced three separate
+ * wrong answers, each confirmed by probe before the fix.
+ */
+describe("provisionalBonus across a double gameweek", () => {
+  const bootstrap = {
+    elements: [1, 2, 3].map((id) => makeElement({ id, team: id === 3 ? 2 : 1 })),
+  } as Bootstrap;
+
+  const fx = (id: number, finished: boolean): Fixture =>
+    ({
+      id,
+      event: 10,
+      team_h: 1,
+      team_a: 2,
+      team_h_difficulty: 3,
+      team_a_difficulty: 3,
+      kickoff_time: "2026-01-01T15:00:00Z",
+      finished,
+      started: true,
+      team_h_score: 1,
+      team_a_score: 0,
+    }) as Fixture;
+
+  /** Per-fixture legs: id -> [{fixture, minutes, bonus}], plus a GW bps total. */
+  const feed = (
+    spec: Record<number, { bps: number; legs: { fixture: number; minutes: number; bonus?: number }[] }>
+  ): EventLive => ({
+    elements: Object.entries(spec).map(([id, s]) => ({
+      id: Number(id),
+      stats: {
+        minutes: s.legs.reduce((a, l) => a + l.minutes, 0),
+        total_points: 0,
+        bonus: 0,
+        bps: s.bps,
+        goals_scored: 0,
+        assists: 0,
+      },
+      explain: s.legs.map((l) => ({
+        fixture: l.fixture,
+        stats: [
+          { identifier: "minutes", points: l.minutes >= 60 ? 2 : 1, value: l.minutes },
+          ...(l.bonus ? [{ identifier: "bonus", points: l.bonus, value: l.bonus }] : []),
+        ],
+      })),
+    })),
+  });
+
+  it("does not award a live leg to someone who is not playing in it", () => {
+    /*
+     * Element 1 banked 45 BPS in a finished leg 1 and has not come on in leg 2.
+     * Ranked on his gameweek total he topped leg 2 and took 3 provisional
+     * bonus for a match he was not in, pushing the man actually leading it
+     * down to 2.
+     *
+     * Note this fixture also trips the abstention below, so the assertion is
+     * that he gets nothing — which is the point either way: the wrong three
+     * players must not be shown carrying bonus.
+     */
+    const res = provisionalBonus(
+      bootstrap,
+      [fx(1, true), fx(2, false)],
+      feed({
+        1: { bps: 45, legs: [{ fixture: 1, minutes: 90 }] },
+        2: { bps: 20, legs: [{ fixture: 1, minutes: 90 }, { fixture: 2, minutes: 60 }] },
+        3: { bps: 18, legs: [{ fixture: 2, minutes: 60 }] },
+      }),
+      10
+    );
+    expect(res.byElement.has(1)).toBe(false);
+  });
+
+  it("abstains when a gameweek-total BPS cannot rank the match", () => {
+    // Element 2 played both legs, so his BPS includes points banked elsewhere
+    // and the 3/2/1 order in leg 2 is not a reading of leg 2. Projecting a
+    // confident wrong ladder is worse than projecting nothing.
+    const res = provisionalBonus(
+      bootstrap,
+      [fx(1, true), fx(2, false)],
+      feed({
+        1: { bps: 45, legs: [{ fixture: 1, minutes: 90 }] },
+        2: { bps: 20, legs: [{ fixture: 1, minutes: 90 }, { fixture: 2, minutes: 60 }] },
+        3: { bps: 18, legs: [{ fixture: 2, minutes: 60 }] },
+      }),
+      10
+    );
+    expect(res.byElement.size).toBe(0);
+  });
+
+  it("credits nobody from two legs, because both of his fixtures abstain", () => {
+    /*
+     * `Math.max` used to credit a player top of both legs with 3 where FPL
+     * pays 3 + 3. That branch is now UNREACHABLE and this test says so rather
+     * than pretending to cover it: being in two legs is exactly what makes
+     * both fixtures abstain, so no player can be credited twice. The `+` in
+     * the source is kept for the day per-fixture BPS makes the abstention
+     * unnecessary — see the comment there.
+     */
+    const res = provisionalBonus(
+      bootstrap,
+      [fx(1, false), fx(2, false)],
+      feed({
+        1: { bps: 40, legs: [{ fixture: 1, minutes: 90 }] },
+        2: { bps: 40, legs: [{ fixture: 2, minutes: 90 }] },
+        3: { bps: 10, legs: [{ fixture: 1, minutes: 90 }, { fixture: 2, minutes: 90 }] },
+      }),
+      10
+    );
+    // Element 3 is in both legs, so both fixtures abstain — including for
+    // elements 1 and 2, who each played only one.
+    expect(res.byElement.size).toBe(0);
+  });
+
+  it("nets off bonus per leg, so a settled leg does not cancel a live one", () => {
+    /*
+     * The already-awarded scan summed `explain` over the whole gameweek, so a
+     * finished leg's CONFIRMED 3 was subtracted from the live leg's projection
+     * and the points the reader is on course for vanished from the total.
+     * Element 1 plays only leg 2 here, but carries confirmed bonus from... no:
+     * he plays one leg. Element 2's confirmed leg-1 bonus must not touch him.
+     */
+    const res = provisionalBonus(
+      bootstrap,
+      [fx(1, true), fx(2, false)],
+      feed({
+        1: { bps: 40, legs: [{ fixture: 2, minutes: 90 }] },
+        2: { bps: 50, legs: [{ fixture: 1, minutes: 90, bonus: 3 }] },
+        3: { bps: 10, legs: [{ fixture: 2, minutes: 90 }] },
+      }),
+      10
+    );
+    // Leg 2 is the only projectable one; element 1 leads it and is unaffected
+    // by element 2's settled bonus in a different match.
+    expect(res.byElement.get(1)).toBe(3);
+    expect(res.byElement.get(3)).toBe(2);
+  });
+});

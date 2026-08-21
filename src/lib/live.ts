@@ -36,32 +36,76 @@ export function provisionalBonus(
 ): ProvisionalBonus {
   const byElement = new Map<number, number>();
   const teamOf = new Map(bootstrap.elements.map((e) => [e.id, e.team]));
-  const statOf = new Map(live.elements.map((e) => [e.id, e.stats]));
 
-  // From 2026/27 FPL publishes projected bonus itself once a fixture passes 20
-  // minutes. Anything already itemised in `explain` is therefore inside
-  // total_points already, and adding our own projection on top would inflate
-  // the live score. `explain` is the authority: total_points is its sum.
-  const alreadyAwarded = new Map<number, number>();
+  /*
+   * EVERYTHING HERE IS PER FIXTURE. `stats` IS PER GAMEWEEK.
+   *
+   * `live.elements[].stats.bps` and `.minutes` are totals across ALL of a
+   * player's fixtures in the gameweek, and they used to be read as if they
+   * described the match being projected. In a double gameweek that produced
+   * three separate wrong answers, each confirmed by probe:
+   *
+   *  - a player who banked 45 BPS in leg 1 and has not come on in leg 2 was
+   *    ranked top of leg 2 and awarded 3 provisional bonus for a match he was
+   *    not playing in, demoting the man actually leading it;
+   *  - bonus across two projectable legs was `Math.max`, so a player top of
+   *    both was credited 3 where FPL pays 3 + 3;
+   *  - the already-awarded subtraction summed `explain` over the whole
+   *    gameweek, so a finished leg's CONFIRMED 3 cancelled the live leg's
+   *    projection entirely and the points vanished from the live total.
+   *
+   * `explain` carries a `fixture` id, so participation and awarded bonus are
+   * both answerable per leg. BPS is not in `explain` and FPL publishes it only
+   * as a gameweek total — see the abstention below.
+   */
+  const perFixture = new Map<number, Map<number, { minutes: number; bonus: number }>>();
+  const legsPlayed = new Map<number, number>();
   for (const e of live.elements) {
-    let b = 0;
     for (const ex of e.explain ?? []) {
-      for (const s of ex.stats) if (s.identifier === "bonus") b += s.points;
+      let mins = 0;
+      let bonus = 0;
+      for (const st of ex.stats) {
+        if (st.identifier === "minutes") mins = st.value;
+        else if (st.identifier === "bonus") bonus += st.points;
+      }
+      let f = perFixture.get(ex.fixture);
+      if (!f) perFixture.set(ex.fixture, (f = new Map()));
+      f.set(e.id, { minutes: mins, bonus });
+      if (mins > 0) legsPlayed.set(e.id, (legsPlayed.get(e.id) ?? 0) + 1);
     }
-    if (b > 0) alreadyAwarded.set(e.id, b);
   }
 
   for (const f of fixtures) {
     if (f.event !== event) continue;
     if (!f.started || f.finished) continue; // only project while in play / awaiting confirmation
+    const inThis = perFixture.get(f.id);
     const players = live.elements
       .filter((e) => {
         const t = teamOf.get(e.id);
-        return (t === f.team_h || t === f.team_a) && (statOf.get(e.id)?.minutes ?? 0) > 0;
+        if (t !== f.team_h && t !== f.team_a) return false;
+        // Per-fixture minutes when the feed itemises them; the gameweek total
+        // is the fallback for a single-fixture week, where the two agree.
+        const mins = inThis?.get(e.id)?.minutes ?? (inThis ? 0 : e.stats.minutes);
+        return (mins ?? 0) > 0;
       })
       .map((e) => ({ id: e.id, bps: e.stats.bps }))
       .sort((a, b) => b.bps - a.bps);
     if (players.length === 0) continue;
+
+    /*
+     * ABSTAIN WHEN THE RANKING CANNOT BE TRUSTED.
+     *
+     * FPL publishes BPS only as a gameweek total. If anyone on this pitch has
+     * also played another fixture this gameweek, his figure includes points
+     * banked elsewhere and the 3/2/1 order here is not a reading of this match.
+     * Projecting a confident wrong ladder is worse than projecting nothing: the
+     * reader sees provisional bonus on the wrong three players and the numbers
+     * do not settle until FPL confirms.
+     *
+     * Single gameweeks — every gameweek most seasons — are unaffected, because
+     * there the gameweek total IS this fixture's total.
+     */
+    if (players.some((p) => (legsPlayed.get(p.id) ?? 0) > 1)) continue;
 
     // Group by bps value, award 3/2/1 with tie-sharing.
     let bonus = 3;
@@ -69,21 +113,23 @@ export function provisionalBonus(
     while (i < players.length && bonus > 0) {
       const tied = players.filter((p) => p.bps === players[i].bps);
       for (const p of tied) {
-        byElement.set(p.id, Math.max(byElement.get(p.id) ?? 0, bonus));
+        /*
+         * Accumulate rather than `Math.max`, because FPL pays each leg — and
+         * note this cannot currently fire. Being credited from two legs means
+         * playing two, which makes BOTH of those fixtures abstain above. The
+         * `+` is here so that relaxing the abstention (if FPL ever publishes
+         * per-fixture BPS) does not silently reintroduce the old bug, and this
+         * comment is here so nobody writes a test for a branch that has no
+         * reachable input.
+         */
+        const net = bonus - (inThis?.get(p.id)?.bonus ?? 0);
+        if (net > 0) byElement.set(p.id, (byElement.get(p.id) ?? 0) + net);
       }
       i += tied.length;
       bonus -= tied.length;
     }
   }
 
-  // Keep only what FPL hasn't already counted, so the UI can add this on top of
-  // total_points in both worlds: before the 20-minute mark (nothing awarded yet)
-  // and after it (FPL's own projection already inside total_points).
-  for (const [id, projected] of byElement) {
-    const net = projected - (alreadyAwarded.get(id) ?? 0);
-    if (net > 0) byElement.set(id, net);
-    else byElement.delete(id);
-  }
   return { byElement };
 }
 
