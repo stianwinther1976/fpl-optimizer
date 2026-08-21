@@ -3972,7 +3972,22 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
     for (let gw = ctx.nextEvent; gw < ctx.nextEvent + horizon && gw <= lastEvent; gw++) {
       const fx = fxIndex.get(gw)?.get(el.team) ?? [];
       const off = gw - ctx.nextEvent;
-      const mmGw = gkMm(off) ?? mm;
+      /*
+       * THE CALL HAS TO SURVIVE THE PER-GAMEWEEK KEEPER MODEL.
+       *
+       * `gkMm(off)` returns non-null for EVERY pre-season keeper, so taking it
+       * neat here threw away the override applied above — and threw it away at
+       * offset 0 too, so the reader's team news moved a keeper's projection by
+       * exactly nothing while `PlayerXp.startCall` still labelled the number as
+       * reader-decided. Measured on a two-keeper club: a deputy's `next` came
+       * out bit-identical with no call, with "starts" and with "benched", while
+       * the same call on a midfielder moved him 1.06 to 2.54.
+       *
+       * The outfield path has never had this problem because its equivalent
+       * (`liftedPStart`) is folded in BEFORE the call rather than after.
+       */
+      const mmGwBase = gkMm(off) ?? mm;
+      const mmGw = call ? applyStartCall(mmGwBase, call) : mmGwBase;
       // Kept per leg, not just summed, because the suspension term below has to
       // charge a ban against the specific match it is served in. `fx` is in
       // kickoff order (see `makeFixtureIndex`), so `legXp[0]` really is first.

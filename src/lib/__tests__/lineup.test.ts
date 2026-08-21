@@ -116,6 +116,60 @@ describe("an override moves the projection and is labelled", () => {
     expect(started).toBeGreaterThan(benched);
   });
 
+  it("moves a PRE-SEASON GOALKEEPER, who used to be silently exempt", () => {
+    /*
+     * THE FEATURE DID NOTHING FOR KEEPERS, AND SAID IT HAD.
+     *
+     * The call is folded into `mm` above the projection loop, but the loop then
+     * took `gkMm(off) ?? mm` — and `gkMm` returns non-null for EVERY pre-season
+     * keeper, so the override was overwritten at every offset including 0. The
+     * post-call `mm` reached nothing but `XP_DEBUG`. Measured before the fix: a
+     * deputy keeper's `next` was bit-identical with no call, with "starts" and
+     * with "benched", while `PlayerXp.startCall` still reported "starts" — so
+     * the app labelled a purely model-derived number as the reader's decision.
+     *
+     * Pre-season is exactly the window `lineup.ts` exists for, and the keeper
+     * is exactly the position a reader most often has real news about.
+     */
+    const pre = makeMockBootstrap();
+    for (const e of pre.elements) {
+      e.minutes = 0;
+      e.starts = 0;
+      e.total_points = 0;
+      e.form = "0.0";
+      e.points_per_game = "0.0";
+    }
+    pre.events.forEach((ev) => {
+      ev.finished = false;
+      ev.is_current = false;
+      ev.is_next = ev.id === 1;
+    });
+    const preFx = makeMockFixtures().map((f) => ({ ...f, event: (f.event ?? 11) - 10, finished: false }));
+    const runPre = (calls: Map<number, "starts" | "benched">) =>
+      projectAll({ bootstrap: pre, fixtures: preFx, nextEvent: 1, horizon: 3, pastSeason: undefined, startCalls: calls });
+
+    // A club with more than one keeper, so the depth chart actually engages.
+    const byClub = new Map<number, number[]>();
+    for (const e of pre.elements) {
+      if (e.element_type !== 1) continue;
+      byClub.set(e.team, [...(byClub.get(e.team) ?? []), e.id]);
+    }
+    const club = [...byClub.values()].find((ks) => ks.length >= 2);
+    expect(club).toBeDefined();
+    // The deputy: the cheaper of the two, i.e. the one the chart demotes.
+    const keepers = club!.map((id) => pre.elements.find((e) => e.id === id)!);
+    keepers.sort((a, b) => a.now_cost - b.now_cost);
+    const deputy = keepers[0];
+
+    const base = runPre(new Map()).get(deputy.id)!.next;
+    const started = runPre(new Map([[deputy.id, "starts"]])).get(deputy.id)!.next;
+    const benched = runPre(new Map([[deputy.id, "benched"]])).get(deputy.id)!.next;
+
+    // The bug made all three identical to the last bit.
+    expect(started).toBeGreaterThan(base);
+    expect(started).toBeGreaterThan(benched);
+  });
+
   it("carries the call out to the caller so the UI can say who decided", () => {
     // Every other number in PlayerXp is the model's opinion. This one is the
     // reader's, and an unlabelled projection would be the app taking credit

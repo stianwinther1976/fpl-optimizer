@@ -105,14 +105,32 @@ function effectiveMultipliers(
     chip === "bboost"
       ? picks.picks.map((p) => p.element)
       : projectAutoSubs(picks.picks, elements, live, fixtures, gw).effectiveXi;
-  const effSet = new Set(effIds);
+
+  /*
+   * THE ARMBAND MOVES WHEN THE CAPTAIN DOES NOT PLAY, NOT WHEN HE IS SUBBED.
+   *
+   * This used to ask whether the captain was in the effective XI, which is a
+   * different question and gives the wrong answer twice:
+   *
+   *  - Under Bench Boost `effIds` is all fifteen picks, so a captain on 0
+   *    minutes was always "in" and kept a worthless armband. FPL's rule does
+   *    not care which chip is active. Measured on a BB week with the captain
+   *    blank and the vice scoring a goal: this reported 7 where FPL awards 14.
+   *  - With no chip, a blanking captain for whom NO legal auto-sub exists —
+   *    every bench player also on 0 — likewise stays in `effectiveXi`, and the
+   *    vice was again given 1x. Same 7-against-14.
+   *
+   * Minutes are the test, so ask the live feed.
+   */
+  const liveById = new Map(live.elements.map((e) => [e.id, e]));
+  const played = (id: number) => (liveById.get(id)?.stats.minutes ?? 0) > 0;
 
   const cap = picks.picks.find((p) => p.is_captain);
   const vice = picks.picks.find((p) => p.is_vice_captain);
   const capId =
-    cap && effSet.has(cap.element)
+    cap && played(cap.element)
       ? cap.element
-      : vice && effSet.has(vice.element)
+      : vice && played(vice.element)
         ? vice.element
         : null;
 
