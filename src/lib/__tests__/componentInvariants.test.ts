@@ -821,6 +821,23 @@ describe("the squad view's live poll can actually stop", () => {
     expect(region).toContain('removeEventListener("visibilitychange"');
   });
 
+  it("orders its own polls, so an older response cannot overwrite a newer", () => {
+    /*
+     * `cancelled` is per-EFFECT, not per-request. Two polls are on the wire
+     * together whenever the client memo has expired, and if the earlier is the
+     * slower it lands last and overwrites the newer scores — points going
+     * backwards. `LiveTab` has always had a `seq` guard and names that symptom;
+     * this poll was added later, copied the shape and not the reason.
+     */
+    const at = src.indexOf("const pull = () => {");
+    expect(at).toBeGreaterThan(0);
+    const body = src.slice(at, src.indexOf("};", at));
+    expect(body).toContain("++livePollSeq.current");
+    // Both setters are gated on it, not just one.
+    expect(body).toMatch(/mine === livePollSeq\.current && setLiveData/);
+    expect(body).toMatch(/mine === livePollSeq\.current && setLiveFixtures/);
+  });
+
   it("shares one interval with the Live tab rather than redeclaring it", () => {
     // Two screens polling the same endpoints at different rates would make one
     // of them staler than the other for no reason a reader could see.

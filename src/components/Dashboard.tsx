@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { api, entryNotFoundMessage, FplApiError, loadTeamData, fmtNum, fmtRank, rankPercentile, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
@@ -120,6 +120,8 @@ export default function Dashboard({
   const [liveData, setLiveData] = useState<EventLive | null>(null);
   /** Fixtures as of the last live poll — used only to decide when to stop. */
   const [liveFixtures, setLiveFixtures] = useState<Fixture[] | null>(null);
+  /** Orders live polls against each other; see the effect that uses it. */
+  const livePollSeq = useRef(0);
   const [selected, setSelected] = useState<Element | null>(null);
   const [kpiModal, setKpiModal] = useState<KpiMetric | null>(null);
   // Time machine: view the squad exactly as it was in an earlier gameweek.
@@ -345,14 +347,24 @@ export default function Dashboard({
   useEffect(() => {
     if (currentEvent == null) return;
     let cancelled = false;
+    /*
+     * LATEST WINS. `cancelled` is per-EFFECT, not per-request, so it does not
+     * order two polls against each other: at 30-second ticks both are on the
+     * wire whenever the client memo has expired, and if the earlier one is the
+     * slower it lands last and overwrites the newer scores. Visible as points
+     * going backwards. `LiveTab` has always had this guard and says so; the
+     * squad view's poll was added later and did not, which is the kind of gap
+     * that only appears when a fix is copied without its reasons.
+     */
     const pull = () => {
+      const mine = ++livePollSeq.current;
       api
         .live(currentEvent)
-        .then((l) => !cancelled && setLiveData(l))
+        .then((l) => !cancelled && mine === livePollSeq.current && setLiveData(l))
         .catch(() => {});
       api
         .fixtures()
-        .then((f) => !cancelled && setLiveFixtures(f))
+        .then((f) => !cancelled && mine === livePollSeq.current && setLiveFixtures(f))
         .catch(() => {});
     };
     pull();
