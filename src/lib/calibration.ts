@@ -133,6 +133,29 @@ export function applyGwOutcome(
    */
   const globalRatio = sumPred > 0 ? sumAct / sumPred : 1;
   const globalTarget = state.factors.global * globalRatio;
+  const global = clamp(
+    (1 - cfg.alpha) * state.factors.global + cfg.alpha * globalTarget,
+    cfg.factorMin,
+    cfg.factorMax
+  );
+  /*
+   * HOW MUCH OF THE RESIDUAL `global` ACTUALLY TOOK — which is not the same as
+   * how much it was asked to take.
+   *
+   * `byPos` divides the aggregate out on the assumption `global` absorbs it.
+   * When the clamp binds, nobody absorbs it, and dividing anyway turns `byPos`
+   * into an integrator pointing the WRONG WAY. Probed at 200 gameweeks with
+   * r = 0.5 for GK/DEF/MID and 0.2 for FWD: `global` pinned at 0.75 and
+   * `byPos` ran to 1.3/1.3/1.3/0.75 — a 30% UPWARD correction on three
+   * positions the model over-rates twofold — for a combined multiplier of
+   * 0.975 where 0.5 was needed. The rule this replaced gave 0.845 there.
+   *
+   * Measuring what `global` moved by, rather than what it was aimed at, makes
+   * `byPos` pick up exactly the remainder: in the ordinary regime the two are
+   * the same number, and against a bound clamp `byPos` carries the whole
+   * correction because it is the only thing that can.
+   */
+  const absorbed = state.factors.global > 0 ? global / state.factors.global : 1;
   const byPos = { ...state.factors.byPos };
   for (const pos of [1, 2, 3, 4]) {
     const posEntries = graded.filter((e) => e.pos === pos);
@@ -140,21 +163,12 @@ export function applyGwOutcome(
     const p = posEntries.reduce((s, e) => s + e.pred, 0);
     const a = posEntries.reduce((s, e) => s + e.actual, 0);
     if (p <= 0 || a <= 0) continue;
-    // How much this position deviates *beyond* the global correction. 1.0 means
-    // the position tracks the overall bias exactly (no position-specific tweak).
-    const ratio = globalRatio > 0 ? a / p / globalRatio : 1;
     const prev = byPos[pos] ?? 1;
-    byPos[pos] = clamp(
-      (1 - cfg.alpha) * prev + cfg.alpha * (prev * ratio),
-      cfg.factorMin,
-      cfg.factorMax
-    );
+    // The factor that would have made THIS position right, given what the
+    // global correction is actually about to do.
+    const target = absorbed > 0 ? (prev * (a / p)) / absorbed : prev;
+    byPos[pos] = clamp((1 - cfg.alpha) * prev + cfg.alpha * target, cfg.factorMin, cfg.factorMax);
   }
-  const global = clamp(
-    (1 - cfg.alpha) * state.factors.global + cfg.alpha * globalTarget,
-    cfg.factorMin,
-    cfg.factorMax
-  );
 
   const log = [...state.log, { gw, n: graded.length, mae, bias, at: now }]
     .sort((a, b) => a.gw - b.gw)
@@ -191,7 +205,17 @@ export function loadCalibration(demo: boolean, season?: string | null): Calibrat
          * season's gameweeks, so they carry over: what the model has learned
          * about its own bias does not stop being true in August.
          */
-        if (season != null && s.season != null && s.season !== season) {
+        /*
+         * ABSENT IS NOT "THIS SEASON". State written before this field existed
+         * carries no `season`, which is exactly the state every install has —
+         * so requiring `s.season != null` meant the rollover never fired for
+         * anyone, and the doc on `CalibrationState.season` promised the
+         * opposite. Worse, `reconcileFinishedGws` then stamps the current
+         * season onto that state and saves it, so the stale gameweek list is
+         * marked as belonging to this season permanently and the reset can
+         * never fire again.
+         */
+        if (season != null && s.season !== season) {
           return { ...s, reconciled: [], season };
         }
         return s;
@@ -308,7 +332,13 @@ export async function reconcileFinishedGws(
       drop(ev.id);
     }
   }
-  if (changed) saveCalibration(demo, { ...state, season });
+  /*
+   * Never write `season: null` over a real stamp. `currentSeasonName` returns
+   * null on a missing or odd GW1 `deadline_time`, and a null stamp makes the
+   * next load see a season mismatch — which would clear `reconciled` and
+   * re-grade the whole season, permanently, from one bad bootstrap.
+   */
+  if (changed) saveCalibration(demo, { ...state, season: season ?? state.season ?? null });
   setActiveCalibration(state.factors);
   return changed;
 }

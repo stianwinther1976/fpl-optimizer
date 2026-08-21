@@ -1,7 +1,7 @@
 // Live-gameweek helpers: provisional bonus from BPS, auto-substitution
 // projection and live match state.
 
-import type { Bootstrap, Element, EventLive, Fixture, Pick } from "./types";
+import type { Bootstrap, Element, EventLive, Fixture, Pick as FplPick } from "./types";
 import { isValidFormation } from "./rules";
 
 /**
@@ -16,6 +16,19 @@ import { isValidFormation } from "./rules";
  * and anything much slower wastes the freshness already paid for.
  */
 export const LIVE_REFRESH_MS = 30_000;
+
+/**
+ * Is the ball actually rolling?
+ *
+ * `started && !finished` is NOT this question — `finished` means bonus
+ * confirmed, so between the whistle and FPL settling the bonus (hours, after a
+ * Saturday) it stays true. `matchMinute` learned that and started rendering
+ * "FT"; the styling beside it did not, so a finished match sat there in the
+ * in-play accent with an in-play border. Both read this now.
+ */
+export function isInPlay(f: Pick<Fixture, "started" | "finished" | "finished_provisional">): boolean {
+  return !!f.started && !f.finished && !f.finished_provisional;
+}
 
 export interface ProvisionalBonus {
   /** elementId -> projected bonus (1..3) for fixtures where bonus isn't final yet */
@@ -60,6 +73,20 @@ export function provisionalBonus(
    */
   const perFixture = new Map<number, Map<number, { minutes: number; bonus: number }>>();
   const legsPlayed = new Map<number, number>();
+  /*
+   * Whether this feed itemises fixtures AT ALL, which is not the same question
+   * as whether it itemises THIS fixture — and conflating the two reintroduced
+   * the bug the rewrite exists to kill. `explain` for a second leg is absent in
+   * the window between kickoff and FPL's first stats update for it, so falling
+   * back on "no rows for this fixture" put the WHOLE gameweek's minutes back in
+   * play: probe-confirmed, two leg-1 players were handed 3 and 2 provisional
+   * bonus for a match they were not in, and the leg-1 bonus already confirmed
+   * for one of them was counted twice on top.
+   *
+   * A feed with no `explain` anywhere is a stub, and there the gameweek total
+   * is the fixture total because there is only one fixture to speak of.
+   */
+  const itemised = live.elements.some((e) => (e.explain ?? []).length > 0);
   for (const e of live.elements) {
     for (const ex of e.explain ?? []) {
       let mins = 0;
@@ -85,7 +112,7 @@ export function provisionalBonus(
         if (t !== f.team_h && t !== f.team_a) return false;
         // Per-fixture minutes when the feed itemises them; the gameweek total
         // is the fallback for a single-fixture week, where the two agree.
-        const mins = inThis?.get(e.id)?.minutes ?? (inThis ? 0 : e.stats.minutes);
+        const mins = itemised ? (inThis?.get(e.id)?.minutes ?? 0) : e.stats.minutes;
         return (mins ?? 0) > 0;
       })
       .map((e) => ({ id: e.id, bps: e.stats.bps }))
@@ -150,7 +177,7 @@ export interface AutoSubResult {
  * "final" score matches FPL before it is officially processed.
  */
 export function projectAutoSubs(
-  picks: Pick[],
+  picks: FplPick[],
   elements: Map<number, Element>,
   live: EventLive,
   fixtures: Fixture[],

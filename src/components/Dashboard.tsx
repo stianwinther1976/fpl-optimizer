@@ -841,12 +841,33 @@ export default function Dashboard({
                         },
                       };
                     };
+                    /*
+                       THE TIME MACHINE HAS THE SAME SPLIT, AND WORSE.
+                       A finished gameweek's auto-subs are settled fact, not a
+                       projection, so drawing the picked eleven here is simply
+                       showing the wrong team. Measured on the demo's GW5: the
+                       eleven cards summed to 30 against a caption reading 40.
+                       Under Bench Boost all fifteen count and no sub happens,
+                       so the picked split is the right one there.
+                    */
+                    const histXi =
+                      hist.picks.active_chip === "bboost"
+                        ? null
+                        : new Set(
+                            projectAutoSubs(
+                              hist.picks.picks,
+                              elementById,
+                              hist.live,
+                              data.fixtures,
+                              hist.gw
+                            ).effectiveXi
+                          );
                     const starters = hist.picks.picks
-                      .filter((p) => p.position <= 11)
+                      .filter((p) => (histXi ? histXi.has(p.element) : p.position <= 11))
                       .map(toPlayer)
                       .filter((x): x is NonNullable<typeof x> => x != null);
                     const bench = hist.picks.picks
-                      .filter((p) => p.position > 11)
+                      .filter((p) => (histXi ? !histXi.has(p.element) : p.position > 11))
                       .sort((a, b) => a.position - b.position)
                       .map(toPlayer)
                       .filter((x): x is NonNullable<typeof x> => x != null);
@@ -883,9 +904,24 @@ export default function Dashboard({
                 ) : null
               ) : (
                 <>
+              {/*
+                  DRAW THE ELEVEN THAT SCORED, NOT THE ELEVEN THAT WAS PICKED.
+                  The corner total is computed from `effectiveXiIds` — the XI
+                  after projected auto-subs — while the cards were filtered on
+                  `pickPosition <= 11`. So a starter who blanked was drawn on
+                  the pitch and the substitute who replaced him was drawn on
+                  the bench, and the eleven cards did not add up to the number
+                  printed on the same pitch. Measured in the demo: cards summed
+                  to 30 against a corner reading 40, with a "0 pts" keeper on
+                  the pitch and the bench keeper who actually played showing 10.
+                  Two tabs away `LiveTab` renders the same gameweek correctly.
+                  Falls back to the picked eleven before any live data exists.
+              */}
               <Pitch
                 starters={squad.players
-                  .filter((p) => p.pickPosition <= 11)
+                  .filter((p) =>
+                    effectiveXiIds ? effectiveXiIds.has(p.element.id) : p.pickPosition <= 11
+                  )
                   .map((p) => ({
                     element: p.element,
                     isCaptain: p.isCaptain,
@@ -901,7 +937,9 @@ export default function Dashboard({
                       : undefined,
                   }))}
                 bench={squad.players
-                  .filter((p) => p.pickPosition > 11)
+                  .filter((p) =>
+                    effectiveXiIds ? !effectiveXiIds.has(p.element.id) : p.pickPosition > 11
+                  )
                   .sort((a, b) => a.pickPosition - b.pickPosition)
                   .map((p) => ({
                     element: p.element,

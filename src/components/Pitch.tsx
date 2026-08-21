@@ -170,7 +170,7 @@ function PlayerCard({
                 {p.live.points} {p.live.points === 1 ? "pt" : "pts"}
               </span>
             ) : (
-              <>£{fmtPrice(el.now_cost)}</>
+              <>£{fmtPrice(el.now_cost)}m</>
             )}
             {p.xp != null && !p.live && (
               <span className="text-[#00ff87]">
@@ -205,7 +205,10 @@ function PlayerCard({
               <>BLANK</>
             ) : (
               <span className="inline-flex gap-0.5">
-                {fdrs.slice(0, 4).map((d, i) => (
+                {/* Three, matching the List view and the three-gameweek scan
+                    above it. Four badges from a three-gameweek scan made the
+                    two layouts disagree in a double gameweek. */}
+                {fdrs.slice(0, 3).map((d, i) => (
                   <span
                     key={i}
                     className={`rounded px-1 font-bold ${FDR_BADGE[d] ?? FDR_BADGE[3]}`}

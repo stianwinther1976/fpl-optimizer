@@ -1,7 +1,7 @@
 "use client";
 
 import type { Element, EventLive, Fixture, Team } from "@/lib/types";
-import { matchMinute } from "@/lib/live";
+import { matchMinute, isInPlay } from "@/lib/live";
 import { kickoffLabel } from "@/lib/display";
 import { PlayerAvatar } from "./Pitch";
 import Sheet, { SheetClose } from "./Sheet";
@@ -25,7 +25,7 @@ export default function MatchModal({
 }) {
   const home = teams.get(fixture.team_h);
   const away = teams.get(fixture.team_a);
-  const liveNow = fixture.started && !fixture.finished;
+  const liveNow = isInPlay(fixture);
   const statOf = new Map(live?.elements.map((e) => [e.id, e.stats]) ?? []);
 
   const inMatch = elements.filter(

@@ -76,6 +76,15 @@ export default function OptimizePanel({
   // Non-null when the last-season lookup came back incomplete: how many of
   // the drafted pool fell back to a price guess.
   const [gap, setGap] = useState<{ failed: number; requested: number } | null>(null);
+  /*
+   * `run`, `runPlan` and `showChip` were `try/finally` with no `catch`. A throw
+   * inside `optimize`, `planHorizon` or `chipScenario` cleared the spinner and
+   * produced NOTHING: no result, no message, no retry — and being un-awaited
+   * from an `onClick`, an unhandled rejection rather than the error boundary.
+   * The reader taps Optimize, watches "Crunching…" disappear, and is left with
+   * an empty panel and no idea whether it worked.
+   */
+  const [failure, setFailure] = useState<string | null>(null);
 
   const squad = data.squad;
   const teams = useMemo(
@@ -440,6 +449,7 @@ export default function OptimizePanel({
   }
 
   async function run() {
+    setFailure(null);
     setRunning(true);
     setPhase("Checking recent line-ups…");
     try {
@@ -460,6 +470,8 @@ export default function OptimizePanel({
         pastSeason: cachedPastSeason() ?? undefined,
       });
       setResult(res);
+    } catch {
+      setFailure("Couldn't work out your transfers — something in the projection failed. Try again.");
     } finally {
       setRunning(false);
       setPhase(null);
@@ -467,6 +479,7 @@ export default function OptimizePanel({
   }
 
   async function runPlan() {
+    setFailure(null);
     setPlanning(true);
     setPhase("Checking recent line-ups…");
     try {
@@ -486,6 +499,8 @@ export default function OptimizePanel({
           pastSeason: cachedPastSeason() ?? undefined,
         })
       );
+    } catch {
+      setFailure("Couldn't build a season plan — something in the projection failed. Try again.");
     } finally {
       setPlanning(false);
       setPhase(null);
@@ -494,6 +509,7 @@ export default function OptimizePanel({
 
   // "What if I play this chip?" — computed on demand when a chip badge is tapped.
   async function showChip(chip: string) {
+    setFailure(null);
     setChipLoading(chip);
     try {
       /*
@@ -526,6 +542,8 @@ export default function OptimizePanel({
         chip
       );
       setChipView(scen);
+    } catch {
+      setFailure("Couldn't score that chip — something in the projection failed. Try again.");
     } finally {
       setChipLoading(null);
       // Whoever sets `phase` clears it. This did not, so a chip preview left
@@ -580,7 +598,21 @@ export default function OptimizePanel({
             id="opt-horizon"
             aria-label="How many gameweeks to plan over"
             value={horizon}
-            onChange={(e) => setHorizon(parseInt(e.target.value))}
+            onChange={(e) => {
+              /*
+               * A NEW HORIZON MEANS THE OLD RESULT IS NOT AN ANSWER TO IT.
+               * Changing this only relabelled the panel: the heading read
+               * "Transfer plans (next 1 GWs)" over unchanged five-gameweek
+               * numbers, and the chip advisor still named a gameweek outside
+               * the window it now claimed. Clearing is the honest state — the
+               * reader presses Optimize again, which is one tap and cannot
+               * mislead.
+               */
+              setHorizon(parseInt(e.target.value));
+              setResult(null);
+              setPlan(null);
+              setChipView(null);
+            }}
             className="rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
           >
             {[1, 2, 3, 5, 8].map((h) => (
@@ -648,7 +680,16 @@ export default function OptimizePanel({
         </button>
       </div>
 
-      {!result && !running && (
+      {failure && (
+        <div
+          role="status"
+          className="card border-danger/50 bg-danger/10 p-4 text-sm text-danger"
+        >
+          {failure}
+        </div>
+      )}
+
+      {!result && !running && !failure && (
         <div className="card p-6 text-sm text-muted">
           Hit “Optimize team” to compute the highest-projected XI, transfer plans, captaincy and chip
           advice for GW{squad.nextEvent}, based on your squad from GW{squad.currentEvent}.

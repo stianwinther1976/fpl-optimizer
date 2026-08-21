@@ -247,6 +247,7 @@ export default function PointsBreakdown({
                   className="cursor-pointer hover:bg-panel-2/60"
                   onClick={() => onSelect?.(el)}
                   tabIndex={onSelect ? 0 : undefined}
+                  aria-label={onSelect ? `${el.web_name} — open player details` : undefined}
                   onKeyDown={
                     onSelect
                       ? (ev) => {

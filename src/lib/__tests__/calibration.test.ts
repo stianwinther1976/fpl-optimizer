@@ -59,16 +59,39 @@ describe("applyGwOutcome", () => {
   });
 
   it("only corrects the position that misses", () => {
-    const entries = makeEntries(
-      20,
-      () => 5,
-      (pos) => (pos === 4 ? 3 : 5) // forwards over-predicted, rest spot-on
-    );
-    const s = applyGwOutcome(fresh(), 10, entries, 0);
-    // The applied multiplier scales forwards down while leaving the accurate
-    // positions essentially unchanged (global × relative-byPos ≈ 1).
-    expect(calibrationMultiplier(s.factors, 4)).toBeLessThan(0.95);
-    expect(calibrationMultiplier(s.factors, 2)).toBeCloseTo(1, 2);
+    /*
+     * MEASURED OVER GAMEWEEKS, NOT AFTER ONE.
+     *
+     * This used to grade a single gameweek and assert the accurate positions
+     * came out within 0.01 of 1 — which the old rule satisfied by ACCIDENT. It
+     * aimed `byPos` at `(a/p) / globalRatio`, an overshoot, and one EMA step of
+     * that overshoot happened to land near 1. Aiming at the correct target
+     * instead lands at 1.009 after one step and reaches 1 over several, because
+     * an EMA moves 30% of the way per gameweek by design.
+     *
+     * So the assertion now measures the property this test is named for —
+     * forwards corrected, everyone else left alone — where that property is
+     * actually claimed: at convergence.
+     */
+    let st = fresh();
+    for (let gw = 1; gw <= 60; gw++) {
+      const entries: GradedPlayer[] = [];
+      for (const pos of [1, 2, 3, 4]) {
+        const m = calibrationMultiplier(st.factors, pos);
+        // Raw 5; forwards actually return 4, everyone else 5. Deliberately a
+        // 0.8 correction rather than 0.6: `calibrationMultiplier` clamps the
+        // combined figure at 0.7, so a harsher bias would measure the clamp
+        // instead of the mechanism this test is about.
+        for (let i = 0; i < 20; i++) {
+          entries.push({ pos, pred: 5 * m, actual: pos === 4 ? 4 : 5 });
+        }
+      }
+      st = applyGwOutcome(st, gw, entries, 0);
+    }
+    expect(calibrationMultiplier(st.factors, 4)).toBeCloseTo(0.8, 2);
+    for (const pos of [1, 2, 3]) {
+      expect(calibrationMultiplier(st.factors, pos)).toBeCloseTo(1, 2);
+    }
   });
 
   it("records MAE and bias in the log and marks the GW reconciled", () => {
@@ -180,6 +203,34 @@ describe("convergence", () => {
     expect(calibrationMultiplier(st.factors, 4)).not.toBeCloseTo(Math.sqrt(rFwd), 2);
   });
 
+  it("does not let byPos integrate the wrong way when global saturates", () => {
+    /*
+     * `byPos` divides the aggregate residual out on the assumption `global`
+     * absorbs it. When the clamp binds, nobody does — and dividing anyway turns
+     * `byPos` into an integrator pointing the WRONG WAY. Probed at 200
+     * gameweeks with r = 0.5 for GK/DEF/MID and 0.2 for forwards: `global`
+     * pinned at 0.75 while `byPos` ran to 1.3/1.3/1.3/0.75, a 30% UPWARD
+     * correction on three positions the model over-rates twofold, for a
+     * combined multiplier of 0.975 where 0.5 was needed.
+     */
+    let st = fresh();
+    for (let gw = 1; gw <= 200; gw++) {
+      const entries: GradedPlayer[] = [];
+      for (const pos of [1, 2, 3, 4]) {
+        const m = calibrationMultiplier(st.factors, pos);
+        const r = pos === 4 ? 0.2 : 0.5;
+        for (let i = 0; i < 20; i++) entries.push({ pos, pred: 5 * m, actual: 5 * r });
+      }
+      st = applyGwOutcome(st, gw, entries, 0);
+    }
+    // Everything is over-rated, so nothing may be corrected UPWARD.
+    for (const pos of [1, 2, 3, 4]) {
+      expect(st.factors.byPos[pos], `byPos[${pos}]`).toBeLessThanOrEqual(1);
+      // And the combined figure must sit on the floor, not near 1.
+      expect(calibrationMultiplier(st.factors, pos), `mult[${pos}]`).toBeCloseTo(0.7, 2);
+    }
+  });
+
   it("still respects the clamp on a wild bias", () => {
     const st = converge(0.1, 60);
     expect(st.factors.global).toBeGreaterThanOrEqual(CAL_CONFIG.factorMin);
@@ -235,6 +286,29 @@ describe("persistence across a season boundary", () => {
     // What the model learned about its own bias does not stop being true.
     expect(s.factors.global).toBe(0.9);
     expect(s.log.length).toBe(1);
+  });
+
+  it("resets state written before the season field existed", () => {
+    /*
+     * THE CASE EVERY EXISTING INSTALL IS IN. Requiring `s.season != null` meant
+     * the rollover never fired for anyone — and then `reconcileFinishedGws`
+     * stamped the current season onto that stale list, so it could never fire
+     * again either. An adversarial re-audit caught this on the commit that was
+     * written to kill exactly this failure.
+     */
+    store.set(
+      "fpl-calibration",
+      JSON.stringify({
+        factors: { global: 0.9, byPos: { 1: 1, 2: 1, 3: 1, 4: 1 } },
+        log: [],
+        reconciled: Array.from({ length: 30 }, (_, i) => i + 9),
+        // No `season` key at all.
+      })
+    );
+    const s = loadCalibration(false, "2026/27");
+    expect(s.reconciled).toEqual([]);
+    expect(s.season).toBe("2026/27");
+    expect(s.factors.global).toBe(0.9);
   });
 
   it("keeps the graded list within one season", () => {

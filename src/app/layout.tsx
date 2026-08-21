@@ -45,10 +45,21 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   // Edge-to-edge on notched phones; sheets/toasts pad with safe-area insets.
   viewportFit: "cover",
-  themeColor: [
-    { media: "(prefers-color-scheme: dark)", color: "#0d1117" },
-    { media: "(prefers-color-scheme: light)", color: "#f2f2f7" },
-  ],
+  /*
+   * ONE COLOUR, BECAUSE THE APP HAS ONE DEFAULT.
+   *
+   * `globals.css` has no `prefers-color-scheme` rule: dark IS the default and
+   * light exists only behind `html.light`, which is set from localStorage after
+   * hydration. Advertising a light chrome to a light-OS visitor therefore
+   * promised something the page never renders — a #f2f2f7 address bar over a
+   * #0d1117 page on first load, until they choose light themselves. The
+   * manifest already assumes dark-only (`theme_color: #0d1117`); this now
+   * agrees with it.
+   *
+   * If the CSS ever grows a `prefers-color-scheme` default, this should grow
+   * the second entry back at the same time.
+   */
+  themeColor: "#0d1117",
 };
 
 export default function RootLayout({

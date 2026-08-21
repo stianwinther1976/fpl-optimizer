@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type TeamData } from "@/lib/fpl";
 import type { EventLive, Fixture, Pick } from "@/lib/types";
-import { matchMinute, projectAutoSubs, provisionalBonus, LIVE_REFRESH_MS } from "@/lib/live";
+import { matchMinute, projectAutoSubs, provisionalBonus, isInPlay, LIVE_REFRESH_MS } from "@/lib/live";
 import { autoSubView, benchPoints, kickoffLabel } from "@/lib/display";
 import { ErrorBox, Skeleton, Badge } from "./ui";
 import MatchModal from "./MatchModal";
@@ -364,7 +364,7 @@ export default function LiveTab({
         <div className="grid grid-flow-col grid-rows-2 gap-1.5 overflow-x-auto pb-1 auto-cols-max">
           {gwFixtures.map((f) => {
             const minute = matchMinute(f, updatedAt ?? undefined);
-            const liveNow = f.started && !f.finished;
+            const liveNow = isInPlay(f);
             const hs = f.team_h_score ?? 0;
             const as = f.team_a_score ?? 0;
             // Result colors (live and FT): winner green, loser red, draw yellow.
@@ -487,8 +487,19 @@ export default function LiveTab({
         })}
       </div>
       <p className="text-xs text-muted">
-        ★ = projected bonus from live BPS (not confirmed until the match finishes). Auto-subs are
-        projected once a starter&apos;s matches finish with 0 minutes. Captain doubling
+        {/*
+            EXPLAIN THE MARKER ONLY WHEN THERE IS ONE. Since 2026/27 FPL
+            publishes its own projected bonus past the 20-minute mark, and
+            `provisionalBonus` correctly adds nothing on top of that — so for
+            most of a live gameweek there is no ★ anywhere, and a legend for it
+            reads as a feature that is missing rather than one not currently
+            needed. Confirmed on the real GW1 payload: FPL had already awarded
+            3/2/1 and the projection was empty.
+        */}
+        {(bonus?.byElement.size ?? 0) > 0 &&
+          "★ = projected bonus from live BPS (not confirmed until the match finishes). "}
+        Auto-subs are projected once a starter&apos;s matches finish with 0 minutes. Captain
+        doubling
         {data.squad.activeChip === "3xc" ? " (3x — Triple Captain active)" : ""} included in the
         total.
       </p>

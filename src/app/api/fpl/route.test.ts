@@ -49,9 +49,12 @@ describe("proxy cache policy", () => {
  * Measured during a live match: the app sat on 83' while FPL had moved to 89'.
  */
 describe("cacheControl", () => {
-  it("gives the browser an explicit lifetime, not a heuristic", () => {
+  it("gives the browser an explicit directive, not a heuristic", () => {
+    // `no-cache` rather than `max-age=0`: both forbid reuse without asking, but
+    // `max-age=0` leaves `stale-while-revalidate` free to hand a private cache
+    // a stale copy anyway, and `no-cache` does not.
     for (const p of ["fixtures/", "event/1/live/", "bootstrap-static/", "element-summary/1/"]) {
-      expect(cacheControl(p)).toMatch(/(^|,\s*)max-age=0(,|$)/);
+      expect(cacheControl(p)).toMatch(/(^|,\s*)no-cache(,|$)/);
     }
   });
 
@@ -77,23 +80,39 @@ describe("cacheControl", () => {
      * the app must not be wrong about which gameweek it is.
      */
     for (const p of ["bootstrap-static/", "entry/1/history/", "element-summary/1/"]) {
-      expect(cacheControl(p)).toMatch(/(^|,\s*)proxy-revalidate(,|$)/);
+      expect(cacheControl(p)).toMatch(/(^|,\s*)no-cache(,|$)/);
     }
   });
 
-  it("keeps the CDN's stale-while-revalidate grace, which is the point of proxy-revalidate", () => {
-    // `must-revalidate` would bind shared caches too and cost the window that
-    // keeps a cold miss off the reader's critical path.
-    expect(cacheControl("element-summary/1/")).toContain("stale-while-revalidate=86400");
-    expect(cacheControl("bootstrap-static/")).not.toContain("must-revalidate");
+  it("uses no-cache, NOT proxy-revalidate, which is backwards on both counts", () => {
+    /*
+     * RFC 9111 §5.2.2.9: `proxy-revalidate` means the same as
+     * `must-revalidate` "except that it does not apply to private caches". So
+     * it says nothing to the browser — the case it was reached for — while
+     * forbidding the CDN to serve stale, which is exactly the grace
+     * `staleSeconds` exists to buy. It was shipped for one commit and this
+     * pins that it does not come back.
+     */
+    for (const p of ["bootstrap-static/", "element-summary/1/", "fixtures/"]) {
+      expect(cacheControl(p)).not.toContain("proxy-revalidate");
+      expect(cacheControl(p)).not.toContain("must-revalidate");
+    }
   });
 
-  it("does not let max-age silently become non-zero", () => {
-    // A browser may reuse for `max-age` seconds without asking, which is the
-    // whole defect. Any positive value here reintroduces it.
-    for (const p of ["fixtures/", "event/1/live/"]) {
+  it("keeps the CDN's window and its stale-while-revalidate grace", () => {
+    // `no-cache` forbids reuse without revalidation, but a shared cache with
+    // `s-maxage` may still serve inside that window — which is what keeps a
+    // launch draft's ~420 element-summary fetches off FPL's rate-limited API.
+    expect(cacheControl("element-summary/1/")).toContain("s-maxage=300");
+    expect(cacheControl("element-summary/1/")).toContain("stale-while-revalidate=86400");
+  });
+
+  it("never hands a browser a reuse window", () => {
+    // A positive `max-age` lets a browser reuse without asking, which is the
+    // whole defect. `no-cache` must not be accompanied by one.
+    for (const p of ["fixtures/", "event/1/live/", "bootstrap-static/"]) {
       const m = /(?:^|,\s*)max-age=(\d+)/.exec(cacheControl(p));
-      expect({ path: p, maxAge: m?.[1] }).toEqual({ path: p, maxAge: "0" });
+      expect({ path: p, maxAge: m?.[1] ?? "absent" }).toEqual({ path: p, maxAge: "absent" });
     }
   });
 });
