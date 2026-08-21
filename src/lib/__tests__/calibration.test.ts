@@ -237,6 +237,29 @@ describe("persistence across a season boundary", () => {
     expect(s.log.length).toBe(1);
   });
 
+  it("resets state written before the season field existed", () => {
+    /*
+     * THE CASE EVERY EXISTING INSTALL IS IN. Requiring `s.season != null` meant
+     * the rollover never fired for anyone — and then `reconcileFinishedGws`
+     * stamped the current season onto that stale list, so it could never fire
+     * again either. An adversarial re-audit caught this on the commit that was
+     * written to kill exactly this failure.
+     */
+    store.set(
+      "fpl-calibration",
+      JSON.stringify({
+        factors: { global: 0.9, byPos: { 1: 1, 2: 1, 3: 1, 4: 1 } },
+        log: [],
+        reconciled: Array.from({ length: 30 }, (_, i) => i + 9),
+        // No `season` key at all.
+      })
+    );
+    const s = loadCalibration(false, "2026/27");
+    expect(s.reconciled).toEqual([]);
+    expect(s.season).toBe("2026/27");
+    expect(s.factors.global).toBe(0.9);
+  });
+
   it("keeps the graded list within one season", () => {
     store.set(
       "fpl-calibration",

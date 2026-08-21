@@ -191,7 +191,17 @@ export function loadCalibration(demo: boolean, season?: string | null): Calibrat
          * season's gameweeks, so they carry over: what the model has learned
          * about its own bias does not stop being true in August.
          */
-        if (season != null && s.season != null && s.season !== season) {
+        /*
+         * ABSENT IS NOT "THIS SEASON". State written before this field existed
+         * carries no `season`, which is exactly the state every install has —
+         * so requiring `s.season != null` meant the rollover never fired for
+         * anyone, and the doc on `CalibrationState.season` promised the
+         * opposite. Worse, `reconcileFinishedGws` then stamps the current
+         * season onto that state and saves it, so the stale gameweek list is
+         * marked as belonging to this season permanently and the reset can
+         * never fire again.
+         */
+        if (season != null && s.season !== season) {
           return { ...s, reconciled: [], season };
         }
         return s;
@@ -308,7 +318,13 @@ export async function reconcileFinishedGws(
       drop(ev.id);
     }
   }
-  if (changed) saveCalibration(demo, { ...state, season });
+  /*
+   * Never write `season: null` over a real stamp. `currentSeasonName` returns
+   * null on a missing or odd GW1 `deadline_time`, and a null stamp makes the
+   * next load see a season mismatch — which would clear `reconciled` and
+   * re-grade the whole season, permanently, from one bad bootstrap.
+   */
+  if (changed) saveCalibration(demo, { ...state, season: season ?? state.season ?? null });
   setActiveCalibration(state.factors);
   return changed;
 }

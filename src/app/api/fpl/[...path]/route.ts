@@ -61,30 +61,40 @@ export function staleSeconds(path: string): number {
  * Reported from a live match, and measured — the clock sat on 83' while FPL had
  * moved to 89'.
  *
- * That fixed the live pair. It did NOT bound the rest — see the note inside,
- * where `proxy-revalidate` closes the half `max-age=0` leaves open.
+ * That fixed the live pair but not the rest, and the two attempts after it are
+ * worth reading before touching this again — see the note inside.
  */
 export function cacheControl(path: string): string {
   /*
-   * `stale-while-revalidate` BINDS BROWSERS TOO, so `max-age=0` alone does not
-   * bound how stale a private cache may go: Chrome has implemented SWR in the
-   * HTTP cache since M75, and `max-age=0, stale-while-revalidate=600` lets it
-   * serve a ten-minute-old `bootstrap-static/` while refreshing behind. Around
-   * a deadline that means the wrong `is_current` / `is_next`, which is the one
-   * moment the app must not be wrong about which gameweek it is.
+   * `no-cache` FOR THE BROWSER, `s-maxage` FOR THE CDN. Both halves matter and
+   * an earlier attempt got the mechanism exactly backwards.
    *
-   * The live pair is already safe by a second route — `isLiveFeed` sends
-   * `cache: "no-store"` — but that covers only `fixtures/` and
-   * `event/{id}/live/`. `proxy-revalidate` closes the rest: it forbids serving
-   * stale to SHARED caches only, so the CDN keeps its `s-maxage` window and
-   * its SWR grace (which is what keeps a cold miss off the reader's critical
-   * path), while a browser has to revalidate. `must-revalidate` would have
-   * bound both and cost exactly the thing worth keeping.
+   * The first bug was a missing `max-age`: `s-maxage` binds shared caches only,
+   * so with `public` and nothing else a browser had no freshness lifetime,
+   * fell back to HEURISTIC caching and picked its own — iOS Safari picked
+   * minutes. The 30-second live poll was answered from the phone's own store
+   * while `updatedAt` was stamped "now" on every hit, so the app reported
+   * refreshing and had not: the clock sat on 83' while FPL had moved to 89'.
+   *
+   * `max-age=0` alone did not finish the job, because `stale-while-revalidate`
+   * binds PRIVATE caches too (Chrome has had it in the HTTP cache since M75),
+   * so `bootstrap-static/` could still be served ten minutes stale.
+   *
+   * `proxy-revalidate` was then tried and is the WRONG TOOL, in both
+   * directions at once. RFC 9111 §5.2.2.9: it means the same as
+   * `must-revalidate` "except that it does not apply to private caches". So it
+   * said nothing at all to the browser — the case it was added for — while
+   * forbidding the CDN to serve stale, which is precisely the
+   * `stale-while-revalidate` grace `staleSeconds` exists to buy. Under it a
+   * launch draft's ~420 element-summary fetches would go to FPL's rate-limited
+   * API together, which is the outcome the 86400 above is there to prevent.
+   *
+   * `no-cache` is the correct one: it forbids reuse without revalidation, it
+   * applies to every cache, and — the part that makes it safe here — a shared
+   * cache with `s-maxage` is explicitly allowed to keep serving inside that
+   * window, so the CDN's own freshness and its SWR grace both survive.
    */
-  return (
-    `public, max-age=0, proxy-revalidate, ` +
-    `s-maxage=${cacheSeconds(path)}, stale-while-revalidate=${staleSeconds(path)}`
-  );
+  return `public, no-cache, s-maxage=${cacheSeconds(path)}, stale-while-revalidate=${staleSeconds(path)}`;
 }
 
 export async function GET(

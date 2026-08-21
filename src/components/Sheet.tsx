@@ -47,6 +47,21 @@ export default function Sheet({
       if (e.key !== "Tab") return;
       const panel = panelRef.current;
       if (!panel) return;
+      /*
+       * ONLY THE TOPMOST SHEET TRAPS.
+       *
+       * Both listeners are on `document`, so with two sheets open every Tab was
+       * handled twice: the lower sheet yanked focus into itself, then the upper
+       * one yanked it to ITS first control — pinning focus to a single element
+       * and making the middle of the top sheet unreachable. That is worse than
+       * no trap, which at least walked through everything.
+       *
+       * It is reachable: a chip sheet's player row opens `PlayerModal` without
+       * closing the chip sheet, so the two stack. The topmost is the last
+       * `[role="dialog"]` in document order, since React appends on mount.
+       */
+      const dialogs = [...document.querySelectorAll('[role="dialog"]')];
+      if (dialogs.length > 1 && dialogs[dialogs.length - 1] !== panel) return;
       const items = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
         (el) => el.offsetParent !== null || el === document.activeElement
       );

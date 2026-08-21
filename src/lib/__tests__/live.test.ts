@@ -497,6 +497,40 @@ describe("provisionalBonus across a double gameweek", () => {
     expect(res.byElement.has(1)).toBe(false);
   });
 
+  it("does not fall back to gameweek minutes for a leg not yet itemised", () => {
+    /*
+     * `explain` for a second leg is ABSENT ENTIRELY between kickoff and FPL's
+     * first stats update for it — no element carries a row for that fixture id.
+     * The old fallback tested `inThis`, i.e. "does this FIXTURE have rows", so
+     * it saw undefined and put the whole gameweek's minutes back in play:
+     * probe-confirmed, both leg-1 players were handed provisional bonus for a
+     * match they were not in, and the leg-1 bonus already confirmed for one of
+     * them was counted twice on top. The test has to be "does this FEED itemise
+     * at all", which is a different question.
+     */
+    const leg1Only = (id: number, bps: number, bonus: number) => ({
+      id,
+      stats: { minutes: 90, total_points: 0, bonus, bps, goals_scored: 0, assists: 0 },
+      explain: [
+        {
+          fixture: 100,
+          stats: [
+            { identifier: "minutes", points: 2, value: 90 },
+            ...(bonus ? [{ identifier: "bonus", points: bonus, value: bonus }] : []),
+          ],
+        },
+      ],
+    });
+    const live: EventLive = {
+      // Nobody has an `explain` row for fixture 101 yet.
+      elements: [leg1Only(1, 45, 3), leg1Only(2, 40, 2), leg1Only(3, 12, 0)],
+    };
+    const res = provisionalBonus(bootstrap, [fx(100, true), fx(101, false)], live, 10);
+    // The in-play leg has nobody itemised in it, so it projects nothing at all
+    // rather than borrowing the finished leg's team sheet.
+    expect(res.byElement.size).toBe(0);
+  });
+
   it("abstains when a gameweek-total BPS cannot rank the match", () => {
     // Element 2 played both legs, so his BPS includes points banked elsewhere
     // and the 3/2/1 order in leg 2 is not a reading of leg 2. Projecting a

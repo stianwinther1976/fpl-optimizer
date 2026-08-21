@@ -871,6 +871,40 @@ describe("the squad view's live poll can actually stop", () => {
   });
 });
 
+describe("only the topmost sheet traps focus", () => {
+  /*
+   * Both Tab listeners are on `document`, so with two sheets open every press
+   * was handled twice: the lower yanked focus into itself, then the upper
+   * yanked it to its first control — focus pinned to one element and the
+   * middle of the top sheet unreachable by keyboard, which is worse than the
+   * no-trap behaviour it replaced. Reachable via a chip sheet's player row,
+   * which opens `PlayerModal` without closing the sheet underneath.
+   */
+  const src = read("Sheet.tsx");
+
+  it("returns early when it is not the last dialog in the document", () => {
+    expect(src).toMatch(/document\.querySelectorAll\('\[role="dialog"\]'\)/);
+    expect(src).toMatch(/dialogs\.length > 1 && dialogs\[dialogs\.length - 1\] !== panel/);
+  });
+
+  it("checks that before doing any focus work, not after", () => {
+    const at = src.indexOf('if (e.key !== "Tab") return;');
+    const guard = src.indexOf("dialogs[dialogs.length - 1] !== panel", at);
+    const firstFocusCall = src.indexOf(".focus()", at);
+    expect(guard).toBeGreaterThan(0);
+    expect(guard).toBeLessThan(firstFocusCall);
+  });
+
+  it("still lets Escape through from either sheet", () => {
+    // Escape is handled before the Tab branch and returns, so the stacking
+    // guard cannot swallow it.
+    const esc = src.indexOf('if (e.key === "Escape")');
+    const tab = src.indexOf('if (e.key !== "Tab") return;');
+    expect(esc).toBeGreaterThan(0);
+    expect(esc).toBeLessThan(tab);
+  });
+});
+
 describe("the launch drafter reads the store, not the transport", () => {
   /*
    * `loadPastSeason` resolves with the answer THAT load fetched, even when the

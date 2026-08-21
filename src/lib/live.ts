@@ -60,6 +60,20 @@ export function provisionalBonus(
    */
   const perFixture = new Map<number, Map<number, { minutes: number; bonus: number }>>();
   const legsPlayed = new Map<number, number>();
+  /*
+   * Whether this feed itemises fixtures AT ALL, which is not the same question
+   * as whether it itemises THIS fixture — and conflating the two reintroduced
+   * the bug the rewrite exists to kill. `explain` for a second leg is absent in
+   * the window between kickoff and FPL's first stats update for it, so falling
+   * back on "no rows for this fixture" put the WHOLE gameweek's minutes back in
+   * play: probe-confirmed, two leg-1 players were handed 3 and 2 provisional
+   * bonus for a match they were not in, and the leg-1 bonus already confirmed
+   * for one of them was counted twice on top.
+   *
+   * A feed with no `explain` anywhere is a stub, and there the gameweek total
+   * is the fixture total because there is only one fixture to speak of.
+   */
+  const itemised = live.elements.some((e) => (e.explain ?? []).length > 0);
   for (const e of live.elements) {
     for (const ex of e.explain ?? []) {
       let mins = 0;
@@ -85,7 +99,7 @@ export function provisionalBonus(
         if (t !== f.team_h && t !== f.team_a) return false;
         // Per-fixture minutes when the feed itemises them; the gameweek total
         // is the fallback for a single-fixture week, where the two agree.
-        const mins = inThis?.get(e.id)?.minutes ?? (inThis ? 0 : e.stats.minutes);
+        const mins = itemised ? (inThis?.get(e.id)?.minutes ?? 0) : e.stats.minutes;
         return (mins ?? 0) > 0;
       })
       .map((e) => ({ id: e.id, bps: e.stats.bps }))
