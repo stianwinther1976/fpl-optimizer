@@ -20,6 +20,18 @@ export interface PitchPlayer {
    * for the running total beside the gameweek.
    */
   live?: { points: number; final: boolean };
+  /**
+   * The sub-priority badge on a bench card, or `null` for "this player has no
+   * sub priority". Omit it and the badge is the card's position in the list.
+   *
+   * THE POSITION IS NOT ALWAYS THE PRIORITY. Once auto-substitutions are
+   * applied the bench is "everyone not in the effective eleven", which includes
+   * the starter who was subbed OFF — and he is not first in the queue to come
+   * on, he is not in the queue at all. Numbering by list position labelled him
+   * "1", i.e. the very next player to be brought on, under a heading that says
+   * "in order". `null` is the only honest badge there, so it gets one.
+   */
+  benchOrder?: number | null;
 }
 
 /*
@@ -229,6 +241,11 @@ function PlayerCard({
   );
 }
 
+/** The number on a bench card: the caller's, or the card's place in the list. */
+function benchBadge(p: PitchPlayer, i: number): number | null {
+  return p.benchOrder === undefined ? i + 1 : p.benchOrder;
+}
+
 export default function Pitch({
   starters,
   bench,
@@ -367,9 +384,11 @@ export default function Pitch({
               <div className="grid grid-cols-4 gap-1 sm:flex sm:justify-start sm:gap-6">
                 {bench.map((p, i) => (
                   <div key={p.element.id} className="relative min-w-0">
-                    <span className="absolute -top-1 left-0 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-[9px] font-bold text-white">
-                      {i + 1}
-                    </span>
+                    {benchBadge(p, i) != null && (
+                      <span className="absolute -top-1 left-0 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-[9px] font-bold text-white">
+                        {benchBadge(p, i)}
+                      </span>
+                    )}
                     <PlayerCard p={p} teams={teams} fixtures={fixtures} nextEvent={nextEvent} onSelect={onSelect} info={info} />
                   </div>
                 ))}
@@ -501,7 +520,7 @@ function ListView({
    * to module level would also work but means threading `teams`, `metric`,
    * `fixtureStr` and `onSelect` through props for no gain.
    */
-  const row = (p: PitchPlayer, benchNo?: number) => {
+  const row = (p: PitchPlayer, benchNo?: number | null) => {
     const el = p.element;
     const flag = statusFlag(el);
     const fx = fixtureStr(el);
@@ -574,7 +593,7 @@ function ListView({
             Bench {POS.length ? "(in order)" : ""}
           </div>
           <div className="divide-y divide-border-c/60">
-            {bench.map((p, i) => row(p, i + 1))}
+            {bench.map((p, i) => row(p, benchBadge(p, i)))}
           </div>
         </div>
       )}

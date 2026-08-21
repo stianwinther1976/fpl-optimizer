@@ -607,11 +607,24 @@ export default function OptimizePanel({
                * the window it now claimed. Clearing is the honest state — the
                * reader presses Optimize again, which is one tap and cannot
                * mislead.
+               *
+               * `plan` IS NOT ONE OF THEM, and clearing it was a bug of the
+               * same family read backwards. The Multi-GW planner does not take
+               * this horizon — `runPlan` passes a fixed 6, its button says
+               * "Plan next 6 GWs" and its copy says "the next six deadlines".
+               * So the plan on screen is still an exact answer to the question
+               * it was asked, and throwing it away costs the reader the panel's
+               * single most expensive computation to fix a mislabelling that
+               * was never there.
+               *
+               * `failure` goes, though. It is the reason the results now being
+               * cleared are missing, so leaving it behind states a failure
+               * about nothing the screen still shows.
                */
               setHorizon(parseInt(e.target.value));
               setResult(null);
-              setPlan(null);
               setChipView(null);
+              setFailure(null);
             }}
             className="rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
           >
@@ -680,9 +693,17 @@ export default function OptimizePanel({
         </button>
       </div>
 
+      {/*
+       * `alert`, NOT `status`. Both are live regions, but `status` is polite:
+       * a screen reader queues it behind whatever it is already saying, and
+       * every one of these appears while the panel is mid-announcement about
+       * the work that just failed. `alert` is assertive and interrupts, which
+       * is the right register for "the thing you asked for did not happen" —
+       * the reader is otherwise left waiting on a spinner that has gone.
+       */}
       {failure && (
         <div
-          role="status"
+          role="alert"
           className="card border-danger/50 bg-danger/10 p-4 text-sm text-danger"
         >
           {failure}

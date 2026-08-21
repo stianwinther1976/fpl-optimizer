@@ -283,3 +283,35 @@ export function kickoffLabel(
   const when = fmt(f.kickoff_time);
   return f.provisional_start_time ? `${when} (TBC)` : when;
 }
+
+/**
+ * Where a player sits on the bench once auto-substitutions have been applied.
+ *
+ * After a sub the bench is "everyone not in the effective eleven", and that set
+ * contains the STARTER WHO CAME OFF as well as the three subs who never came
+ * on. Sorted by FPL's pick order he lands at the front — pick position 3 sorts
+ * ahead of bench slot 12 — so the card captioned "Bench (in order)" opened with
+ * the player who had just been substituted OUT, badged "1" as if he were the
+ * next man on. He is not in the queue at all.
+ *
+ * So: the bench proper keeps FPL's order, and anyone who came off the eleven
+ * goes after all of it. `Number.MAX_SAFE_INTEGER` is not needed — a demoted
+ * starter's pick position is at most 11 and a bench slot at least 12 — but
+ * adding a constant keeps demoted starters in pick order among themselves,
+ * which matters under Bench Boost's zero subs only in that it never fires.
+ */
+export function benchSortKey(pickPosition: number): number {
+  return pickPosition > 11 ? pickPosition : pickPosition + 100;
+}
+
+/**
+ * The sub-priority badge for a bench card: `null` for a demoted starter.
+ *
+ * Returned rather than folded into `benchSortKey` because `Pitch` treats
+ * `undefined` as "number it by list position" and `null` as "no number at all",
+ * and those are genuinely different answers. Only the second case is a claim
+ * this function is qualified to make.
+ */
+export function benchBadgeFor(pickPosition: number): number | null | undefined {
+  return pickPosition > 11 ? undefined : null;
+}

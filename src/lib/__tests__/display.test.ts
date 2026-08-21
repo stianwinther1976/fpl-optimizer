@@ -1,19 +1,21 @@
 import { describe, it, expect } from "vitest";
 import {
-  autoSubView,
-  benchPoints,
-  netEventPoints,
-  netGwPoints,
-  netGwDelta,
-  averageFdr,
-  fdrSortKey,
-  signedPrice,
-  scoreTier,
   RETURN_THRESHOLD,
-  teamValue,
-  valueDelta,
-  type BenchRow,
+  autoSubView,
+  averageFdr,
+  benchBadgeFor,
+  benchPoints,
+  benchSortKey,
+  fdrSortKey,
   kickoffLabel,
+  netEventPoints,
+  netGwDelta,
+  netGwPoints,
+  scoreTier,
+  signedPrice,
+  teamValue,
+  type BenchRow,
+  valueDelta,
 } from "../display";
 
 /**
@@ -440,5 +442,41 @@ describe("kickoffLabel", () => {
   it("says TBC when there is no time at all", () => {
     expect(kickoffLabel({ kickoff_time: null }, fmt)).toBe("TBC");
     expect(kickoffLabel({ kickoff_time: null, provisional_start_time: true }, fmt)).toBe("TBC");
+  });
+});
+
+describe("the bench, once auto-substitutions have been applied", () => {
+  /**
+   * The set the pitch renders as "the bench" is everyone NOT in the effective
+   * eleven, which after a sub includes the starter who came off. Sorting that
+   * set by FPL's pick order puts him first — pick position 3 sorts ahead of
+   * bench slot 12 — under a heading that reads "Bench (in order)", badged as
+   * the next man on.
+   */
+  const order = (positions: number[]) =>
+    [...positions].sort((a, b) => benchSortKey(a) - benchSortKey(b));
+
+  it("keeps FPL's order when nobody was substituted", () => {
+    expect(order([15, 12, 14, 13])).toEqual([12, 13, 14, 15]);
+  });
+
+  it("puts a demoted starter after the whole bench, not in front of it", () => {
+    expect(order([13, 3, 14, 15])).toEqual([13, 14, 15, 3]);
+    // Every bench slot beats every starting position, at both extremes.
+    expect(benchSortKey(12)).toBeLessThan(benchSortKey(11));
+    expect(benchSortKey(15)).toBeLessThan(benchSortKey(1));
+  });
+
+  it("keeps two demoted starters in pick order among themselves", () => {
+    expect(order([9, 12, 2])).toEqual([12, 2, 9]);
+  });
+
+  it("gives a demoted starter no sub-priority badge, and leaves the bench's alone", () => {
+    // `undefined` is "number it by list position" and `null` is "no number".
+    // Only the second is a claim about sub priority, so only it is stated.
+    expect(benchBadgeFor(12)).toBeUndefined();
+    expect(benchBadgeFor(15)).toBeUndefined();
+    expect(benchBadgeFor(11)).toBeNull();
+    expect(benchBadgeFor(1)).toBeNull();
   });
 });

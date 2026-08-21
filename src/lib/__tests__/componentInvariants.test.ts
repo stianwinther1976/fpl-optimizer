@@ -899,20 +899,30 @@ describe("only the topmost sheet traps focus", () => {
   });
 
   it("checks that before doing any focus work, not after", () => {
-    const at = src.indexOf('if (e.key !== "Tab") return;');
+    const at = src.indexOf("const onKey = (e: KeyboardEvent)");
     const guard = src.indexOf("dialogs[dialogs.length - 1] !== panel", at);
     const firstFocusCall = src.indexOf(".focus()", at);
     expect(guard).toBeGreaterThan(0);
     expect(guard).toBeLessThan(firstFocusCall);
   });
 
-  it("still lets Escape through from either sheet", () => {
-    // Escape is handled before the Tab branch and returns, so the stacking
-    // guard cannot swallow it.
-    const esc = src.indexOf('if (e.key === "Escape")');
-    const tab = src.indexOf('if (e.key !== "Tab") return;');
+  it("closes one sheet per Escape, not the stack", () => {
+    /*
+     * REVERSED FROM WHAT THIS TEST USED TO PIN. It required Escape to be
+     * handled BEFORE the stacking guard, on the reading that letting it through
+     * from either sheet was the generous behaviour. It is not — both listeners
+     * are on `document`, so one press ran both handlers and closed both sheets.
+     * WAI-ARIA's dialog pattern is that Escape dismisses the dialog it is in,
+     * and the sheet underneath here is a chip scenario that took seconds to
+     * compute. So the guard comes first and Escape obeys it.
+     */
+    const onKey = src.indexOf("const onKey = (e: KeyboardEvent)");
+    const guard = src.indexOf("dialogs[dialogs.length - 1] !== panel", onKey);
+    const esc = src.indexOf('if (e.key === "Escape")', onKey);
     expect(esc).toBeGreaterThan(0);
-    expect(esc).toBeLessThan(tab);
+    expect(guard).toBeLessThan(esc);
+    // Escape still reaches the handler at all: it is in the early-out's list.
+    expect(src).toContain('if (e.key !== "Escape" && e.key !== "Tab") return;');
   });
 });
 
@@ -1008,5 +1018,89 @@ describe("the reader's line-up calls are hydrated per feed", () => {
     expect(tail).toMatch(/\}, \[entryId\]\)/);
     // And it is told WHICH feed, rather than assuming one.
     expect(dash.slice(at, at + 80)).toMatch(/DEMO_ENTRY_ID/);
+  });
+});
+
+describe("the pitch's bench survives an auto-substitution", () => {
+  /*
+   * `benchSortKey` and `benchBadgeFor` are tested properly in `display.test.ts`.
+   * What cannot be tested there is that the components CALL them: the bench
+   * arrays are built inline in JSX, and the bug was a `.sort()` on the raw pick
+   * position. Both pitches on the Dashboard render an auto-subbed gameweek —
+   * the live one and the time machine — and the fix has to reach both.
+   */
+  it("orders and badges both Dashboard benches through the shared rule", () => {
+    const dash = read("Dashboard.tsx");
+    const sorts = dash.match(/benchSortKey\(/g) ?? [];
+    const badges = dash.match(/benchBadgeFor\(/g) ?? [];
+    expect(sorts.length).toBe(4); // two comparators, two operands each
+    expect(badges.length).toBe(2); // one per pitch
+    // And no bench is still sorted on the bare pick order.
+    expect(dash).not.toMatch(/\.sort\(\(a, b\) => a\.pickPosition - b\.pickPosition\)/);
+    expect(dash).not.toMatch(/\.sort\(\(a, b\) => a\.position - b\.position\)/);
+  });
+
+  it("lets Pitch draw no badge at all, rather than defaulting to the row number", () => {
+    // `undefined` means "number it by list position"; `null` means "no number".
+    // Collapsing the two is how a substituted-off starter gets badged "1".
+    const pitch = read("Pitch.tsx");
+    expect(pitch).toMatch(/benchOrder\?: number \| null;/);
+    expect(pitch).toMatch(/p\.benchOrder === undefined \? i \+ 1 : p\.benchOrder/);
+    // Both layouts go through it, and neither keeps the old index-only badge.
+    expect((pitch.match(/benchBadge\(p, i\)/g) ?? []).length).toBe(3);
+    expect(pitch).not.toMatch(/row\(p, i \+ 1\)/);
+  });
+});
+
+describe("the optimizer panel's horizon control", () => {
+  it("does not throw away the Multi-GW plan, which never depended on it", () => {
+    /*
+     * `runPlan` passes a fixed `horizon: 6`, the button says "Plan next 6 GWs"
+     * and the copy says "the next six deadlines" — so the plan on screen is
+     * still an exact answer to the question it was asked. Clearing it cost the
+     * reader the panel's most expensive computation for nothing.
+     */
+    const src = read("OptimizePanel.tsx");
+    const at = src.indexOf("setHorizon(parseInt(");
+    expect(at).toBeGreaterThan(0);
+    const handler = src.slice(at, src.indexOf("}}", at));
+    expect(handler).toContain("setResult(null)");
+    expect(handler).toContain("setChipView(null)");
+    // The stale error belongs to the results being cleared, so it goes too.
+    expect(handler).toContain("setFailure(null)");
+    expect(handler).not.toContain("setPlan(null)");
+    // And the plan really is horizon-independent, which is why the above holds.
+    expect(src).toContain("horizon: 6,");
+  });
+
+  it("announces a failure assertively", () => {
+    // `status` is polite and queues behind whatever the panel is already
+    // saying — which is the progress text for the work that just failed.
+    const src = read("OptimizePanel.tsx");
+    const at = src.indexOf("{failure && (");
+    expect(at).toBeGreaterThan(0);
+    expect(src.slice(at, at + 200)).toContain('role="alert"');
+  });
+});
+
+describe("the mini-league ownership panel", () => {
+  it("counts my squad the way it counts the field's", () => {
+    /*
+     * `eoCount` credits a rival's player on `position <= 11 || bboost`, so
+     * effective ownership is about STARTING elevens. Three different rules were
+     * in play: threats and shields tested all fifteen of mine, differentials
+     * tested `pickPosition <= 11` with no Bench Boost case. A heavily-owned
+     * player on my bench was therefore excluded from "Threats" for being mine
+     * and listed under "Shields", which inverts what he actually is.
+     */
+    const src = read("MiniLeague.tsx");
+    // One rule, and it matches the EO denominator on both halves.
+    expect(src).toMatch(/const inMyXi = \(p: \{ pickPosition: number \}\) =>\s*p\.pickPosition <= 11 \|\| benchBoosted;/);
+    expect(src).toContain('const benchBoosted = data.squad.activeChip === "bboost";');
+    expect(src).toContain("p.position <= 11 || bboost");
+    // Every consumer goes through it — no squad-wide set, no second filter.
+    expect((src.match(/inMyXi\b/g) ?? []).length).toBe(3); // one definition, two uses
+    expect(src).not.toMatch(/new Set\(data\.squad\.players\.map\(\(p\) => p\.element\.id\)\)/);
+    expect(src).not.toMatch(/p\.pickPosition <= 11 &&/);
   });
 });

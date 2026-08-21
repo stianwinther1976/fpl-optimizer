@@ -8,7 +8,14 @@ import type { Element, EntryEventPicks, EventLive, Fixture } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
 import { projectAutoSubs, LIVE_REFRESH_MS } from "@/lib/live";
-import { netEventPoints, netGwDelta, netGwPoints, valueDelta } from "@/lib/display";
+import {
+  benchBadgeFor,
+  benchSortKey,
+  netEventPoints,
+  netGwDelta,
+  netGwPoints,
+  valueDelta,
+} from "@/lib/display";
 import { saveRecentTeam } from "@/lib/recent";
 import { currentSeasonName } from "@/lib/seasonArchive";
 import { launchPool } from "@/lib/pool";
@@ -894,8 +901,11 @@ export default function Dashboard({
                       .filter((x): x is NonNullable<typeof x> => x != null);
                     const bench = hist.picks.picks
                       .filter((p) => (histXi ? !histXi.has(p.element) : p.position > 11))
-                      .sort((a, b) => a.position - b.position)
-                      .map(toPlayer)
+                      .sort((a, b) => benchSortKey(a.position) - benchSortKey(b.position))
+                      .map((p) => {
+                        const card = toPlayer(p);
+                        return card && { ...card, benchOrder: benchBadgeFor(p.position) };
+                      })
                       .filter((x): x is NonNullable<typeof x> => x != null);
                     const eh = hist.picks.entry_history;
                     return (
@@ -968,10 +978,11 @@ export default function Dashboard({
                   .filter((p) =>
                     effectiveXiIds ? !effectiveXiIds.has(p.element.id) : p.pickPosition > 11
                   )
-                  .sort((a, b) => a.pickPosition - b.pickPosition)
+                  .sort((a, b) => benchSortKey(a.pickPosition) - benchSortKey(b.pickPosition))
                   .map((p) => ({
                     element: p.element,
                     xp: xpOf?.get(p.element.id)?.next,
+                    benchOrder: benchBadgeFor(p.pickPosition),
                     live: liveData
                       ? { points: livePointsOf.get(p.element.id) ?? 0, final: gwFinished }
                       : undefined,

@@ -410,7 +410,25 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
           your rank (shields), and where you differ (differentials). */}
       {ownership && data.squad && !loading && (
         (() => {
-          const myIds = new Set(data.squad.players.map((p) => p.element.id));
+          /*
+           * MY SIDE OF THE COMPARISON HAS TO BE COUNTED THE WAY THE FIELD'S IS.
+           *
+           * `eoCount` above credits a rival's player only when `position <= 11`
+           * or Bench Boost is on, so effective ownership is a statement about
+           * STARTING elevens. This set was all fifteen, and `diffs` below was a
+           * third rule again (`pickPosition <= 11`, with no Bench Boost case).
+           *
+           * The consequence is not a rounding difference, it is a sign error. A
+           * 60%-owned player sitting on my bench scores the field and not me —
+           * the single worst place he can be — and he was excluded from
+           * "Threats" for being mine and then listed under "Shields — they
+           * protect your rank". He protects nothing; he is the threat.
+           */
+          const benchBoosted = data.squad.activeChip === "bboost";
+          const inMyXi = (p: { pickPosition: number }) => p.pickPosition <= 11 || benchBoosted;
+          const myIds = new Set(
+            data.squad.players.filter(inMyXi).map((p) => p.element.id)
+          );
           const pct = (v: number) => `${Math.round(v * 100)}%`;
           const ranked = [...ownership.eo.entries()].sort((a, b) => b[1] - a[1]);
           const threats = ranked
@@ -430,7 +448,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
            */
           const shields = ranked.filter(([id, v]) => myIds.has(id) && v >= 0.4).slice(0, 5);
           const diffs = data.squad.players
-            .filter((p) => p.pickPosition <= 11 && (ownership.eo.get(p.element.id) ?? 0) <= 0.2)
+            .filter((p) => inMyXi(p) && (ownership.eo.get(p.element.id) ?? 0) <= 0.2)
             .slice(0, 5);
           const Item = ({ id, v }: { id: number; v: number }) => (
             <li className="flex items-center justify-between gap-2">

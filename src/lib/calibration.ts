@@ -219,12 +219,44 @@ export function calibrationMultiplier(f: CalibrationFactors, pos: number): numbe
 
 const key = (demo: boolean, k: string) => `${demo ? "demo-" : ""}fpl-${k}`;
 
+/**
+ * Force stored factors back into the range the model is allowed to apply them
+ * in, and drop anything that is not a finite number.
+ *
+ * THE ONLY VALIDATION HERE USED TO BE `s?.factors?.byPos` — an object test,
+ * which `{}`, `{"1": "1.2"}` and `{"1": null}` all pass, and which says nothing
+ * at all about `global`. `calibrationMultiplier` then computes
+ * `clamp(global * byPos, 0.7, 1.35)`, and `Math.max(0.7, Math.min(1.35, NaN))`
+ * is `NaN`: one bad value in `localStorage` turns EVERY projection in the app
+ * into `NaN`, silently, on every load until the reader clears site data.
+ *
+ * That is not hypothetical paranoia about a hand-edited store. This state is
+ * persisted under a fixed key and survives upgrades, so any future change to
+ * the shape of `CalibrationFactors` reaches this function as last version's
+ * JSON — and a release that renames or re-types a field is exactly how a
+ * finite number stops being one.
+ *
+ * Out-of-range is clamped rather than discarded (a factor of 2 saved by some
+ * older rule still means "the model over-rates"), but non-finite is discarded:
+ * there is no value in it to preserve.
+ */
+function sanitiseFactors(f: CalibrationFactors): CalibrationFactors {
+  const num = (v: unknown): number =>
+    typeof v === "number" && Number.isFinite(v) ? clamp(v, CAL_CONFIG.factorMin, CAL_CONFIG.factorMax) : 1;
+  const byPos: Record<number, number> = {};
+  for (const pos of [1, 2, 3, 4]) byPos[pos] = num(f?.byPos?.[pos]);
+  return { global: num(f?.global), byPos };
+}
+
 export function loadCalibration(demo: boolean, season?: string | null): CalibrationState {
   try {
     const raw = localStorage.getItem(key(demo, "calibration"));
     if (raw) {
       const s = JSON.parse(raw) as CalibrationState;
       if (s?.factors?.byPos) {
+        // See `sanitiseFactors`: `byPos` being an object is the only thing
+        // checked above, and it is not enough to make the numbers numbers.
+        s.factors = sanitiseFactors(s.factors);
         /*
          * A NEW SEASON CLEARS WHAT IS SEASON-SHAPED AND KEEPS WHAT IS NOT.
          *
@@ -302,10 +334,32 @@ export async function reconcileFinishedGws(
 ): Promise<boolean> {
   const season = currentSeasonName(bootstrap.events);
   let state = loadCalibration(demo, season);
-  // The season rollover above is itself a change worth persisting: without
-  // this, the reset is recomputed on every load until something else happens
-  // to save, and any snapshot dropped below stays orphaned in the meantime.
-  let changed = state.season !== loadRawSeason(demo);
+  /*
+   * TWO DIFFERENT QUESTIONS, AND THEY WERE ONE VARIABLE.
+   *
+   * `dirty` is "this must be written back". The season rollover above qualifies
+   * — without it the reset is recomputed on every load until something else
+   * happens to save, and any snapshot dropped below stays orphaned meanwhile —
+   * and so does a dropped or failed snapshot.
+   *
+   * The RETURN VALUE is a different claim: this function's contract is that
+   * callers re-project when it says true, and a re-projection is the most
+   * expensive thing the app does. None of those three moves a factor, so none
+   * of them changes a single number a re-projection would produce.
+   *
+   * Conflating them cost a whole re-projection per load, forever, on any device
+   * where `localStorage.setItem` throws — Safari private browsing, a full
+   * quota. The stamp never lands, so `state.season !== loadRawSeason(demo)` is
+   * true on the next load too, and on every load after that, to re-derive
+   * factors that are still identity.
+   *
+   * `factors` is replaced only by `applyGwOutcome`, so reference inequality is
+   * exactly "a gameweek was graded" — conservative in the safe direction: it
+   * can report a change when a graded week happened to move nothing, never the
+   * other way round.
+   */
+  const factorsBefore = state.factors;
+  let dirty = state.season !== loadRawSeason(demo);
   const posOf = new Map(bootstrap.elements.map((e) => [e.id, e.element_type]));
   const drop = (gw: number) => {
     try {
@@ -335,7 +389,7 @@ export async function reconcileFinishedGws(
       if (season != null && snap.season != null && snap.season !== season) {
         drop(ev.id);
         state = { ...state, reconciled: [...state.reconciled, ev.id] };
-        changed = true;
+        dirty = true;
         continue;
       }
       const actuals = await getActuals(ev.id);
@@ -344,12 +398,12 @@ export async function reconcileFinishedGws(
         return { pos: posOf.get(id) ?? 3, pred, actual: actuals.get(id) ?? 0 };
       });
       state = applyGwOutcome(state, ev.id, entries, Date.now());
-      changed = true;
+      dirty = true;
       drop(ev.id);
     } catch {
       /*
        * Grading failed (live data gone, malformed snapshot) — skip this GW
-       * permanently. `changed` MUST be set, and the key MUST go.
+       * permanently. `dirty` MUST be set, and the key MUST go.
        *
        * Neither used to happen. If this was the only gameweek in the pass,
        * nothing saved, so every later page load re-fetched the same dead
@@ -358,7 +412,7 @@ export async function reconcileFinishedGws(
        * that becomes next season's poison above.
        */
       state = { ...state, reconciled: [...state.reconciled, ev.id] };
-      changed = true;
+      dirty = true;
       drop(ev.id);
     }
   }
@@ -368,9 +422,9 @@ export async function reconcileFinishedGws(
    * next load see a season mismatch — which would clear `reconciled` and
    * re-grade the whole season, permanently, from one bad bootstrap.
    */
-  if (changed) saveCalibration(demo, { ...state, season: season ?? state.season ?? null });
+  if (dirty) saveCalibration(demo, { ...state, season: season ?? state.season ?? null });
   setActiveCalibration(state.factors);
-  return changed;
+  return state.factors !== factorsBefore;
 }
 
 /** Demo mode: seed a plausible learning history so the feature is visible. */

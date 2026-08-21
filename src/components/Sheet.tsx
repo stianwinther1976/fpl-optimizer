@@ -40,21 +40,25 @@ export default function Sheet({
     const FOCUSABLE =
       'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-        return;
-      }
-      if (e.key !== "Tab") return;
+      if (e.key !== "Escape" && e.key !== "Tab") return;
       const panel = panelRef.current;
       if (!panel) return;
       /*
-       * ONLY THE TOPMOST SHEET TRAPS.
+       * ONLY THE TOPMOST SHEET HANDLES THE KEY — EITHER KEY.
        *
-       * Both listeners are on `document`, so with two sheets open every Tab was
-       * handled twice: the lower sheet yanked focus into itself, then the upper
-       * one yanked it to ITS first control — pinning focus to a single element
-       * and making the middle of the top sheet unreachable. That is worse than
-       * no trap, which at least walked through everything.
+       * Both listeners are on `document`, so with two sheets open every press
+       * was handled twice. For Tab that pinned focus: the lower sheet yanked it
+       * into itself, then the upper one yanked it to ITS first control, making
+       * the middle of the top sheet unreachable — worse than no trap, which at
+       * least walked through everything.
+       *
+       * ESCAPE HAD THE SAME SHAPE and was left out of the guard on the reading
+       * that letting it through "from either sheet" was generous. It is not: it
+       * closed BOTH. WAI-ARIA's dialog pattern is that Escape dismisses the
+       * dialog it is in, and here the sheet underneath is a chip scenario that
+       * took seconds to compute — so opening a player from it, glancing at his
+       * fixtures and pressing Escape threw away the thing the reader was
+       * actually looking at. One press, one sheet.
        *
        * It is reachable: a chip sheet's player row opens `PlayerModal` without
        * closing the chip sheet, so the two stack. The topmost is the last
@@ -62,6 +66,10 @@ export default function Sheet({
        */
       const dialogs = [...document.querySelectorAll('[role="dialog"]')];
       if (dialogs.length > 1 && dialogs[dialogs.length - 1] !== panel) return;
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
       const items = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
         (el) => el.offsetParent !== null || el === document.activeElement
       );

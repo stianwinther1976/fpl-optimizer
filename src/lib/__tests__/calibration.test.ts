@@ -365,7 +365,13 @@ describe("persistence across a season boundary", () => {
     const changed = await reconcileFinishedGws(false, boot(2026, 1), async () =>
       new Map(Array.from({ length: 40 }, (_, i) => [i + 1, 0]))
     );
-    expect(changed).toBe(true);
+    /*
+     * FALSE, and that is the point of the test's other two assertions. The
+     * return value means "re-project" — nothing here moved a factor, so a
+     * re-projection would compute the identical numbers at the cost of the most
+     * expensive pass in the app. The work that DID happen is persisted below.
+     */
+    expect(changed).toBe(false);
     // Untouched by a snapshot it had no business grading...
     expect(JSON.parse(store.get("fpl-calibration")!).factors.global).toBe(1);
     // ...and the orphan key is gone, so it cannot poison a later pass either.
@@ -380,8 +386,65 @@ describe("persistence across a season boundary", () => {
     const changed = await reconcileFinishedGws(false, boot(2026, 1), async () => {
       throw new Error("live data gone");
     });
-    expect(changed).toBe(true);
+    // Persisted (below) but not a reason to re-project: no factor moved.
+    expect(changed).toBe(false);
     expect(JSON.parse(store.get("fpl-calibration")!).reconciled).toContain(1);
     expect(store.has("fpl-pred-1")).toBe(false);
+  });
+
+  it("does not ask for a re-projection on every load when storage refuses writes", async () => {
+    /*
+     * Safari private browsing and a full quota both make `setItem` throw. The
+     * season stamp then never lands, so the rollover is re-detected on the next
+     * load, and the next — and while `changed` was one variable that meant a
+     * full re-projection, forever, to arrive at identity factors.
+     */
+    const real = Object.getOwnPropertyDescriptor(globalThis, "localStorage")!;
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: () => {
+          throw new Error("QuotaExceededError");
+        },
+        removeItem: (k: string) => void store.delete(k),
+      },
+    });
+    try {
+      for (let load = 0; load < 3; load++) {
+        expect(
+          await reconcileFinishedGws(false, boot(2026, 1), async () => new Map())
+        ).toBe(false);
+      }
+    } finally {
+      Object.defineProperty(globalThis, "localStorage", real);
+    }
+  });
+
+  it("refuses to load a factor that is not a finite number", () => {
+    /*
+     * `calibrationMultiplier` is `clamp(global * byPos, 0.7, 1.35)`, and
+     * `Math.max(0.7, Math.min(1.35, NaN))` is `NaN` — so one bad value in the
+     * store turns every projection in the app into NaN until site data is
+     * cleared. The old guard was `s?.factors?.byPos`, an object test, which
+     * says nothing about either number.
+     */
+    store.set(
+      "fpl-calibration",
+      JSON.stringify({
+        factors: { global: null, byPos: { 1: "1.2", 2: 5, 3: 0.9, 4: 1 } },
+        log: [],
+        reconciled: [],
+        season: "2026/27",
+      })
+    );
+    const f = loadCalibration(false, "2026/27").factors;
+    expect(f.global).toBe(1); // null is not a number
+    expect(f.byPos[1]).toBe(1); // nor is a numeric string
+    expect(f.byPos[2]).toBe(CAL_CONFIG.factorMax); // out of range, but a real value: clamped
+    expect(f.byPos[3]).toBe(0.9); // untouched
+    for (const pos of [1, 2, 3, 4]) {
+      expect(Number.isFinite(calibrationMultiplier(f, pos))).toBe(true);
+    }
   });
 });
