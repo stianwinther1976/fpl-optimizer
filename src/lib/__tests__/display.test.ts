@@ -8,6 +8,8 @@ import {
   averageFdr,
   fdrSortKey,
   signedPrice,
+  scoreTier,
+  RETURN_THRESHOLD,
   teamValue,
   valueDelta,
   type BenchRow,
@@ -303,5 +305,57 @@ describe("valueDelta", () => {
     const later = { value: 1183, bank: 2 };
     const earlier = { value: 1154, bank: 15 };
     expect(valueDelta(later, earlier)).toBe(teamValue(later) - teamValue(earlier));
+  });
+});
+
+/*
+ * THE COLOUR USED TO TRACK THE CLOCK, NOT THE SCORE.
+ *
+ * Every live score was painted accent green while the gameweek was unfinished
+ * and plain once it finished, so before kick-off a whole fifteen-man list was
+ * bright green noughts and nothing stood out — which is what the reader
+ * reported. These pin the boundaries to FPL's scoring rules rather than to a
+ * scale someone chose.
+ */
+describe("scoreTier", () => {
+  it("treats nought as nothing to look at", () => {
+    expect(scoreTier(0)).toBe("blank");
+  });
+
+  it("separates an appearance from a return at 3, the smallest scoring event", () => {
+    // 1 for playing, 2 from 60 minutes: present, nothing returned.
+    expect(scoreTier(1)).toBe("played");
+    expect(scoreTier(2)).toBe("played");
+    // An assist is 3; a defender's clean sheet 4; a goal 4-6.
+    expect(scoreTier(3)).toBe("returned");
+    expect(scoreTier(RETURN_THRESHOLD)).toBe("returned");
+  });
+
+  it("keeps every haul in the same tier rather than inventing a boundary", () => {
+    // There is no FPL rule that says where a haul begins, so there is no fourth
+    // tier. If one is ever added it has to be measured first.
+    for (const p of [3, 6, 9, 13, 21]) expect(scoreTier(p)).toBe("returned");
+  });
+
+  it("calls a negative score out rather than folding it in with nought", () => {
+    // A score only goes under zero through a card, an own goal, a missed
+    // penalty or goals conceded. Painting that as "nothing happened" hides the
+    // row most worth seeing, and the first version of this function did.
+    expect(scoreTier(-1)).toBe("negative");
+    expect(scoreTier(-3)).toBe("negative");
+    expect(scoreTier(-0.5)).toBe("negative");
+  });
+
+  it("does not shout about a broken number", () => {
+    expect(scoreTier(NaN)).toBe("blank");
+    expect(scoreTier(Infinity)).toBe("blank");
+    expect(scoreTier(-Infinity)).toBe("blank");
+  });
+
+  it("says nothing about whether the score is final", () => {
+    // Live-or-final is a fact about the gameweek, not the player. Spending the
+    // per-row colour on it is what caused the original problem, so the tier
+    // takes one argument and there is nowhere to put the clock.
+    expect(scoreTier.length).toBe(1);
   });
 });

@@ -5,6 +5,7 @@ import type { Element, Fixture, Team } from "@/lib/types";
 import { fmtPrice } from "@/lib/rules";
 import { teamFixtures } from "@/lib/xp";
 import { playerPhotoUrl } from "@/lib/fpl";
+import { scoreTier, type ScoreTier } from "@/lib/display";
 
 export interface PitchPlayer {
   element: Element;
@@ -12,9 +13,41 @@ export interface PitchPlayer {
   isCaptain?: boolean;
   isVice?: boolean;
   sellPrice?: number;
-  /** Gameweek points to show under the card; final = round complete (different color) */
+  /**
+   * Gameweek points to show under the card. `final` says the round is complete
+   * — it no longer drives the COLOUR, which now says how much the number is
+   * worth reading (see `scoreTier`); it is kept because callers still use it
+   * for the running total beside the gameweek.
+   */
   live?: { points: number; final: boolean };
 }
+
+/*
+ * ONE STEP OF EMPHASIS PER STEP OF MEANING.
+ *
+ * Weight carries as much of this as colour, on purpose: a blank drops to
+ * regular weight and recedes, a return goes bold and green and comes forward.
+ * That way the list still reads correctly for someone who cannot separate the
+ * green from the grey, which colour alone would not.
+ *
+ * Two maps because the two views sit on different grounds. The pitch card is a
+ * translucent black overlay on a photographic background, where the theme's
+ * `muted` has too little contrast, so it uses fixed light values. The list sits
+ * on the panel and uses the theme tokens, which are defined for both schemes.
+ */
+const PITCH_TIER: Record<ScoreTier, string> = {
+  negative: "font-bold text-[#ff5c8a]",
+  blank: "text-zinc-400",
+  played: "text-zinc-100",
+  returned: "font-bold text-[#00ff87]",
+};
+
+const LIST_TIER: Record<ScoreTier, string> = {
+  negative: "font-bold text-danger",
+  blank: "text-muted",
+  played: "",
+  returned: "font-bold text-accent",
+};
 
 const TYPE_COLORS: Record<number, string> = {
   1: "bg-amber-500",
@@ -133,7 +166,7 @@ function PlayerCard({
         {info === "auto" && (
           <>
             {p.live ? (
-              <span className={`font-bold ${p.live.final ? "text-zinc-100" : "text-[#00ff87]"}`}>
+              <span className={PITCH_TIER[scoreTier(p.live.points)]}>
                 {p.live.points} {p.live.points === 1 ? "pt" : "pts"}
               </span>
             ) : (
@@ -427,7 +460,7 @@ function ListView({
     // auto
     if (p.live)
       return (
-        <span className={`font-bold ${p.live.final ? "" : "text-accent"}`}>
+        <span className={LIST_TIER[scoreTier(p.live.points)]}>
           {p.live.points} {p.live.points === 1 ? "pt" : "pts"}
         </span>
       );

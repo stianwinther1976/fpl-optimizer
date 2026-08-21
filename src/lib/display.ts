@@ -213,3 +213,54 @@ export function signedPrice(diffTenths: number | null, fmt: (v: number) => strin
   const sign = diffTenths > 0 ? "+" : diffTenths < 0 ? "−" : "";
   return `${sign}£${fmt(Math.abs(diffTenths))}m`;
 }
+
+/**
+ * How much a live score is worth saying loudly: "blank", "played" or "returned".
+ *
+ * WHAT THIS REPLACES, AND WHY IT WAS BACKWARDS.
+ * Every live score used to be painted accent green while the gameweek was
+ * unfinished and plain once it finished — so the colour tracked THE CLOCK, and
+ * a nought and a fifteen were rendered identically. On a fifteen-man list where
+ * most rows are 0 before kick-off, that is every row shouting at once, which is
+ * the same as none of them shouting. The reader's actual question is "who has
+ * done something", and the number already knows.
+ *
+ * THE BOUNDARIES ARE FPL'S, NOT MINE. Both come off the scoring rules rather
+ * than out of a fitted scale, which matters because there is nothing here to
+ * fit and no data to fit it on:
+ *
+ *   below 0  something went wrong. A score can only go under zero through a
+ *            card, an own goal, a missed penalty or goals conceded, so this is
+ *            never "nothing happened" — it is the row most worth seeing, and an
+ *            earlier version of this function folded it in with 0 and hid it.
+ *   0        nothing has happened. Not on the pitch, or on and yet to touch it.
+ *   1-2      appearance only: 1 point for playing, 2 from 60 minutes. Present,
+ *            nothing returned.
+ *   3+       a return. Three is the smallest scoring event in the game — an
+ *            assist — with a clean sheet at 4 for a defender or keeper and a
+ *            goal at 4 to 6.
+ *
+ * A fourth tier for a haul was considered and left out on purpose: there is no
+ * rule that says where a haul starts, so the boundary would be invented, and
+ * `CLAUDE.md`'s standing rule is not to ship a constant nobody has measured.
+ * Measuring one means a distribution of per-player gameweek scores, which is an
+ * archived-season question — `.github/workflows/measure.yml` is the path. Until
+ * then the emphasis of a 15 comes from the digits, not from a third colour.
+ *
+ * Note the deliberate silence about whether the score is final. Live-or-final
+ * is a fact about the gameweek, not about the player, and it is already stated
+ * once per screen beside the total; spending the per-row colour on it is what
+ * caused this.
+ */
+export type ScoreTier = "negative" | "blank" | "played" | "returned";
+
+/** The smallest single scoring event in FPL: an assist. */
+export const RETURN_THRESHOLD = 3;
+
+export function scoreTier(points: number): ScoreTier {
+  // A non-finite score is a bug upstream, not a return: say nothing loudly.
+  if (!Number.isFinite(points)) return "blank";
+  if (points < 0) return "negative";
+  if (points === 0) return "blank";
+  return points >= RETURN_THRESHOLD ? "returned" : "played";
+}

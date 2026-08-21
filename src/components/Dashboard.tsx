@@ -4,10 +4,10 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { api, entryNotFoundMessage, FplApiError, loadTeamData, fmtNum, fmtRank, rankPercentile, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
-import type { Element, EntryEventPicks, EventLive } from "@/lib/types";
+import type { Element, EntryEventPicks, EventLive, Fixture } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
-import { projectAutoSubs } from "@/lib/live";
+import { projectAutoSubs, LIVE_REFRESH_MS } from "@/lib/live";
 import { netEventPoints, netGwDelta, netGwPoints, valueDelta } from "@/lib/display";
 import { saveRecentTeam } from "@/lib/recent";
 import { launchPool } from "@/lib/pool";
@@ -118,6 +118,8 @@ export default function Dashboard({
   const [data, setData] = useState<TeamData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveData, setLiveData] = useState<EventLive | null>(null);
+  /** Fixtures as of the last live poll — used only to decide when to stop. */
+  const [liveFixtures, setLiveFixtures] = useState<Fixture[] | null>(null);
   const [selected, setSelected] = useState<Element | null>(null);
   const [kpiModal, setKpiModal] = useState<KpiMetric | null>(null);
   // Time machine: view the squad exactly as it was in an earlier gameweek.
@@ -302,18 +304,72 @@ export default function Dashboard({
       data.fixtures.some((f) => f.event === currentEvent) &&
       data.fixtures.filter((f) => f.event === currentEvent).every((f) => f.finished));
 
-  // One live fetch for the pitch view + player breakdowns (skipped off-season).
+  /*
+   * When to STOP polling, which is not the same question as `gwFinished`.
+   *
+   * `gwFinished` reads `data.fixtures`, fetched once when the page loaded. It
+   * therefore cannot become true while the page is open, so using it to stop
+   * the poll would mean never stopping. This reads the fixtures the poll itself
+   * brings down, falling back to the page-load copy until the first tick lands.
+   */
+  const pollFixtures = liveFixtures ?? data?.fixtures ?? [];
+  const livePollDone =
+    currentEvent == null ||
+    (currentEventObj?.finished ?? false) ||
+    (pollFixtures.some((f) => f.event === currentEvent) &&
+      pollFixtures.filter((f) => f.event === currentEvent).every((f) => f.finished));
+
+  /*
+   * LIVE POINTS FOR THE SQUAD VIEW, POLLED — this used to be a single fetch.
+   *
+   * The Live tab has refreshed itself since it was written; the Team tab, which
+   * is the one that opens by default and the one people watch a match on, took
+   * its scores once at page load and then sat there. Nothing on screen said so,
+   * so a score that had stopped updating looked exactly like a score that had
+   * not changed.
+   *
+   * Same terms as `LiveTab`, and each of them is load-bearing:
+   *  - nothing at all once the gameweek is done, or off-season;
+   *  - no tick while the tab is hidden, and one immediate catch-up when it
+   *    comes back, so a phone in a pocket is not polling for ninety minutes;
+   *  - fixtures come down WITH the scores. The stop condition is "every fixture
+   *    this gameweek is finished", and reading that off the page-load copy
+   *    would mean it could never become true — the poll would outlive the
+   *    matches and keep going until the tab closed. `LiveTab` gets this right
+   *    by refetching both, and the same reason applies here.
+   *
+   * The fresh fixtures are kept local rather than written back over
+   * `data.fixtures`: half the dashboard reads that, and widening a
+   * thirty-second poll into a re-render of all of it is not what this is for.
+   */
   useEffect(() => {
     if (currentEvent == null) return;
     let cancelled = false;
-    api
-      .live(currentEvent)
-      .then((l) => !cancelled && setLiveData(l))
-      .catch(() => {});
+    const pull = () => {
+      api
+        .live(currentEvent)
+        .then((l) => !cancelled && setLiveData(l))
+        .catch(() => {});
+      api
+        .fixtures()
+        .then((f) => !cancelled && setLiveFixtures(f))
+        .catch(() => {});
+    };
+    pull();
+    if (livePollDone) return () => void (cancelled = true);
+    const t = setInterval(() => {
+      if (!document.hidden) pull();
+    }, LIVE_REFRESH_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") pull();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [currentEvent]);
+  }, [currentEvent, livePollDone]);
 
   // Load a past gameweek's picks + points when the time machine is used.
   useEffect(() => {

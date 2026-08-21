@@ -4,6 +4,19 @@
 import type { Bootstrap, Element, EventLive, Fixture, Pick } from "./types";
 import { isValidFormation } from "./rules";
 
+/**
+ * How often a screen showing live scores re-reads them, in milliseconds.
+ *
+ * Shared by the Live tab and the squad view so the two cannot drift apart —
+ * they poll the same endpoints, and a reader switching between them should not
+ * find one of them staler than the other for no visible reason.
+ *
+ * Not tuned, and there is nothing here to tune: the proxy caches `event/{id}/
+ * live/` for 25 seconds, so anything faster than that returns the same bytes
+ * and anything much slower wastes the freshness already paid for.
+ */
+export const LIVE_REFRESH_MS = 30_000;
+
 export interface ProvisionalBonus {
   /** elementId -> projected bonus (1..3) for fixtures where bonus isn't final yet */
   byElement: Map<number, number>;

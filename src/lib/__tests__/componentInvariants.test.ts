@@ -145,6 +145,19 @@ describe("the display arithmetic is called, not re-inlined", () => {
     expect(src).not.toMatch(/Math\.max\(1,\s*cells\.flat\(\)\.length\)/);
   });
 
+  it("Pitch colours live scores by the score, not by the clock", () => {
+    const src = read("Pitch.tsx");
+    expect(src).toContain("scoreTier(");
+    // The original, in both the pitch card and the list row: green until the
+    // gameweek finished, so a nought and a fifteen were painted the same and a
+    // pre-kick-off list was fifteen identical bright-green rows.
+    expect(src).not.toMatch(/live\.final \? .* : "text-\[#00ff87\]"/);
+    expect(src).not.toMatch(/live\.final \? "" : "text-accent"/);
+    // Both views go through it — the pitch card and the list are different
+    // grounds and it would be easy to convert one and leave the other.
+    expect(src.match(/scoreTier\(p\.live\.points\)/g)?.length).toBe(2);
+  });
+
   it("KpiHistoryModal signs price moves through signedPrice", () => {
     const src = read("KpiHistoryModal.tsx");
     expect(src).toContain("signedPrice(");
@@ -719,6 +732,71 @@ describe("the launch card's BEST badge cannot contradict its own number", () => 
     expect(src).toMatch(/rankLaunchVariants\(variants\)\.bestIndex/);
     // And nothing re-derives a winner locally by sorting on the horizon.
     expect(src).not.toMatch(/sort\([^)]*horizonXp/);
+  });
+});
+
+describe("the squad view's live poll can actually stop", () => {
+  /*
+   * The Team tab took its live scores once at page load and never again, while
+   * the Live tab had refreshed itself all along — so the default tab, the one
+   * people watch a match on, quietly went stale with nothing on screen saying
+   * so. It polls now, and these pin the two halves that make that safe.
+   *
+   * The subtle one is the stop condition. "Every fixture this gameweek is
+   * finished" read off `data.fixtures` — the page-load copy — can never become
+   * true while the page is open, so the poll would outlive the matches and run
+   * until the tab closed. The poll therefore refetches fixtures and decides
+   * from those.
+   */
+  const src = read("Dashboard.tsx");
+
+  it("decides when to stop from the polled fixtures, not the page-load copy", () => {
+    const at = src.indexOf("const livePollDone =");
+    expect(at).toBeGreaterThan(0);
+    const decl = src.slice(at, src.indexOf(";", src.indexOf("every((f) => f.finished)", at)));
+    expect(decl).toContain("pollFixtures");
+    expect(decl).not.toContain("data.fixtures");
+    // And `pollFixtures` prefers the polled copy over the page-load one.
+    expect(src).toMatch(/const pollFixtures = liveFixtures \?\? data\?\.fixtures/);
+  });
+
+  it("fetches fixtures alongside the scores, or the stop condition never moves", () => {
+    const at = src.indexOf("const pull = () => {");
+    expect(at).toBeGreaterThan(0);
+    const body = src.slice(at, src.indexOf("};", at));
+    expect(body).toContain("api\n        .live(");
+    expect(body).toContain("api\n        .fixtures()");
+  });
+
+  it("does not tick while the tab is hidden, and catches up when it returns", () => {
+    // A phone in a pocket must not poll for ninety minutes.
+    // Anchored past `pull`, because `DeadlineChip`'s countdown declares a
+    // `setInterval` earlier in the file and a bare indexOf finds that one.
+    const at = src.indexOf("const t = setInterval(", src.indexOf("const pull = () => {"));
+    expect(at).toBeGreaterThan(0);
+    const region = src.slice(at, at + 500);
+    expect(region).toContain("document.hidden");
+    expect(region).toContain("visibilitychange");
+    expect(region).toContain('document.visibilityState === "visible"');
+  });
+
+  it("tears the interval and the listener down together", () => {
+    const at = src.indexOf("const onVisible = () => {");
+    const region = src.slice(at, at + 500);
+    expect(region).toContain("clearInterval(t)");
+    expect(region).toContain('removeEventListener("visibilitychange"');
+  });
+
+  it("shares one interval with the Live tab rather than redeclaring it", () => {
+    // Two screens polling the same endpoints at different rates would make one
+    // of them staler than the other for no reason a reader could see.
+    expect(src).toContain("LIVE_REFRESH_MS");
+    const live = read("LiveTab.tsx");
+    expect(live).toContain("LIVE_REFRESH_MS");
+    expect(live).not.toMatch(/const REFRESH_MS\s*=/);
+    expect(fs.readFileSync(path.join(LIB, "live.ts"), "utf8")).toMatch(
+      /export const LIVE_REFRESH_MS\s*=/
+    );
   });
 });
 
