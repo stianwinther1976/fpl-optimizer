@@ -131,7 +131,20 @@ export interface Fixture {
   team_h_difficulty: number;
   team_a_difficulty: number;
   kickoff_time: string | null;
+  /**
+   * Bonus confirmed and the fixture fully settled — NOT "the match has ended".
+   * That is `finished_provisional`, and the two can be hours apart.
+   */
   finished: boolean;
+  /**
+   * The final whistle has gone; bonus points are still provisional.
+   *
+   * FPL sets this at the end of the match and `finished` only once bonus is
+   * confirmed, which after a Saturday afternoon can be a long wait. Without it
+   * the clock had nothing to tell it a match was over and sat on 90' until FPL
+   * settled the bonus.
+   */
+  finished_provisional?: boolean;
   started?: boolean;
   team_h_score: number | null;
   team_a_score: number | null;

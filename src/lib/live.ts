@@ -200,13 +200,30 @@ export function projectAutoSubs(
  * counter would be guessing again.
  */
 export function matchMinute(f: Fixture, now: Date = new Date()): string {
-  if (f.finished) return "FT";
+  // `finished` means BONUS CONFIRMED, not "the match has ended" — after a
+  // Saturday afternoon those are hours apart, and for that whole window the
+  // clock had nothing to tell it the match was over and sat on 90'.
+  if (f.finished || f.finished_provisional) return "FT";
   if (!f.started || !f.kickoff_time) return "";
   // Guard the type as well as the value: this arrives from the network, and a
   // string "54" would render as "54'" by luck and NaN-poison any arithmetic a
   // later caller does on it.
   if (typeof f.minutes === "number" && Number.isFinite(f.minutes) && f.minutes > 0) {
-    return `${Math.min(Math.floor(f.minutes), 120)}'`;
+    const m = Math.floor(f.minutes);
+    /*
+     * FPL STOPS COUNTING AT 90, so a match in stoppage reads exactly 90 and
+     * stays there. Measured on ARS v COV: the feed said 89 at the 89th minute
+     * and then 90 for the rest of a match that ran to 94.
+     *
+     * "90'" for four more minutes of football is a claim the data cannot
+     * support, and it is the reading that got queried. `90+` says what is
+     * actually known — at least ninety, still playing — and is what FPL's own
+     * scoreboard shows. The same applies at 120 for a match that goes to extra
+     * time, which FPL does not run but the cap should not lie about either.
+     */
+    if (m >= 120) return "120+'";
+    if (m >= 90) return "90+'";
+    return `${m}'`;
   }
   const mins = Math.floor((now.getTime() - new Date(f.kickoff_time).getTime()) / 60000);
   if (mins <= 0) return "KO";
