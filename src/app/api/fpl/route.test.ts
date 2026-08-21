@@ -68,6 +68,26 @@ describe("cacheControl", () => {
     expect(cacheControl("fixtures/")).not.toContain("must-revalidate");
   });
 
+  it("stops a browser serving a stale bootstrap around a deadline", () => {
+    /*
+     * `stale-while-revalidate` binds PRIVATE caches too — Chrome has had it in
+     * the HTTP cache since M75 — so `max-age=0` alone let a browser serve a
+     * ten-minute-old `bootstrap-static/` while refreshing behind. Around a
+     * deadline that is the wrong `is_current` / `is_next`, at the one moment
+     * the app must not be wrong about which gameweek it is.
+     */
+    for (const p of ["bootstrap-static/", "entry/1/history/", "element-summary/1/"]) {
+      expect(cacheControl(p)).toMatch(/(^|,\s*)proxy-revalidate(,|$)/);
+    }
+  });
+
+  it("keeps the CDN's stale-while-revalidate grace, which is the point of proxy-revalidate", () => {
+    // `must-revalidate` would bind shared caches too and cost the window that
+    // keeps a cold miss off the reader's critical path.
+    expect(cacheControl("element-summary/1/")).toContain("stale-while-revalidate=86400");
+    expect(cacheControl("bootstrap-static/")).not.toContain("must-revalidate");
+  });
+
   it("does not let max-age silently become non-zero", () => {
     // A browser may reuse for `max-age` seconds without asking, which is the
     // whole defect. Any positive value here reintroduces it.

@@ -1039,6 +1039,52 @@ export const XP_CONFIG = {
    * the thing that actually causes the shortfall, which is how much start
    * probability a club's own squad has failed to account for, and that is a
    * property of squads and not of promotion.
+   *
+   * THE TARGET ITSELF IS NOT IDENTIFIED, and until this block said so it was
+   * the last figure in the pre-season config with no sweep behind it. Run with
+   * `MASS_SWEEP=1`, n = 5680, baseline the shipped 9.6, paired bootstrap:
+   *
+   *   SHIPPED REGIME (ceiling 0.55, clamp 0.55, scope recordless)
+   *     target   Brier    vs 9.6                95% CI
+   *      0.0    0.19954  +0.00088  [-0.00035, +0.00217]   mechanism off
+   *      7.0    0.19922  +0.00055  [-0.00055, +0.00173]
+   *      7.5    0.19911  +0.00045  [-0.00063, +0.00164]
+   *      8.0    0.19894  +0.00028  [-0.00076, +0.00135]
+   *      9.0    0.19865  -0.00001  [-0.00073, +0.00075]
+   *      9.5    0.19867  +0.00001  [-0.00010, +0.00014]
+   *      9.6    0.19866   0.00000   ships
+   *     10.0    0.19895  +0.00028  [-0.00017, +0.00077]
+   *     10.5    0.19923  +0.00057  [-0.00018, +0.00132]
+   *     11.0    0.20011  +0.00144  [+0.00029, +0.00266]   only one that is worse
+   *
+   * Every interval bar 11.0 crosses zero. 9.0 scores 0.19865 against 9.6's
+   * 0.19866 — the surface between 9.0 and 10.0 is flat to the fifth decimal,
+   * and 9.6 is an interior point somebody picked, not a fitted optimum. Do not
+   * re-tune it on this: moving it inside that band is choosing noise.
+   *
+   * WHAT THE SHIPPED REGIME HIDES, and this is the part worth knowing. Rerun
+   * with the record-less ceiling and clamp lifted and the same sweep is sharp:
+   *
+   *   MECHANISM ISOLATED (ceiling 0.97, clamp 1)
+   *     target   Brier    vs 9.6                95% CI
+   *      7.5    0.19896  -0.00130  [-0.00344, +0.00060]   best point estimate
+   *      8.0    0.19898  -0.00129  [-0.00330, +0.00047]
+   *      9.6    0.20026   0.00000   ships
+   *     10.0    0.20135  +0.00109  [+0.00015, +0.00220]
+   *     10.5    0.20306  +0.00280  [+0.00089, +0.00505]
+   *     11.0    0.20542  +0.00516  [+0.00230, +0.00844]
+   *
+   * The ceiling is doing the work the target looks like it is doing. With the
+   * ceiling on, a target of 11.0 costs 0.00144; with it off, 0.00516 — more
+   * than three times as much — and 10.0 and 10.5 become significant too. So the
+   * flatness above is a property of the CLAMP, not evidence that club start
+   * mass does not matter.
+   *
+   * It also puts the isolated minimum near 7.5, BELOW what ships, though
+   * 7.5 vs 9.6 still crosses zero ([-0.00344, +0.00060]) so that is a direction
+   * and not a result. Anyone revisiting this should sweep the target and the
+   * ceiling TOGETHER rather than either alone; one at a time is what produced a
+   * flat surface and a false sense that the value was safe.
    */
   preseasonClubStartMass: 9.6,
   /**
@@ -3926,7 +3972,22 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
     for (let gw = ctx.nextEvent; gw < ctx.nextEvent + horizon && gw <= lastEvent; gw++) {
       const fx = fxIndex.get(gw)?.get(el.team) ?? [];
       const off = gw - ctx.nextEvent;
-      const mmGw = gkMm(off) ?? mm;
+      /*
+       * THE CALL HAS TO SURVIVE THE PER-GAMEWEEK KEEPER MODEL.
+       *
+       * `gkMm(off)` returns non-null for EVERY pre-season keeper, so taking it
+       * neat here threw away the override applied above — and threw it away at
+       * offset 0 too, so the reader's team news moved a keeper's projection by
+       * exactly nothing while `PlayerXp.startCall` still labelled the number as
+       * reader-decided. Measured on a two-keeper club: a deputy's `next` came
+       * out bit-identical with no call, with "starts" and with "benched", while
+       * the same call on a midfielder moved him 1.06 to 2.54.
+       *
+       * The outfield path has never had this problem because its equivalent
+       * (`liftedPStart`) is folded in BEFORE the call rather than after.
+       */
+      const mmGwBase = gkMm(off) ?? mm;
+      const mmGw = call ? applyStartCall(mmGwBase, call) : mmGwBase;
       // Kept per leg, not just summed, because the suspension term below has to
       // charge a ban against the specific match it is served in. `fx` is in
       // kickoff order (see `makeFixtureIndex`), so `legXp[0]` really is first.

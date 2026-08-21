@@ -145,16 +145,33 @@ export interface FieldSplit {
 export function splitByField(
   players: { element: Element; xp: number }[]
 ): FieldSplit {
+  /*
+   * AN ABSTENTION MUST NOT READ AS MAXIMUM EXPOSURE.
+   *
+   * `differential` is `total - shared`, and a player whose ownership FPL did
+   * not publish used to be added to `total` and then skipped past `shared` —
+   * so his whole projection landed in `differential`, i.e. he was counted as
+   * 100% differential. That is the loudest possible reading of "we do not
+   * know", on the number the UI shows as its headline, and it contradicts
+   * `FieldSplit.unknown`'s own doc, which says such players are not counted.
+   *
+   * They are now genuinely not counted: out of `total` as well as out of
+   * `shared`, with `unknown` reporting how many were dropped so the caller can
+   * say the split covers less than the whole squad.
+   *
+   * Not reachable on the 2026-08 snapshot — every element published an
+   * ownership — which is why it never bit.
+   */
   let total = 0;
   let shared = 0;
   let unknown = 0;
   for (const p of players) {
-    total += p.xp;
     const own = ownershipShare(p.element);
     if (own == null) {
       unknown++;
       continue;
     }
+    total += p.xp;
     shared += p.xp * own;
   }
   const differential = total - shared;
@@ -257,13 +274,28 @@ export function preferDifferential<T extends { xp: number; element: Element }>(
   // not a bolder version of the same decision, it is a worse pick.
   const inBand = out.filter((r) => best - r.xp <= tolerance);
   const rest = out.filter((r) => best - r.xp > tolerance);
-  inBand.sort((a, b) => {
-    const oa = ownershipShare(a.element);
-    const ob = ownershipShare(b.element);
-    // Unpublished ownership must not win a tie-break it cannot justify: a
-    // player we know nothing about keeps his points position.
-    if (oa == null || ob == null) return b.xp - a.xp;
+  /*
+   * PARTITION, DO NOT MIX TWO ORDERINGS IN ONE COMPARATOR.
+   *
+   * This used to fall back to `b.xp - a.xp` whenever EITHER side had no
+   * published ownership, which is not a total order: with A(9.5, unknown),
+   * B(10, 0.9) and C(9, 0.1) you get C < B, A < C and B < A — a cycle, and
+   * `Array#sort` is then free to return anything. The intent was right ("a
+   * player we know nothing about keeps his points position"); expressing it
+   * inside the comparator is what broke it.
+   *
+   * Splitting the band first says the same thing and is a valid ordering:
+   * players with a published share are sorted by it, players without keep
+   * their points ordering, and the known ones lead because a stated appetite
+   * for spread is about players the field's holding of is actually known.
+   */
+  const known = inBand.filter((r) => ownershipShare(r.element) != null);
+  const unknown = inBand.filter((r) => ownershipShare(r.element) == null);
+  known.sort((a, b) => {
+    const oa = ownershipShare(a.element)!;
+    const ob = ownershipShare(b.element)!;
     return oa - ob || b.xp - a.xp;
   });
-  return [...inBand, ...rest];
+  unknown.sort((a, b) => b.xp - a.xp);
+  return [...known, ...unknown, ...rest];
 }

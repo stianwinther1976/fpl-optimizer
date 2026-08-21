@@ -61,12 +61,30 @@ export function staleSeconds(path: string): number {
  * Reported from a live match, and measured — the clock sat on 83' while FPL had
  * moved to 89'.
  *
- * Deliberately NOT `must-revalidate`, which binds shared caches too and would
- * cost the `stale-while-revalidate` window that keeps a cold miss off the
- * reader's critical path.
+ * That fixed the live pair. It did NOT bound the rest — see the note inside,
+ * where `proxy-revalidate` closes the half `max-age=0` leaves open.
  */
 export function cacheControl(path: string): string {
-  return `public, max-age=0, s-maxage=${cacheSeconds(path)}, stale-while-revalidate=${staleSeconds(path)}`;
+  /*
+   * `stale-while-revalidate` BINDS BROWSERS TOO, so `max-age=0` alone does not
+   * bound how stale a private cache may go: Chrome has implemented SWR in the
+   * HTTP cache since M75, and `max-age=0, stale-while-revalidate=600` lets it
+   * serve a ten-minute-old `bootstrap-static/` while refreshing behind. Around
+   * a deadline that means the wrong `is_current` / `is_next`, which is the one
+   * moment the app must not be wrong about which gameweek it is.
+   *
+   * The live pair is already safe by a second route — `isLiveFeed` sends
+   * `cache: "no-store"` — but that covers only `fixtures/` and
+   * `event/{id}/live/`. `proxy-revalidate` closes the rest: it forbids serving
+   * stale to SHARED caches only, so the CDN keeps its `s-maxage` window and
+   * its SWR grace (which is what keeps a cold miss off the reader's critical
+   * path), while a browser has to revalidate. `must-revalidate` would have
+   * bound both and cost exactly the thing worth keeping.
+   */
+  return (
+    `public, max-age=0, proxy-revalidate, ` +
+    `s-maxage=${cacheSeconds(path)}, stale-while-revalidate=${staleSeconds(path)}`
+  );
 }
 
 export async function GET(

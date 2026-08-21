@@ -205,7 +205,6 @@ interface ReducedSummary {
  * the next caller asks again.
  */
 const summaryCache = new Map<string, ReducedSummary>();
-const summaryKey = (id: number) => `${currentFeed()}:${id}`;
 
 /** Drop every held summary. Feed switches and tests both need this. */
 export function resetSummaryCache(): void {
@@ -229,10 +228,32 @@ async function fetchSummaries(
   onProgress?: (done: number, total: number) => void,
   signal?: AbortSignal
 ): Promise<{ held: Map<number, ReducedSummary>; requested: number; failed: number }> {
+  /*
+   * PIN THE FEED FOR THE WHOLE LOAD.
+   *
+   * The URL and the cache key both derive from the module-global `demoMode`,
+   * and this
+   * loop runs for tens of seconds over hundreds of players while `setDemoMode`
+   * can flip it synchronously from a navigation. Read per player, a load that
+   * started on the real feed finishes writing REAL footballers' records under
+   * `demo:{id}` keys — and the demo numbers its players 1..300 exactly as three
+   * hundred real players are numbered, so nothing looks wrong afterwards. The
+   * store above is protected by its own sequence guard; this cache sits BELOW
+   * that guard and had none.
+   *
+   * Nothing in production calls `resetSummaryCache()` on a feed switch either
+   * (it is reachable only through the test seam), so the poisoned records would
+   * survive for the life of the page.
+   */
+  const feed = currentFeed();
+  const urlFor = (id: number) =>
+    `${feed === "demo" ? "/api/demo" : "/api/fpl"}/element-summary/${id}/`;
+  const keyFor = (id: number) => `${feed}:${id}`;
+
   const held = new Map<number, ReducedSummary>();
   const queue: number[] = [];
   for (const id of new Set(ids)) {
-    const hit = summaryCache.get(summaryKey(id));
+    const hit = summaryCache.get(keyFor(id));
     if (hit) held.set(id, hit);
     else queue.push(id);
   }
@@ -249,12 +270,12 @@ async function fetchSummaries(
       try {
         let s: ElementSummary;
         try {
-          s = await fetchJson<ElementSummary>(feedUrl(`element-summary/${id}/`), signal);
+          s = await fetchJson<ElementSummary>(urlFor(id), signal);
         } catch {
           if (signal?.aborted) return;
           // Almost always a transient 429/503 under this much concurrency.
           await new Promise((r) => setTimeout(r, 400));
-          s = await fetchJson<ElementSummary>(feedUrl(`element-summary/${id}/`), signal);
+          s = await fetchJson<ElementSummary>(urlFor(id), signal);
         }
         const rec: ReducedSummary = {
           past: reducePastSeason(s),
@@ -264,7 +285,7 @@ async function fetchSummaries(
             starts: r.starts,
           })),
         };
-        summaryCache.set(summaryKey(id), rec);
+        summaryCache.set(keyFor(id), rec);
         held.set(id, rec);
       } catch {
         // Still no data. The model carries on with prices + ep_next for this

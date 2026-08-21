@@ -87,7 +87,23 @@ export function pStartFor(call: StartCall): number {
  * answer is to leave the override off and let the model's own share stand.
  */
 export function applyStartCall(mm: MinutesLike, call: StartCall): MinutesLike {
-  const p = pStartFor(call);
+  /*
+   * `pStart` GETS THE SAME ONE-SIDED TREATMENT AS `share`, AND DID NOT.
+   *
+   * `pStartFor("starts")` is the PRE-SEASON ceiling, 0.97. In season the model
+   * blends observed start share and clamps to 1.0, so an ever-present carries
+   * 1.0 — and taking the override neat then DEMOTED him for being named in the
+   * eleven. Measured on the demo's mid-season universe: 141 of 300 players sit
+   * above 0.97, and every one sampled lost points when told he starts (element
+   * 8: 5.961 to 5.932 next, 18.570 to 18.467 over three gameweeks).
+   *
+   * Small, but strictly the wrong sign, and it contradicted the asymmetry this
+   * file's header states two paragraphs up — while `PlayerXp.startCall` labelled
+   * the demoted number as the reader's own decision. `share` was already
+   * guarded this way; `pStart` was not, and it feeds `p60` and `pPlay` directly.
+   */
+  const asserted = pStartFor(call);
+  const p = call === "starts" ? Math.max(asserted, mm.pStart) : asserted;
   const derived = (p * mm.minsPerStart) / 90;
   return {
     pStart: p,

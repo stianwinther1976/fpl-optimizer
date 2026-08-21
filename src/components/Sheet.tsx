@@ -23,8 +23,54 @@ export default function Sheet({
   useEffect(() => {
     openerRef.current = document.activeElement;
     panelRef.current?.focus();
+    /*
+     * TAB HAS TO STAY INSIDE THE SHEET.
+     *
+     * `aria-modal` is a promise to assistive technology, not a mechanism: the
+     * browser still lets Tab walk straight out. Confirmed in a browser — four
+     * presses left `[role="dialog"]` entirely, and the page behind is neither
+     * `inert` nor `aria-hidden`, so a keyboard or screen-reader user ends up
+     * operating content they cannot see under a full-screen overlay.
+     *
+     * The list is recomputed on each Tab rather than cached because these
+     * sheets change shape while open — the player sheet swaps its fixture list,
+     * the chip sheet reveals a confirm button — and a stale list would trap
+     * focus on a control that no longer exists.
+     */
+    const FOCUSABLE =
+      'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const items = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+        (el) => el.offsetParent !== null || el === document.activeElement
+      );
+      // Nothing focusable inside: hold focus on the panel rather than letting
+      // Tab escape to the page underneath.
+      if (items.length === 0) {
+        e.preventDefault();
+        panel.focus();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === panel)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      } else if (active instanceof Node && !panel.contains(active)) {
+        // Focus already escaped (a click on the page behind, say) — pull it back.
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      }
     };
     document.addEventListener("keydown", onKey);
     const prevOverflow = document.body.style.overflow;

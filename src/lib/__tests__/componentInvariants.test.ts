@@ -104,9 +104,29 @@ describe("clickable table rows are reachable from a keyboard", () => {
     expect(rowsWithClick.map((r) => r.file)).toContain("PointsBreakdown.tsx");
   });
 
-  it.each(["role=", "tabIndex=", "onKeyDown="])("every one declares %s", (attr) => {
+  it.each(["tabIndex=", "onKeyDown="])("every one declares %s", (attr) => {
     const missing = rowsWithClick.filter((r) => !r.block.includes(attr));
     expect(missing.map((m) => m.file)).toEqual([]);
+  });
+
+  it("none of them claims to be a button", () => {
+    /*
+     * `role="button"` WAS THE WRONG FIX AND THIS TEST USED TO REQUIRE IT.
+     *
+     * `<tr>` permits only row and presentation roles. Given `button`, Chromium
+     * exposes the enclosing `<tbody>` as role `none` and drops its rows: the
+     * sixty data rows of the Stats table became flat buttons named
+     * "BOU BOU Mid 1 BOU MID £12…", so price, xP, form, points, xGI and
+     * ownership were read as one unlabelled run-on with no column association —
+     * on the app's main comparison table. Confirmed in Chromium's AX tree.
+     *
+     * The keyboard half was never the problem: `tabIndex` and the Enter/Space
+     * handler above are what make the row operable, and they stay. Losing the
+     * role costs nothing a reader can hear, because the row's own cells carry
+     * the meaning once the table survives.
+     */
+    const claiming = rowsWithClick.filter((r) => /role=\{[^}]*"button"/.test(r.block));
+    expect(claiming.map((m) => m.file)).toEqual([]);
   });
 
   it("every one handles Enter and Space", () => {
@@ -821,6 +841,23 @@ describe("the squad view's live poll can actually stop", () => {
     expect(region).toContain('removeEventListener("visibilitychange"');
   });
 
+  it("orders its own polls, so an older response cannot overwrite a newer", () => {
+    /*
+     * `cancelled` is per-EFFECT, not per-request. Two polls are on the wire
+     * together whenever the client memo has expired, and if the earlier is the
+     * slower it lands last and overwrites the newer scores — points going
+     * backwards. `LiveTab` has always had a `seq` guard and names that symptom;
+     * this poll was added later, copied the shape and not the reason.
+     */
+    const at = src.indexOf("const pull = () => {");
+    expect(at).toBeGreaterThan(0);
+    const body = src.slice(at, src.indexOf("};", at));
+    expect(body).toContain("++livePollSeq.current");
+    // Both setters are gated on it, not just one.
+    expect(body).toMatch(/mine === livePollSeq\.current && setLiveData/);
+    expect(body).toMatch(/mine === livePollSeq\.current && setLiveFixtures/);
+  });
+
   it("shares one interval with the Live tab rather than redeclaring it", () => {
     // Two screens polling the same endpoints at different rates would make one
     // of them staler than the other for no reason a reader could see.
@@ -831,6 +868,38 @@ describe("the squad view's live poll can actually stop", () => {
     expect(fs.readFileSync(path.join(LIB, "live.ts"), "utf8")).toMatch(
       /export const LIVE_REFRESH_MS\s*=/
     );
+  });
+});
+
+describe("the launch drafter reads the store, not the transport", () => {
+  /*
+   * `loadPastSeason` resolves with the answer THAT load fetched, even when the
+   * store rejected it as thinner than what it already holds. The other call
+   * site in this file reads `cachedPastSeason()` for exactly this reason and
+   * says so in a long note; `runLaunch` read `past.data` directly, so a
+   * re-draft that came back worse (300 held, 250 returned) drafted from the
+   * 250 while the pitch beside it projected from the 300 — the split the store
+   * exists to close.
+   */
+  const src = read("OptimizePanel.tsx");
+
+  it("prefers the held records when they are fuller", () => {
+    expect(src).toMatch(/const held = cachedPastSeason\(\);/);
+    expect(src).toMatch(/held\.size > past\.data\.size \? held : past\.data/);
+  });
+
+  it("drafts from those records rather than the transport's map", () => {
+    const at = src.indexOf("buildLaunchVariants(");
+    expect(at).toBeGreaterThan(0);
+    const call = src.slice(at, src.indexOf(");", at));
+    expect(call).toContain("records");
+    expect(call).not.toContain("past.data");
+  });
+
+  it("counts the gap against what is actually being drafted from", () => {
+    // Reporting `past.failed` beside a fuller set of records tells the reader
+    // players are missing that the draft in front of them does have.
+    expect(src).toMatch(/past\.requested - records\.size/);
   });
 });
 

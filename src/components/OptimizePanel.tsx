@@ -96,10 +96,27 @@ export default function OptimizePanel({
         const past = await loadPastSeason(pool, (done, total) =>
           setPhase(`Checking last season… ${done}/${total}`)
         );
+        /*
+         * READ THE STORE, NOT THE TRANSPORT — the same mistake the note two
+         * hundred lines below says was fixed for the other call site.
+         *
+         * `loadPastSeason` resolves with the answer THIS load fetched, even
+         * when the store rejected it as thinner than what it already holds
+         * (`pastSeasonStore`'s `keep` rule). On a flaky connection — 300
+         * players held, a re-draft returning 250 — the drafter built from the
+         * 250 and reported the higher failure count, while the pitch beside it
+         * projected from the 300. That split is what this whole path exists to
+         * close. The same call also surfaces an aborted load's partial map,
+         * since `fetchPastSeason` resolves rather than rejects on abort.
+         */
+        const held = cachedPastSeason();
+        const records = held && held.size > past.data.size ? held : past.data;
         // A player we failed to look up falls back to his price, which is the
         // guess the lookup exists to replace. Say so rather than presenting a
-        // thinner draft as if it were the full one.
-        if (past.failed > 0) setGap({ failed: past.failed, requested: past.requested });
+        // thinner draft as if it were the full one — but only count the ones
+        // still missing from the records actually being drafted from.
+        const missing = Math.max(0, past.requested - records.size);
+        if (missing > 0) setGap({ failed: missing, requested: past.requested });
         setPhase("Drafting your options…");
         await new Promise((r) => setTimeout(r, 20));
         const { variants } = buildLaunchVariants(
@@ -107,7 +124,7 @@ export default function OptimizePanel({
           data.fixtures,
           upcomingEvent,
           5,
-          past.data.size > 0 ? past.data : undefined
+          records.size > 0 ? records : undefined
         );
         setLaunch(variants);
         // Pre-select the draft that scores most over the horizon. Index 0 is
@@ -556,8 +573,12 @@ export default function OptimizePanel({
           />
         </div>
         <div className="flex items-center gap-2">
-          <label className="text-sm text-muted">Horizon:</label>
+          <label htmlFor="opt-horizon" className="text-sm text-muted">
+            Horizon:
+          </label>
           <select
+            id="opt-horizon"
+            aria-label="How many gameweeks to plan over"
             value={horizon}
             onChange={(e) => setHorizon(parseInt(e.target.value))}
             className="rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"

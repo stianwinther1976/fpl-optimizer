@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { fetchPastSeason, fetchRecentForm, rankPercentile, resetSummaryCache } from "../fpl";
+import { fetchPastSeason, fetchRecentForm, rankPercentile, resetSummaryCache, setDemoMode } from "../fpl";
 
 describe("rankPercentile", () => {
   it("uses more decimals the closer to the top you are", () => {
@@ -130,14 +130,19 @@ describe("fetchRecentForm", () => {
  */
 describe("the element-summary layer", () => {
   let calls: number[];
+  /** Full URLs, so which FEED served each player is observable. */
+  let urls: string[];
 
   /** Counts every round trip, and serves both halves of the document. */
-  function mockApi(fail = new Set<number>()) {
+  function mockApi(fail = new Set<number>(), onCall?: (id: number) => void) {
     const original = globalThis.fetch;
     calls = [];
+    urls = [];
     globalThis.fetch = (async (url: string) => {
       const id = Number(String(url).match(/element-summary\/(\d+)/)![1]);
       calls.push(id);
+      urls.push(String(url));
+      onCall?.(id);
       if (fail.has(id)) return { ok: false, status: 503 } as Response;
       return {
         ok: true,
@@ -154,6 +159,56 @@ describe("the element-summary layer", () => {
   }
 
   beforeEach(() => resetSummaryCache());
+
+  it("pins the feed for the whole load, so a mid-load switch cannot poison it", async () => {
+    /*
+     * THE COLLISION THIS EXISTS TO STOP. The URL and the cache key both derive
+     * from a module-global `demoMode`, and this load runs for tens of seconds
+     * over hundreds of players. Read per player, a load that starts on the real
+     * feed and is overtaken by a navigation to the demo finishes writing REAL
+     * footballers' records under `demo:{id}` keys — and the demo numbers its
+     * players 1..300 exactly as three hundred real players are numbered, so
+     * nothing looks wrong afterwards. Nothing in production clears this cache
+     * on a feed switch, so the poisoned records would outlive the page.
+     */
+    setDemoMode(false);
+    // Flip to the demo after the first player is served, mid-load.
+    const restore = mockApi(new Set(), (id) => {
+      if (id === 1) setDemoMode(true);
+    });
+    try {
+      await fetchPastSeason([1, 2, 3, 4], 1);
+      // Every request went to the feed the load STARTED on.
+      expect(urls.every((u) => u.includes("/api/fpl/"))).toBe(true);
+      expect(urls.some((u) => u.includes("/api/demo/"))).toBe(false);
+    } finally {
+      restore();
+      setDemoMode(false);
+    }
+  });
+
+  it("does not serve a real player's record to the demo under his number", async () => {
+    setDemoMode(false);
+    const restore = mockApi(new Set(), (id) => {
+      if (id === 1) setDemoMode(true);
+    });
+    try {
+      await fetchPastSeason([1, 2, 3, 4], 1);
+      restore();
+      // Now genuinely in the demo. Nothing from the real load may be reused,
+      // so every id must be fetched again — from the demo feed this time.
+      const restore2 = mockApi();
+      try {
+        await fetchPastSeason([1, 2, 3, 4], 1);
+        expect(calls.sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+        expect(urls.every((u) => u.includes("/api/demo/"))).toBe(true);
+      } finally {
+        restore2();
+      }
+    } finally {
+      setDemoMode(false);
+    }
+  });
 
   it("reads both halves of one document from a single request", async () => {
     // The dashboard pulls last season on mount; the recent-form pull happens

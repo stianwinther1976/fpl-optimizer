@@ -13,6 +13,7 @@ import {
   teamValue,
   valueDelta,
   type BenchRow,
+  kickoffLabel,
 } from "../display";
 
 /**
@@ -275,6 +276,36 @@ describe("teamValue", () => {
 
 });
 
+/*
+ * THE BENCH/XI BOUNDARY, WHICH NO FIXTURE EVER TOUCHED.
+ *
+ * Every case in this file subs out pick #7, so `pickPosition > 11` could be
+ * flipped to `>= 11` with the whole suite green — and under that mutant a
+ * STARTER at position 11 who is subbed out is counted as bench points, adding
+ * his score to a total that is supposed to exclude him.
+ */
+describe("benchPoints at the boundary", () => {
+  const rows = [
+    { pickPosition: 11, elementId: 11, display: 7 },
+    { pickPosition: 12, elementId: 12, display: 5 },
+  ];
+
+  it("counts position 12 and not position 11", () => {
+    // Neither is in the effective XI, so only the boundary decides.
+    expect(benchPoints(rows, new Set<number>())).toBe(5);
+  });
+
+  it("still excludes a bench player the auto-subs promoted", () => {
+    expect(benchPoints(rows, new Set([12]))).toBe(0);
+  });
+
+  it("counts a starter at 11 for nothing even when he is out of the XI", () => {
+    // Position 11 is the last STARTER. A blanking starter is not bench points;
+    // he is a hole in the eleven, and the sub who replaced him is in the XI.
+    expect(benchPoints([rows[0]], new Set<number>())).toBe(0);
+  });
+});
+
 describe("valueDelta", () => {
   it("points the sign at the later gameweek", () => {
     // The card renders `good: diff > 0` and an up/down arrow off this number,
@@ -296,14 +327,36 @@ describe("valueDelta", () => {
   });
 
   it("reports no movement across a gameweek nothing happened in", () => {
+    // `valueDelta(x, x) === 0` is true for any definition of `teamValue`, so
+    // this is paired with a case that actually moved.
     expect(valueDelta({ value: 1154, bank: 15 }, { value: 1154, bank: 15 })).toBe(0);
+    expect(valueDelta({ value: 1155, bank: 15 }, { value: 1154, bank: 15 })).toBe(1);
   });
 
-  it("agrees with reading the two rows separately", () => {
-    // The helper replaced an inline subtraction; it must not have changed the
-    // number, only made it reachable.
+  it("agrees with a hand-computed answer, not with itself", () => {
+    /*
+     * THIS USED TO BE A TAUTOLOGY. `valueDelta` IS
+     * `teamValue(later) - teamValue(earlier)`, so asserting that equality with
+     * the same helper on the right-hand side holds for ANY definition of
+     * `teamValue` — including the bank double-count this module's header says
+     * it exists to prevent. Mutation-tested: with `teamValue` returning
+     * `value + bank`, six tests in this file went red and this one stayed
+     * green. The expected number is now written out.
+     *
+     * `entry_history.value` ALREADY INCLUDES the bank — the game defines team
+     * value as squad plus bank — so `teamValue` returns it untouched and the
+     * delta is just the change in the published figure:
+     *   1183 − 1154 = 29
+     * The bug this guards against is `value + bank`, which would give
+     *   (1183 + 2) − (1154 + 15) = 14
+     * and it is the difference between those two numbers that the assertion
+     * has to be able to see.
+     */
     const later = { value: 1183, bank: 2 };
     const earlier = { value: 1154, bank: 15 };
+    expect(valueDelta(later, earlier)).toBe(29);
+    expect(valueDelta(later, earlier)).not.toBe(14);
+    // And the helper it replaced an inline subtraction with still agrees.
     expect(valueDelta(later, earlier)).toBe(teamValue(later) - teamValue(earlier));
   });
 });
@@ -357,5 +410,35 @@ describe("scoreTier", () => {
     // per-row colour on it is what caused the original problem, so the tier
     // takes one argument and there is nowhere to put the clock.
     expect(scoreTier.length).toBe(1);
+  });
+});
+
+/*
+ * FPL PUBLISHES A PLACEHOLDER KICKOFF FOR A FIXTURE AWAITING RESCHEDULING and
+ * flags it with `provisional_start_time`. Both places that render a kickoff
+ * printed the placeholder as a settled time — "Sat 15:00" for a match nobody
+ * has scheduled — because the `Fixture` type did not carry the flag, so nobody
+ * knew to look. Same shape as the `minutes` and `finished_provisional` misses.
+ */
+describe("kickoffLabel", () => {
+  const fmt = () => "Sat 15:00";
+
+  it("prints a confirmed time as fact", () => {
+    expect(kickoffLabel({ kickoff_time: "2026-01-01T15:00:00Z" }, fmt)).toBe("Sat 15:00");
+    expect(
+      kickoffLabel({ kickoff_time: "2026-01-01T15:00:00Z", provisional_start_time: false }, fmt)
+    ).toBe("Sat 15:00");
+  });
+
+  it("marks a provisional time rather than hiding it", () => {
+    // The date is still the best guide there is; it just is not a promise.
+    expect(
+      kickoffLabel({ kickoff_time: "2026-01-01T15:00:00Z", provisional_start_time: true }, fmt)
+    ).toBe("Sat 15:00 (TBC)");
+  });
+
+  it("says TBC when there is no time at all", () => {
+    expect(kickoffLabel({ kickoff_time: null }, fmt)).toBe("TBC");
+    expect(kickoffLabel({ kickoff_time: null, provisional_start_time: true }, fmt)).toBe("TBC");
   });
 });

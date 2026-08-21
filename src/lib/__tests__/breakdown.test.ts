@@ -146,3 +146,52 @@ describe("aggregateBreakdown", () => {
     expect(bd.rows.filter((r) => r.total > 0).length).toBe(15);
   });
 });
+
+/*
+ * THE ARMBAND MOVES ON MINUTES, NOT ON XI MEMBERSHIP.
+ *
+ * `capId` used to ask whether the captain was in the effective XI. That is a
+ * different question, and it gives the wrong answer in the two cases where the
+ * XI cannot shed him: Bench Boost, where all fifteen are "in" by construction,
+ * and a blank with no legal auto-sub available. In both the vice was left on
+ * 1x while FPL had already doubled him.
+ */
+describe("the vice captains when the captain does not play", () => {
+  const goal = (id: number) => ({ [id]: [st("goals_scored", 5, 1)] });
+
+  it("under Bench Boost, where the effective XI is all fifteen", () => {
+    // Captain (7) blanks; vice (8) plays 90' and scores.
+    const l = live(goal(8), { 7: 0 });
+    const bd = aggregateBreakdown(
+      [{ gw: 10, picks: picks({ active_chip: "bboost" }), live: l }],
+      squad(),
+      fixtures()
+    );
+    const vice = bd.rows.find((r) => r.elementId === 8)!;
+    // 2 minutes + 5 goal = 7, doubled = 14. The bug reported 7.
+    expect(vice.total).toBe(14);
+    expect(bd.rows.find((r) => r.elementId === 7)!.total).toBe(0);
+  });
+
+  it("with no chip, when no legal auto-substitute exists", () => {
+    // Captain (7) blanks and so does every bench player, so `effectiveXi`
+    // cannot drop him and he stays "in".
+    const l = live(goal(8), { 7: 0, 12: 0, 13: 0, 14: 0, 15: 0 });
+    const bd = aggregateBreakdown([{ gw: 10, picks: picks(), live: l }], squad(), fixtures());
+    expect(bd.rows.find((r) => r.elementId === 8)!.total).toBe(14);
+  });
+
+  it("still doubles a captain who played, chip or not", () => {
+    // The guard must not fire on the ordinary case.
+    const l = live(goal(7));
+    for (const chip of [null, "bboost"]) {
+      const bd = aggregateBreakdown(
+        [{ gw: 10, picks: picks({ active_chip: chip as null }), live: l }],
+        squad(),
+        fixtures()
+      );
+      expect(bd.rows.find((r) => r.elementId === 7)!.total).toBe(14);
+      expect(bd.rows.find((r) => r.elementId === 8)!.total).toBe(2);
+    }
+  });
+});

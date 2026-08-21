@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type TeamData } from "@/lib/fpl";
 import type { EventLive, Fixture, Pick } from "@/lib/types";
 import { matchMinute, projectAutoSubs, provisionalBonus, LIVE_REFRESH_MS } from "@/lib/live";
-import { autoSubView, benchPoints } from "@/lib/display";
+import { autoSubView, benchPoints, kickoffLabel } from "@/lib/display";
 import { ErrorBox, Skeleton, Badge } from "./ui";
 import MatchModal from "./MatchModal";
 
@@ -405,13 +405,12 @@ export default function LiveTab({
                 <div className={`text-xs ${liveNow ? "font-semibold text-accent" : "text-muted"}`}>
                   {f.started
                     ? minute
-                    : f.kickoff_time
-                      ? new Date(f.kickoff_time).toLocaleString("en-GB", {
-                          weekday: "short",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })
-                      : "TBC"}
+                    : kickoffLabel(f, (iso) =>
+                          new Date(iso).toLocaleString("en-GB", {
+                            weekday: "short",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          }))}
                 </div>
               </button>
             );

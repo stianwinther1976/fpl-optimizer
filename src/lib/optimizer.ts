@@ -11,7 +11,7 @@ import type {
   PastSeasonStats,
   RecentForm,
 } from "./types";
-import { MAX_FREE_TRANSFERS, MAX_PER_CLUB, TRANSFER_HIT, VALID_FORMATIONS } from "./rules";
+import { MAX_FREE_TRANSFERS, MAX_PER_CLUB, SQUAD_SIZE, TRANSFER_HIT, VALID_FORMATIONS } from "./rules";
 import { makeFixtureIndex, projectAll, XP_CONFIG, type PlayerXp, type XpContext } from "./xp";
 import {
   preferDifferential,
@@ -132,7 +132,29 @@ export function pickBestXi(
       };
     }
   }
-  if (!best) throw new Error("No valid formation for this squad");
+  /*
+   * SAY WHICH FAILURE THIS IS.
+   *
+   * "No valid formation" is the right message for fifteen players who cannot
+   * be arranged legally. It is the wrong message for the case that actually
+   * reaches here: `buildSquadWithinBudget` filters candidates on a positive
+   * projection, so when nothing in the league has a fixture inside the horizon
+   * every pool comes back empty and this is handed a squad of NOUGHT. Callers
+   * then reported a formation problem for something with nothing to do with
+   * formations, three frames down from the real cause.
+   *
+   * `buildLaunchVariants` deliberately accepts a short squad and drops the card
+   * — see the note on `valueCapOf` — so the check belongs here rather than at
+   * the builder, which must keep returning short for that caller to filter.
+   */
+  if (!best) {
+    throw new Error(
+      squad.length < SQUAD_SIZE
+        ? `Cannot pick an XI from ${squad.length} of ${SQUAD_SIZE} players — ` +
+          `no projected fixtures in the horizon is the usual cause.`
+        : "No valid formation for this squad"
+    );
+  }
   const ranked = [...best.starters].sort((a, b) => b.xp - a.xp);
   best.captain = ranked[0] ?? null;
   best.vice = ranked[1] ?? null;
