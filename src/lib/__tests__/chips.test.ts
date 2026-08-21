@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { chipTiming, chipWindow, seasonStructure, structuralWindows } from "../chips";
+import {
+  chipTiming,
+  chipWindow,
+  seasonStructure,
+  structuralWindows,
+  MATERIAL_GAIN,
+} from "../chips";
 import type { Element, Fixture } from "../types";
 
 const LEAGUE = [1, 2, 3, 4];
@@ -72,6 +78,25 @@ describe("chipWindow", () => {
     expect(chipWindow("wildcard", CHIPS, 25)).toEqual({ start: 20, stop: 38 });
   });
 
+  it("still calls the LAST legal gameweek open, not already closed", () => {
+    /*
+     * THE BOUNDARY, WHICH WAS NEVER TESTED AT THE BOUNDARY.
+     *
+     * The tests around this probed GW5, GW20 and GW25 — comfortably inside and
+     * comfortably outside — so `nextEvent <= c.stop_event` could be flipped to
+     * `<` with the whole suite still green. Mutation-tested: with `<`,
+     * `chipWindow("wildcard", CHIPS, 19)` returns the SECOND window, and the
+     * advisor answers a GW19 reader about GW20-38 while silently writing off
+     * the expiring window's last playable week. CLAUDE.md names this rule as
+     * one the tests pin; it did not.
+     */
+    expect(chipWindow("wildcard", CHIPS, 19)).toEqual({ start: 2, stop: 19 });
+    // And the very next gameweek is the first that belongs to the second.
+    expect(chipWindow("wildcard", CHIPS, 20)).toEqual({ start: 20, stop: 38 });
+    // The opening gameweek of a window is inside it too.
+    expect(chipWindow("wildcard", CHIPS, 2)).toEqual({ start: 2, stop: 19 });
+  });
+
   it("declines to reason at all when the game publishes no windows", () => {
     // Assuming "the whole season" would be a guess about the rules, and the
     // rules changed in 2025/26. Callers treat null as "say nothing".
@@ -135,6 +160,20 @@ describe("chipTiming never points past the chip's own expiry", () => {
     const t = chipTiming("bboost", fx, squad, LEAGUE, 25, 38, closed, 28);
     expect(t.verdict).toBe("closed");
     expect(t.windows).toEqual([]);
+  });
+
+  it("treats the window's last gameweek as playable, not closed", () => {
+    /*
+     * `nextEvent > window.stop` is the other half of the same boundary, and it
+     * was also only ever probed from a distance. Flipped to `>=`, a reader
+     * standing on the final gameweek of a window is told the chip has expired
+     * while they can still play it — the worst possible week to be wrong.
+     */
+    const closing = [{ name: "bboost", start_event: 1, stop_event: 19 }];
+    const t = chipTiming("bboost", fx, squad, LEAGUE, 19, 38, closing, 19);
+    expect(t.verdict).not.toBe("closed");
+    const after = chipTiming("bboost", fx, squad, LEAGUE, 20, 38, closing, 20);
+    expect(after.verdict).toBe("closed");
   });
 
   it("does not re-flag gameweeks the projection already scored", () => {
@@ -225,6 +264,33 @@ describe("chipTiming scores the gameweeks the calendar flagged", () => {
       inHorizonBest: 1,
     });
     expect(seen).toEqual([25]);
+  });
+
+  it("puts the noise floor exactly where MATERIAL_GAIN says, not somewhere in a range", () => {
+    /*
+     * The pair of tests around this bracket the floor only at 0.4 and 5.0, so
+     * mutation-testing moved `MATERIAL_GAIN` from 0.9 to 1.35 with the whole
+     * suite green — an order of magnitude of slack on a value CLAUDE.md
+     * presents as a MEASURED noise floor. A gain either side of the constant
+     * is what actually pins it.
+     *
+     * Read against the constant rather than a literal 0.9: the number is
+     * allowed to change when someone re-measures it, but the boundary must go
+     * on changing with it.
+     */
+    const at = (gain: number) =>
+      chipTiming("bboost", fx, squad, LEAGUE, 20, 38, CHIPS, 23, {
+        scoreGw: () => 10 + gain,
+        inHorizonBest: 10,
+      }).verdict;
+
+    // The test is `edge < MATERIAL_GAIN` is immaterial, so the floor itself
+    // clears and only below it does not.
+    expect(at(MATERIAL_GAIN + 0.01)).toBe("structural-window-ahead");
+    expect(at(MATERIAL_GAIN)).toBe("structural-window-ahead");
+    // Just under: the double is still NAMED — it is a fact about the calendar —
+    // but the app must not recommend waiting for it.
+    expect(at(MATERIAL_GAIN - 0.01)).not.toBe("structural-window-ahead");
   });
 
   it("recommends a flagged gameweek that clears the noise floor", () => {

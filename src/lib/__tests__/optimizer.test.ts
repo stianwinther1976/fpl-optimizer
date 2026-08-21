@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { makeMockBootstrap, makeMockFixtures, makeMockOwned } from "./mockdata";
 import {
   optimize,
@@ -184,6 +186,31 @@ describe("optimize", () => {
     for (const advice of result.chipAdvice) {
       expect(advice.projectedGain).toBeGreaterThanOrEqual(0);
     }
+  });
+
+  it("keeps the zero floors on the Wildcard and Free Hit gains", () => {
+    /*
+     * A TOKEN GUARD, AND HONEST ABOUT BEING ONE.
+     *
+     * The assertion above looks like it pins `Math.max(0, ...)` and does not:
+     * mutation-testing removed BOTH floors and the whole suite stayed green,
+     * because on this fixture the unclamped values are positive anyway.
+     *
+     * They are positive on every fixture, which is the actual problem. Both
+     * quantities are "an optimal squad for this window, minus the one you
+     * hold", and an optimal squad cannot lose to a held one — so the floors
+     * cannot be driven below zero through the public API and there is no
+     * behavioural test to write. Contriving one would be theatre.
+     *
+     * CLAUDE.md leans on the bound anyway ("bounded below by zero... the size
+     * of a gap, not a reason to play the chip"), and floating-point noise
+     * around a genuinely equal squad is exactly when it fires. So the floors
+     * are pinned at the source, with the weakness stated: this catches deletion
+     * and nothing else.
+     */
+    const src = fs.readFileSync(path.join(__dirname, "../optimizer.ts"), "utf8");
+    expect(src).toMatch(/const wcGain = Math\.max\(\s*0,/);
+    expect(src).toMatch(/projectedGain: Math\.max\(0, fhBest\.gain\)/);
   });
 
   it("captain ranking has 5 entries sorted by xp", () => {
@@ -1171,11 +1198,31 @@ describe("chip advice carries season-long timing", () => {
     // The two registers must not overlap: what the projection scored in points
     // is not re-reported as a fixture count, and nothing is suggested for a
     // gameweek the chip cannot be played in.
-    for (const a of result.chipAdvice) {
-      for (const w of a.timing.windows) {
-        expect(w.gw).toBeGreaterThan(13); // nextEvent 11 + horizon 3 - 1
-        if (a.timing.window) expect(w.gw).toBeLessThanOrEqual(a.timing.window.stop);
-      }
+    //
+    // THIS TEST USED TO EXECUTE NO ASSERTIONS AT ALL. The mock calendar has no
+    // double and no blank anywhere, so `timing.windows` is empty for all four
+    // chips and both `expect`s below sat inside a loop that never ran — the
+    // only zero-assertion test in the suite. Mutation-tested: removing BOTH
+    // clips this test names from `chips.ts` left it green.
+    //
+    // The clipping itself is pinned properly in `chips.test.ts`, against a
+    // calendar that actually has structure. What is worth keeping here is that
+    // the two registers do not overlap on the SHIPPED path, so the guard below
+    // states the precondition rather than letting it pass vacuously.
+    const flagged = result.chipAdvice.flatMap((a) =>
+      a.timing.windows.map((w) => ({ chip: a.chip, gw: w.gw, stop: a.timing.window?.stop }))
+    );
+    if (flagged.length === 0) {
+      // Nothing to check, and that is a fact about the fixture, not a pass.
+      expect(
+        result.chipAdvice.every((a) => a.timing.windows.length === 0),
+        "fixture has no structural windows, so the loop below is vacuous"
+      ).toBe(true);
+      return;
+    }
+    for (const f of flagged) {
+      expect(f.gw, `${f.chip} flagged a gameweek already scored`).toBeGreaterThan(13);
+      if (f.stop != null) expect(f.gw, `${f.chip} flagged past its window`).toBeLessThanOrEqual(f.stop);
     }
   });
 

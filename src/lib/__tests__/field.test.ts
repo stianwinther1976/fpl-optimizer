@@ -48,6 +48,34 @@ describe("ownershipShare", () => {
   });
 });
 
+/*
+ * THE THRESHOLDS, NOT FOUR SAMPLE POINTS EITHER SIDE OF THEM.
+ *
+ * The test above pins four ownership values well inside their bands, so
+ * mutation-testing moved every boundary by 50% (0.4 to 0.6, 0.05 to 0.075) and
+ * flipped all three from `>=` to `>` with the whole suite green. The classes
+ * decide what the app calls "template" and what it calls a differential, which
+ * is the only thing this module is for.
+ */
+describe("templateClass boundaries", () => {
+  it("puts a share exactly on a boundary in the HIGHER class", () => {
+    expect(templateClass(0.4)).toBe("template");
+    expect(templateClass(0.15)).toBe("popular");
+    expect(templateClass(0.05)).toBe("mid");
+  });
+
+  it("puts the value just below each boundary in the lower class", () => {
+    expect(templateClass(0.4 - 1e-9)).toBe("popular");
+    expect(templateClass(0.15 - 1e-9)).toBe("mid");
+    expect(templateClass(0.05 - 1e-9)).toBe("differential");
+  });
+
+  it("keeps the ends where they belong", () => {
+    expect(templateClass(1)).toBe("template");
+    expect(templateClass(0)).toBe("differential");
+  });
+});
+
 describe("splitByField", () => {
   it("charges each player's points to the field in proportion to who owns him", () => {
     // 10 points at 75% owned: 7.5 of it arrives for three quarters of the field
