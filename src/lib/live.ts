@@ -172,7 +172,6 @@ export function projectAutoSubs(
   return { out, in: subbedIn, effectiveXi: xi };
 }
 
-/** Approximate match minute from kickoff time (display only). */
 /**
  * The match clock for a fixture.
  *
