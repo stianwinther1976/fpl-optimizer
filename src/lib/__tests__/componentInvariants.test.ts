@@ -735,6 +735,40 @@ describe("the launch card's BEST badge cannot contradict its own number", () => 
   });
 });
 
+describe("a refresh the reader asked for is not answered from a cache", () => {
+  /*
+   * Two caches sit between "Refresh now" and the FPL API, and both used to win.
+   * The client memo holds a live feed for 25 seconds, so a press inside that
+   * window returned the promise the caller already had; and the proxy's header
+   * carried no `max-age`, so the phone could answer out of its own store. Both
+   * are silent: the promise resolves, `updatedAt` is stamped, and the numbers
+   * are minutes old. Pressed, of course, exactly when they look wrong.
+   */
+  const src = read("LiveTab.tsx");
+
+  it("forces past the client memo when the button is pressed", () => {
+    // `lastIndexOf`: the doc block on `refresh` names the button too, and
+    // anchoring on the first mention pointed this at a comment — where it
+    // failed against correct code, which is how it was caught.
+    const at = src.lastIndexOf("Refresh now");
+    expect(at).toBeGreaterThan(0);
+    // The button's own onClick, just above its label.
+    expect(src.slice(Math.max(0, at - 400), at)).toContain("refresh(true)");
+  });
+
+  it("does not force on the timer, which would spend the memo's whole purpose", () => {
+    const at = src.indexOf("const t = setInterval(");
+    expect(src.slice(at, at + 200)).toMatch(/refresh\(\)/);
+  });
+
+  it("passes the flag down to both feeds, not just one", () => {
+    // Forcing `live` and letting `fixtures` come from the memo would refresh
+    // the scores and leave the clock and the finished-flags behind.
+    const at = src.indexOf("Promise.all([api.live(");
+    expect(src.slice(at, at + 120)).toMatch(/api\.live\(currentEvent, force\), api\.fixtures\(force\)/);
+  });
+});
+
 describe("the squad view's live poll can actually stop", () => {
   /*
    * The Team tab took its live scores once at page load and never again, while

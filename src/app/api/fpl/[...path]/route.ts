@@ -49,6 +49,26 @@ export function staleSeconds(path: string): number {
   return cacheSeconds(path) * 2;
 }
 
+/**
+ * The whole `Cache-Control` header, built in one place so it can be tested.
+ *
+ * `max-age=0` IS LOAD-BEARING AND WAS MISSING. `s-maxage` binds shared caches
+ * only; with `public` and no `max-age` a browser has been given no freshness
+ * lifetime at all and falls back to HEURISTIC caching, picking its own — and
+ * iOS Safari picks generously. The 30-second live poll was then answered out of
+ * the phone's own store for minutes at a time, while `updatedAt` was stamped
+ * "now" on every one of those hits: the app reported refreshing and had not.
+ * Reported from a live match, and measured — the clock sat on 83' while FPL had
+ * moved to 89'.
+ *
+ * Deliberately NOT `must-revalidate`, which binds shared caches too and would
+ * cost the `stale-while-revalidate` window that keeps a cold miss off the
+ * reader's critical path.
+ */
+export function cacheControl(path: string): string {
+  return `public, max-age=0, s-maxage=${cacheSeconds(path)}, stale-while-revalidate=${staleSeconds(path)}`;
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
@@ -98,7 +118,7 @@ export async function GET(
     const data = await upstream.json();
     return NextResponse.json(data, {
       headers: {
-        "Cache-Control": `public, s-maxage=${ttl}, stale-while-revalidate=${staleSeconds(joined)}`,
+        "Cache-Control": cacheControl(joined),
       },
     });
   } catch {

@@ -34,11 +34,17 @@ export default function LiveTab({
   const currentEventObj = data.bootstrap.events.find((e) => e.is_current) ?? null;
   const currentEvent = currentEventObj?.id ?? data.squad?.currentEvent ?? null;
 
-  const refresh = useCallback(async () => {
+  /**
+   * @param force for the "Refresh now" button. The client memo holds a live
+   *   feed for 25 seconds, so without this a reader who presses it inside that
+   *   window gets the promise they already had — a control labelled "now" that
+   *   demonstrably does nothing, pressed precisely when the numbers look wrong.
+   */
+  const refresh = useCallback(async (force = false) => {
     if (currentEvent == null) return;
     const my = ++seq.current;
     try {
-      const [l, fx] = await Promise.all([api.live(currentEvent), api.fixtures()]);
+      const [l, fx] = await Promise.all([api.live(currentEvent, force), api.fixtures(force)]);
       if (my !== seq.current) return; // stale response
       setLive(l);
       setFixtures(fx);
@@ -317,7 +323,7 @@ export default function LiveTab({
           <div>{gwDone ? "Gameweek complete — auto-refresh off" : "Auto-refresh every 30s"}</div>
           <button
             type="button"
-            onClick={refresh}
+            onClick={() => refresh(true)}
             className="mt-1 rounded-md border border-border-c bg-panel-2 px-3 py-1.5 hover:border-accent active:border-accent"
           >
             Refresh now
