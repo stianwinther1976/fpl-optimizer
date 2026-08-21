@@ -90,6 +90,27 @@ revert the change and confirm the new test goes red. A test that cannot fail on
 the thing it was written for is worse than no test, and this repo has caught that
 mistake more than once.
 
+3. **Re-audit the fix, not just the bug.** A night of parallel audits found
+   real defects and shipped fixes for all of them; a second pass pointed at
+   those fixes found that **four of them were themselves wrong** — a
+   `Cache-Control` directive that did the reverse of what its own comment
+   claimed, a guard that never fired for any install that exists, a focus trap
+   that fought itself when two sheets were open, and a fallback that
+   reintroduced the bug it replaced.
+
+   Every one had passing tests. Three of the four passed because the test
+   asserted the same thing the code did — the header STRING rather than its
+   semantics, the token rather than the behaviour. That is the mutation-testing
+   rule above failing in a way mutation testing cannot catch: the mutation goes
+   red and the fix is still wrong, because the test and the code share a
+   misunderstanding.
+
+   The only thing that caught them was reading the spec (RFC 9111 for the
+   header) and asking "what state is every existing user actually in?" for the
+   guard. When a fix turns on how something OUTSIDE this repo behaves — an HTTP
+   cache, a browser, FPL's API — the test can only pin what you already believe.
+   Go and check the belief.
+
 ## Testing setup
 
 `vitest.config.ts` is `include: ["src/**/*.test.ts"]`, `environment: "node"`.
