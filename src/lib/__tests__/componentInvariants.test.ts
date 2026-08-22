@@ -1907,6 +1907,20 @@ describe("the Live tab cannot present stale numbers as live", () => {
     expect(src).toMatch(/const stale = staleMin !== null \|\| stallMin !== null;/);
   });
 
+  it("reads the match clock from the live feed, not from fixtures", () => {
+    /*
+     * Measured (probe run 32577720199): FPL holds `fixtures/` at its own edge
+     * for 300s and `event/{gw}/live/` for about 90s, so the fixtures clock runs
+     * 2-8 minutes behind while the player clock stays about 2. Extracting the
+     * better clock and leaving the old call behind would pass every test in
+     * `live.test.ts` while shipping the original lag.
+     */
+    expect(src).toContain("matchMinute(f, updatedAt ?? undefined, liveMatchMinutes(live, f.id))");
+    expect(read("MatchModal.tsx")).toContain(
+      "matchMinute(fixture, undefined, liveMatchMinutes(live, fixture.id))"
+    );
+  });
+
   it("does not blank a populated live view because one poll failed", () => {
     // `if (error)` threw away fifteen rows, the scores and the bench mid-match.
     expect(src).toMatch(/if \(error && !live\)/);

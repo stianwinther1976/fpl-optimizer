@@ -7,6 +7,7 @@ import {
   projectAutoSubs,
   provisionalBonus,
   isInPlay,
+  liveMatchMinutes,
   feedStallMs,
   advanceFeedWatch,
   liveSignature,
@@ -1192,5 +1193,87 @@ describe("feedStallMs — a 200 does not mean the data moved", () => {
       step(w, [fx({ minutes: 90, finished_provisional: true })], 1, T0 + 25 * 60_000)
     ).toBeNull();
     expect(w.sig).toBe("");
+  });
+});
+
+describe("liveMatchMinutes — the fresher of FPL's two clocks", () => {
+  const el = (id: number, minutes: number, fixtures: number[]) =>
+    ({
+      id,
+      stats: { minutes },
+      explain: fixtures.map((fixture) => ({ fixture, stats: [] })),
+    }) as unknown as EventLive["elements"][number];
+  const live = (els: EventLive["elements"]) => ({ elements: els }) as EventLive;
+
+  it("takes the highest minutes among that fixture's players", () => {
+    // Someone playing the whole match reads the match clock; a substitute does
+    // not, so the max is the fixture's minute and the min is nobody's.
+    expect(liveMatchMinutes(live([el(1, 16, [7]), el(2, 4, [7])]), 7)).toBe(16);
+  });
+
+  it("ignores players from other fixtures", () => {
+    expect(liveMatchMinutes(live([el(1, 90, [8]), el(2, 16, [7])]), 7)).toBe(16);
+  });
+
+  it("REFUSES a player with two legs, whose minutes are a gameweek total", () => {
+    /*
+     * The trap this whole function has to survive. `stats.minutes` is summed
+     * across the gameweek, so a player who banked 90 in leg 1 would report 90
+     * for a leg 2 ten minutes old — and the clock would read "90+'" on a match
+     * that had barely started.
+     */
+    expect(liveMatchMinutes(live([el(1, 97, [6, 7])]), 7)).toBeNull();
+    // The single-leg player beside him is still a valid reading.
+    expect(liveMatchMinutes(live([el(1, 97, [6, 7]), el(2, 11, [7])]), 7)).toBe(11);
+  });
+
+  it("is null when nothing can answer, so the caller can fall back", () => {
+    expect(liveMatchMinutes(null, 7)).toBeNull();
+    expect(liveMatchMinutes(live([]), 7)).toBeNull();
+    expect(liveMatchMinutes(live([el(1, 20, [])]), 7)).toBeNull();
+  });
+
+  it("survives a non-numeric minutes field off the network", () => {
+    const junk = { id: 1, stats: { minutes: "16" }, explain: [{ fixture: 7, stats: [] }] };
+    expect(liveMatchMinutes(live([junk] as unknown as EventLive["elements"]), 7)).toBeNull();
+  });
+});
+
+describe("matchMinute prefers whichever clock was refreshed most recently", () => {
+  const fx = (minutes: number): Fixture =>
+    ({
+      id: 7,
+      event: 1,
+      started: true,
+      finished: false,
+      finished_provisional: false,
+      minutes,
+      kickoff_time: "2026-08-22T14:00:00Z",
+    }) as Fixture;
+
+  it("uses the live clock when it leads the fixtures one", () => {
+    // The measured case: IPS-SUN at 14:18:11Z, 18 minutes played.
+    expect(matchMinute(fx(10), undefined, 16)).toBe("16'");
+  });
+
+  it("keeps the fixtures clock when IT leads", () => {
+    // Both are lower bounds; neither can run ahead of the match.
+    expect(matchMinute(fx(13), undefined, 12)).toBe("13'");
+  });
+
+  it("falls back cleanly when the live feed cannot answer", () => {
+    expect(matchMinute(fx(10), undefined, null)).toBe("10'");
+    expect(matchMinute(fx(10), undefined)).toBe("10'");
+  });
+
+  it("still caps at 90+ and still calls full time off the flags", () => {
+    expect(matchMinute(fx(88), undefined, 93)).toBe("90+'");
+    const done = { ...fx(90), finished_provisional: true } as Fixture;
+    expect(matchMinute(done, undefined, 94)).toBe("FT");
+  });
+
+  it("does not let the live clock start a match FPL has not started", () => {
+    const notStarted = { ...fx(0), started: false } as Fixture;
+    expect(matchMinute(notStarted, undefined, 12)).toBe("");
   });
 });

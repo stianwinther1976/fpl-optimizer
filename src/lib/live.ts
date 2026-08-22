@@ -445,7 +445,58 @@ export function projectAutoSubs(
  * frozen is what a scoreboard shows too, and inferring the break from a stalled
  * counter would be guessing again.
  */
-export function matchMinute(f: Fixture, now: Date = new Date()): string {
+/**
+ * The match clock, read from the LIVE endpoint rather than from `fixtures/`.
+ *
+ * MEASURED, and it is the reason this function exists. Probe run 32577720199,
+ * 36 samples 20s apart across the 2026-08-22 15:00 BST kick-offs, recording
+ * FPL's own `age` header on both feeds:
+ *
+ *   `fixtures/`         age climbed 20 -> 301 and reset. Two resets 301s
+ *                       apart, so FPL's edge holds it for 300 SECONDS.
+ *   `event/{gw}/live/`  age never exceeded 92, resetting throughout — roughly
+ *                       a 90-second hold.
+ *
+ * So the clock the app was reading is behind by however far into FPL's own
+ * five-minute cache window the request lands. Sampled on IPS-SUN, kicked off
+ * 14:00:00Z, at 14:18:11Z — 18 minutes of football played:
+ *
+ *   `fixtures[].minutes` ............ 10   (8 minutes behind)
+ *   max player minutes, this fixture  16   (2 minutes behind)
+ *
+ * Across the run `fixtures[].minutes` sawtoothed between roughly 2 and 8
+ * minutes behind, stepping only at the instants `age` reset. The player clock
+ * moved smoothly and stayed about 2 behind. Nothing in this repo caused any of
+ * it and no caching change here can shorten it: it is upstream of the proxy,
+ * the CDN and the poll alike. Reading the other feed is the only lever.
+ *
+ * The comment this replaces claimed `fixtures[].minutes` had been measured
+ * tracking the real clock ("89 at the 89th minute"). No snapshot in this repo
+ * contains an in-play fixture, so that could not be reproduced, and the probe
+ * above contradicts it for the live feed.
+ *
+ * ONE FIXTURE ONLY, WHICH IS THE TRAP. `live.elements[].stats.minutes` is a
+ * GAMEWEEK total, so a player who banked 90 in leg 1 of a double would report
+ * 90 for a leg 2 that kicked off ten minutes ago. Only players with exactly
+ * one `explain` entry are counted — the same guard `provisionalBonus` needed,
+ * for the same reason. In a double that still leaves every single-leg player
+ * to read the clock from; when it leaves nobody, this returns null and the
+ * caller falls back to the fixtures clock.
+ */
+export function liveMatchMinutes(live: EventLive | null, fixtureId: number): number | null {
+  if (!live) return null;
+  let best: number | null = null;
+  for (const el of live.elements ?? []) {
+    const legs = el.explain ?? [];
+    if (legs.length !== 1 || legs[0].fixture !== fixtureId) continue;
+    const m = el.stats?.minutes;
+    if (typeof m !== "number" || !Number.isFinite(m)) continue;
+    if (best === null || m > best) best = m;
+  }
+  return best;
+}
+
+export function matchMinute(f: Fixture, now: Date = new Date(), liveMinutes?: number | null): string {
   // `finished` means BONUS CONFIRMED, not "the match has ended" — after a
   // Saturday afternoon those are hours apart, and for that whole window the
   // clock had nothing to tell it the match was over and sat on 90'.
@@ -454,8 +505,20 @@ export function matchMinute(f: Fixture, now: Date = new Date()): string {
   // Guard the type as well as the value: this arrives from the network, and a
   // string "54" would render as "54'" by luck and NaN-poison any arithmetic a
   // later caller does on it.
-  if (typeof f.minutes === "number" && Number.isFinite(f.minutes) && f.minutes > 0) {
-    const m = Math.floor(f.minutes);
+  /*
+   * The LARGER of the two, because both are lower bounds on how much football
+   * has been played and neither can run ahead of the match. `fixtures/` is
+   * five minutes stale at worst; the live feed is ninety seconds stale at
+   * worst; whichever has been refreshed more recently is the better answer,
+   * and that is exactly what taking the max picks.
+   */
+  const published =
+    typeof f.minutes === "number" && Number.isFinite(f.minutes) ? f.minutes : 0;
+  const fromLive =
+    typeof liveMinutes === "number" && Number.isFinite(liveMinutes) ? liveMinutes : 0;
+  const best = Math.max(published, fromLive);
+  if (best > 0) {
+    const m = Math.floor(best);
     /*
      * FPL STOPS COUNTING AT 90, so a match in stoppage reads exactly 90 and
      * stays there. Measured on ARS v COV: the feed said 89 at the 89th minute

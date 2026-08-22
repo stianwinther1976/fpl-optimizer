@@ -6,6 +6,7 @@ import type { EntryEventPicks, EventLive, Fixture, Pick } from "@/lib/types";
 import {
   bandMedianScore,
   matchMinute,
+  liveMatchMinutes,
   projectAutoSubs,
   provisionalBonus,
   isInPlay,
@@ -547,7 +548,9 @@ export default function LiveTab({
           aria-label="Match scores, scrollable"
         >
           {gwFixtures.map((f) => {
-            const minute = matchMinute(f, updatedAt ?? undefined);
+            // The live feed's clock is measured ~2 min behind against ~5-8
+            // for the fixtures one. See `liveMatchMinutes`.
+            const minute = matchMinute(f, updatedAt ?? undefined, liveMatchMinutes(live, f.id));
             /*
               `isInPlay` IS A FACT ABOUT THE PAYLOAD, not about the screen. A
               fixture kept its green border and its accent-coloured clock while

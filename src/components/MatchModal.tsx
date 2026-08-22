@@ -1,7 +1,7 @@
 "use client";
 
 import type { Element, EventLive, Fixture, Team } from "@/lib/types";
-import { fixtureLines, isInPlay, matchMinute } from "@/lib/live";
+import { fixtureLines, isInPlay, liveMatchMinutes, matchMinute } from "@/lib/live";
 import { kickoffLabel } from "@/lib/display";
 import { PlayerAvatar } from "./Pitch";
 import Sheet, { SheetClose } from "./Sheet";
@@ -103,7 +103,7 @@ export default function MatchModal({
             </div>
             <div className={`text-sm ${liveNow ? "font-semibold text-accent" : "text-muted"}`}>
               {fixture.started
-                ? matchMinute(fixture)
+                ? matchMinute(fixture, undefined, liveMatchMinutes(live, fixture.id))
                 : kickoffLabel(fixture, (iso) =>
                           new Date(iso).toLocaleString("en-GB", {
                             weekday: "short",
