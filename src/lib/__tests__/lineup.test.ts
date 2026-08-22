@@ -272,9 +272,37 @@ describe("persistence", () => {
   it("keeps the demo's calls away from the real feed's", () => {
     // The demo numbers its players 1..300 and so do three hundred real
     // footballers. A call saved against demo id 42 must never reach real id 42.
-    saveStartCalls(true, new Map([[42, "starts"]]));
-    expect(loadStartCalls(false).size).toBe(0);
-    expect(loadStartCalls(true).get(42)).toBe("starts");
+    saveStartCalls(true, 5, new Map([[42, "starts"]]));
+    expect(loadStartCalls(false, 5).size).toBe(0);
+    expect(loadStartCalls(true, 5).get(42)).toBe("starts");
+  });
+
+  it("does not hand back a call made for a gameweek that has been played", () => {
+    /*
+     * The defect this exists for: a reader marks a player "Not in the XI" on a
+     * Saturday morning, and with nothing dating the payload the same write-off
+     * is still applied a month later at whatever gameweek is next — at FULL
+     * strength, because the override now lands on offset 0 alone.
+     */
+    saveStartCalls(false, 5, new Map([[8, "benched"]]));
+    expect(loadStartCalls(false, 5).get(8)).toBe("benched");
+    expect(loadStartCalls(false, 6).size).toBe(0);
+    expect(loadStartCalls(false, 4).size).toBe(0);
+  });
+
+  it("refuses a payload it cannot date, in either direction", () => {
+    // A bare id->call map is what shipped before the stamp existed. An unknown
+    // gameweek is exactly the state this refuses, so it is dropped rather than
+    // honoured against today's.
+    store.set("fpl-start-calls", JSON.stringify({ "8": "starts" }));
+    expect(loadStartCalls(false, 5).size).toBe(0);
+    // And with no gameweek in front of the reader there is nothing to apply a
+    // call to: no stored payload can match a null gameweek, and nothing is
+    // written for one either.
+    saveStartCalls(false, 5, new Map([[8, "starts"]]));
+    expect(loadStartCalls(false, null).size).toBe(0);
+    saveStartCalls(false, null, new Map([[8, "starts"]]));
+    expect(store.has("fpl-start-calls")).toBe(false);
   });
 
   it("drops a key that is not a player id, rather than coercing it to NaN", () => {
@@ -288,28 +316,34 @@ describe("persistence", () => {
      */
     store.set(
       "fpl-start-calls",
-      JSON.stringify({ "8": "starts", x: "benched", "0": "starts", "-3": "benched", "1.5": "starts" })
+      JSON.stringify({
+        gw: 5,
+        calls: { "8": "starts", x: "benched", "0": "starts", "-3": "benched", "1.5": "starts" },
+      })
     );
-    expect([...loadStartCalls(false)]).toEqual([[8, "starts"]]);
+    expect([...loadStartCalls(false, 5)]).toEqual([[8, "starts"]]);
   });
 
   it("drops a stored value it does not recognise rather than coercing it", () => {
-    store.set("fpl-start-calls", JSON.stringify({ 7: "starts", 8: "maybe", 9: null }));
-    const m = loadStartCalls(false);
+    store.set(
+      "fpl-start-calls",
+      JSON.stringify({ gw: 5, calls: { 7: "starts", 8: "maybe", 9: null } })
+    );
+    const m = loadStartCalls(false, 5);
     expect(m.get(7)).toBe("starts");
     expect(m.has(8)).toBe(false);
     expect(m.has(9)).toBe(false);
   });
 
   it("clears the key entirely when the last call is removed", () => {
-    saveStartCalls(false, new Map([[1, "benched"]]));
-    saveStartCalls(false, new Map());
+    saveStartCalls(false, 5, new Map([[1, "benched"]]));
+    saveStartCalls(false, 5, new Map());
     expect(store.has("fpl-start-calls")).toBe(false);
   });
 
   it("survives unreadable storage without throwing", () => {
     store.set("fpl-start-calls", "{not json");
-    expect(loadStartCalls(false).size).toBe(0);
+    expect(loadStartCalls(false, 5).size).toBe(0);
   });
 });
 

@@ -1015,9 +1015,26 @@ describe("the reader's line-up calls are hydrated per feed", () => {
     expect(at).toBeGreaterThan(0);
     // The effect's dependency array, within a few lines of the call.
     const tail = dash.slice(at, at + 200);
-    expect(tail).toMatch(/\}, \[entryId\]\)/);
+    expect(tail).toMatch(/\}, \[entryId, squadNextEvent\]\)/);
     // And it is told WHICH feed, rather than assuming one.
-    expect(dash.slice(at, at + 80)).toMatch(/DEMO_ENTRY_ID/);
+    expect(dash.slice(at, at + 90)).toMatch(/DEMO_ENTRY_ID/);
+  });
+
+  it("re-hydrates when the gameweek moves, and stamps the call with it", () => {
+    /*
+     * A call is about ONE match. `loadStartCalls` drops a payload stamped with
+     * a gameweek that is no longer next, but only the STORE expires — the
+     * in-memory set does not, so a session that stays open across a deadline
+     * would keep applying the expired call until a remount. The gameweek has
+     * to be in the dependency array for the expiry to reach the screen.
+     */
+    const dash = read("Dashboard.tsx");
+    expect(dash).toMatch(/const squadNextEvent = data\?\.squad\?\.nextEvent \?\? null;/);
+    expect(dash).toMatch(/hydrateStartCalls\([^)]*squadNextEvent\)/);
+    // And the write path carries the same gameweek, or nothing saved could
+    // ever be loaded back.
+    const modal = read("PlayerModal.tsx");
+    expect(modal).toMatch(/setStartCall\(\s*demo,\s*nextEvent,/);
   });
 });
 

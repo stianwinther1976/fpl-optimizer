@@ -352,7 +352,18 @@ export default function PlayerModal({
           </div>
         )}
 
-        {/* Team news the model cannot read */}
+        {/*
+          Team news the model cannot read.
+
+          HIDDEN WHEN THERE IS NO NEXT GAMEWEEK, because the call is about one
+          — `loadStartCalls` stamps it with `nextEvent` and refuses a payload
+          it cannot date. With none, the buttons would set something that
+          could not be saved and that the projection has no offset 0 to apply
+          it to. The time machine passes `nextEvent={null}` for the same
+          reason: a press conference cannot be held about a match already
+          played.
+        */}
+        {nextEvent != null && (
         <div className="mt-4">
           <div className="text-sm font-semibold">Do you know if he starts?</div>
           <p className="mt-1 text-xs text-muted">
@@ -369,7 +380,9 @@ export default function PlayerModal({
                 key={call}
                 type="button"
                 aria-pressed={myCall === call}
-                onClick={() => setStartCall(demo, element.id, myCall === call ? null : call)}
+                onClick={() =>
+                  setStartCall(demo, nextEvent, element.id, myCall === call ? null : call)
+                }
                 className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition ${
                   myCall === call
                     ? "border-accent bg-accent/15 text-accent"
@@ -389,6 +402,7 @@ export default function PlayerModal({
             </p>
           )}
         </div>
+        )}
 
         {/* Season stats */}
         <div className="mt-4">

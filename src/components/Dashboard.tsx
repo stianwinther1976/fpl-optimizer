@@ -242,14 +242,27 @@ export default function Dashboard({
    * different footballer. `lineup.ts` keys storage the same way, so this is the
    * one place the two have to agree.
    */
+  // The gameweek a line-up call is about. Same anchor `projectAll` calls
+  // offset 0, so a stamped call and the projection cannot disagree.
+  const squadNextEvent = data?.squad?.nextEvent ?? null;
   const callsVersion = useSyncExternalStore(
     subscribeStartCalls,
     startCallsVersion,
     startCallsVersion
   );
+  /*
+   * RE-HYDRATED ON THE GAMEWEEK, NOT JUST ON THE FEED. A call is about one
+   * match, and `loadStartCalls` now enforces that by dropping a payload
+   * stamped with a gameweek that is no longer next. Keying this effect on
+   * `entryId` alone would leave the expired set in memory until a remount, so
+   * the reader would keep seeing a stale call applied for the rest of the
+   * session. `squadNextEvent` is null while the team is still loading, which
+   * hydrates to empty — the right way round: no call is applied until the app
+   * knows which gameweek it would be applied to.
+   */
   useEffect(() => {
-    hydrateStartCalls(entryId === DEMO_ENTRY_ID);
-  }, [entryId]);
+    hydrateStartCalls(entryId === DEMO_ENTRY_ID, squadNextEvent);
+  }, [entryId, squadNextEvent]);
   useEffect(() => {
     if (!data) return;
     let cancelled = false;
