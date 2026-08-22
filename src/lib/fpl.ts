@@ -162,7 +162,24 @@ async function get<T>(path: string, force = false): Promise<T> {
   if (!force && cached && Date.now() - cached.at < cacheTtl(path)) {
     return cached.promise as Promise<T>;
   }
-  const promise = fetchJson<T>(url, undefined, isLiveFeed(path));
+  /*
+   * A FORCED READ HAS TO GET PAST THE EDGE, NOT JUST PAST THIS MAP.
+   *
+   * `force` skipped the memo above and then asked for the identical URL, so a
+   * CDN holding a copy answered from it — `cache: "no-store"` binds the
+   * BROWSER's cache and says nothing to a shared one. On the live feeds that is
+   * exactly the window the reader presses the button in: the scores look wrong,
+   * they tap "Refresh now", and the edge hands back the same body it just gave
+   * them. A control labelled "now" that cannot reach the origin.
+   *
+   * A unique parameter makes it a different cache key. It costs nothing
+   * upstream: the proxy rebuilds the FPL URL canonically from the path and
+   * drops every query parameter it does not itself understand, so FPL sees the
+   * same clean request either way. It does leave one edge entry per press —
+   * bounded by how fast a person can tap, which is not a cache-key explosion.
+   */
+  const wire = force ? `${url}${url.includes("?") ? "&" : "?"}_=${Date.now()}` : url;
+  const promise = fetchJson<T>(wire, undefined, isLiveFeed(path));
   fetchCache.set(url, { promise, at: Date.now() });
   evictExpired();
   // Failed requests must not be cached, or a retry could never succeed.

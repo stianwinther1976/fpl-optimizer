@@ -564,3 +564,73 @@ describe("what a 404 on an entry means depends on the month", () => {
     expect(msg).not.toMatch(/pre-season/);
   });
 });
+
+describe("Refresh now has to reach the origin, not just skip the memo", () => {
+  /*
+   * `force` skipped the in-memory map and then asked for the IDENTICAL URL, so
+   * a CDN holding a copy answered from it — `cache: "no-store"` binds the
+   * browser's own cache and says nothing to a shared one. On the live feeds
+   * that is exactly the window the reader presses the button in: the scores
+   * look wrong, they tap "Refresh now", and the edge hands back the body it
+   * just gave them.
+   *
+   * The proxy rebuilds the FPL URL canonically from the path and drops every
+   * query parameter it does not understand, so the buster costs nothing
+   * upstream — `route.test.ts` pins that half.
+   */
+  const seen: string[] = [];
+  const withSpy = async (fn: () => Promise<unknown>) => {
+    const original = globalThis.fetch;
+    seen.length = 0;
+    resetFetchCache();
+    globalThis.fetch = (async (u: string) => {
+      seen.push(String(u));
+      return { ok: true, status: 200, json: async () => ({}) } as Response;
+    }) as unknown as typeof fetch;
+    try {
+      await fn();
+    } finally {
+      globalThis.fetch = original;
+      resetFetchCache();
+    }
+  };
+
+  it("asks for a different URL when forced", async () => {
+    await withSpy(async () => {
+      await api.fixtures();
+      await api.fixtures(true);
+    });
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).not.toMatch(/[?&]_=/);
+    expect(seen[1]).toMatch(/[?&]_=\d+/);
+    // Same endpoint either way — only the cache key differs.
+    expect(seen[1].split("?")[0]).toBe(seen[0]);
+  });
+
+  it("leaves an unforced read on the plain URL, so the memo still works", async () => {
+    await withSpy(async () => {
+      await api.live(3);
+      await api.live(3);
+    });
+    // Second call served from the memo: one round trip, no buster.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toMatch(/[?&]_=/);
+  });
+
+  it("keys the memo on the clean URL, so a forced read still fills it", async () => {
+    await withSpy(async () => {
+      await api.live(4, true);
+      await api.live(4);
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatch(/[?&]_=\d+/);
+  });
+
+  it("appends with & when the path already carries a query", async () => {
+    await withSpy(async () => {
+      await api.league(314, 2);
+    });
+    expect(seen[0]).toContain("page_standings=2");
+    expect(seen[0]).not.toMatch(/\?_=/);
+  });
+});
