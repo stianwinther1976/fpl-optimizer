@@ -1267,12 +1267,12 @@ function ChipSheet({
         <div className="mt-0.5 text-muted">
           {/*
             THE SAME CAVEAT THE CARD CARRIES, ON THE MORE PROMINENT RENDER.
-            `wcGain` is `max(0, bestSquadWithinValue − keepSquad)` — bounded
-            below by zero, and a freshly optimised squad beats a held one over
-            ANY window, so it is almost always comfortably positive. The advisor
-            card says in so many words that this is the size of a gap and not a
-            reason to play the chip; this sheet showed the identical quantity
-            with no such sentence, under a bigger heading.
+            `wcGain` is the best reachable squad minus keeping — bounded below
+            by zero and by the best transfer plan on screen, so it is almost
+            always comfortably positive. The advisor card says in so many words
+            that this is the size of a gap and not a reason to play the chip;
+            this sheet showed the identical quantity with no such sentence,
+            under a bigger heading.
           */}
           {s.chip === "wildcard" && (
             <>Projected to gain <b className="text-foreground">+{s.gain.toFixed(1)} pts</b> over {s.horizon} gameweeks vs keeping your team. That is the size of the gap between your squad and the best one your money can buy — not a reason to play the chip this week.</>

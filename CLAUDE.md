@@ -326,9 +326,18 @@ Two rules the tests pin, both of which produce actively wrong advice if broken:
   null for both, so an expired chip came back as *unknown* and the advisor said
   nothing instead of saying it had expired.
 
-Note also that `wcGain` is `max(0, bestSquadWithinValue − keepSquad)` — bounded
-below by zero, and a fresh squad beats a held one over *any* window. It is the
-size of a gap, not a reason to play the chip, and the copy says so.
+`wcGain` is the best of three things minus keeping: the greedily-built squad
+within team value, the squad itself, and every squad the transfer beam already
+evaluated (a wildcard can make those moves without the hit). It is therefore
+bounded below by zero and by the best transfer plan on screen — which it was
+NOT before, because the builder maximises the sum of `totalDiscounted` over all
+fifteen while `horizonScore` counts only the best XI, so its squad is a local
+optimum of the wrong objective. Measured on the demo, unclamped: 0.269 / 3.164
+/ 0.663 / 0.690 / 5.440 at horizons 1/2/3/5/8, against a best single transfer
+of 0.375 / 1.199 / 1.143 / 1.283 / 2.663 — the chip losing to one free transfer
+at three of the five. The floor removes the contradiction; it does not repair
+the objective mismatch, which is the "known gap" above. It remains the size of
+a gap, not a reason to play the chip, and the copy says so.
 
 Pre-season there are no blanks or doubles at all: the opening calendar is 380
 fixtures, one per club per gameweek. They appear later as cup runs and

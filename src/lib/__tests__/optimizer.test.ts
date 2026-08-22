@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { makeMockBootstrap, makeMockFixtures, makeMockOwned } from "./mockdata";
+import { makeDemoUniverse } from "../demo";
 import {
   optimize,
   chipScenario,
@@ -211,7 +212,17 @@ describe("optimize", () => {
      * and nothing else.
      */
     const src = fs.readFileSync(path.join(__dirname, "../optimizer.ts"), "utf8");
-    expect(src).toMatch(/const wcGain = Math\.max\(\s*0,/);
+    /*
+     * The Wildcard's floor is no longer a literal `Math.max(0, ...)`. It takes
+     * the best of the built squad, KEEPING the squad, and every squad the beam
+     * already evaluated — and "keeping" is what puts the floor at zero, now
+     * structurally rather than by clamping. That is the stronger version of the
+     * same bound, and there IS a behavioural test for it two describes below:
+     * the gain can no longer come out under the best transfer plan, which is
+     * what the old clamp was hiding.
+     */
+    expect(src).toMatch(/const wcBase = Math\.max\(/);
+    expect(src).toMatch(/keepHorizonXp,\n\s*\.\.\.plans\.map\(\(p\) => p\.grossXp\)/);
     expect(src).toMatch(/projectedGain: Math\.max\(0, fhBest\.gain\)/);
   });
 
@@ -1704,5 +1715,77 @@ describe("the horizon total on screen is points, not the ranking key", () => {
     // weighted one did, by a fifth.
     const five = run(5);
     expect(five.keepHorizonPlainXp / 5).toBeGreaterThan(five.keepXi.totalXp * 0.85);
+  });
+});
+
+describe("the Wildcard cannot be worth less than one transfer", () => {
+  /*
+   * `dreamSquadWithinValue` maximises the sum of `totalDiscounted` over all
+   * FIFTEEN at par while `horizonScore` counts only the best XI — two
+   * objectives, so its squad is a local optimum of the wrong one. Measured on
+   * the demo, same squad, same week, unclamped:
+   *
+   *   horizon      1       2       3       5       8
+   *   wildcard   0.269   3.164   0.663   0.690   5.440
+   *   1 transfer 0.375   1.199   1.143   1.283   2.663
+   *
+   * so at three of the five the "best squad your money can buy" was worth less
+   * than a move the app recommends with one free transfer — which cannot be
+   * true, because a wildcard can make that move too. Every squad the beam
+   * already evaluated is reachable on the chip WITHOUT the hit, so `grossXp`
+   * is a lower bound and costs nothing to apply.
+   */
+  /*
+   * ON THE DEMO, NOT THE MOCK. Mutation-testing showed why: with the floor
+   * removed, the mock's squad still comes out fine — the greedy build happens
+   * to dominate there — so a test on `makeMockBootstrap` could not fail on the
+   * thing it was written for. The demo's mid-season universe is where the two
+   * objectives actually come apart, and it is where the table above was
+   * measured.
+   */
+  const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+  const run = (horizon: number) => {
+    const u = makeDemoUniverse(NOW);
+    const bootstrap = u.bootstrap;
+    const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
+      const element = bootstrap.elements.find((e) => e.id === p.element)!;
+      return {
+        element,
+        sellPrice: element.now_cost,
+        purchasePrice: element.now_cost,
+        pickPosition: i + 1,
+        isCaptain: p.is_captain,
+        isViceCaptain: p.is_vice_captain,
+      };
+    });
+    return optimize({
+      bootstrap,
+      fixtures: u.fixtures,
+      owned,
+      bank: 5,
+      freeTransfers: 1,
+      nextEvent: bootstrap.events.find((e) => e.is_next)!.id,
+      horizon,
+    });
+  };
+
+  it("is never beaten by a transfer plan the same panel recommends", () => {
+    for (const horizon of [1, 2, 3, 5]) {
+      const res = run(horizon);
+      const wc = res.chipAdvice?.find((c) => c.chip === "wildcard");
+      const best = Math.max(0, ...res.plans.map((p) => p.gainVsKeep));
+      expect(wc, `h=${horizon}`).toBeTruthy();
+      expect(wc!.projectedGain, `h=${horizon}`).toBeGreaterThanOrEqual(best - 1e-9);
+    }
+  });
+
+  it("is still bounded below by zero", () => {
+    // Keeping the squad is one of the things it takes the best of, so a
+    // negative gap is not reachable — but it was `Math.max(0, …)` before and
+    // dropping that clamp must not reintroduce one.
+    for (const horizon of [1, 3, 5]) {
+      const wc = run(horizon).chipAdvice?.find((c) => c.chip === "wildcard");
+      expect(wc!.projectedGain).toBeGreaterThanOrEqual(0);
+    }
   });
 });

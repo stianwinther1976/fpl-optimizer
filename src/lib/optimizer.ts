@@ -696,11 +696,41 @@ export function optimize(input: OptimizerInput): OptimizerResult {
         : `Best in GW${tcBest.gw}${gwNote(tcBest.gw)}: ${tcBest.name} would add ~${tcBest.gain.toFixed(1)} extra points (3x instead of 2x).`,
     timing: timingFor("3xc"),
   });
-  const wcGain = Math.max(
-    0,
-    horizonScore(dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank)), xp, gws, scoreCache) -
-      keepHorizonXp
+  /*
+   * THE WILDCARD CANNOT BE WORSE THAN ONE TRANSFER, AND IT WAS.
+   *
+   * `dreamSquadWithinValue` maximises the sum of `totalDiscounted` over all
+   * FIFTEEN at par, while `horizonScore` counts only the best XI — two
+   * objectives, so the squad it hands back is a local optimum of the wrong one.
+   * The signature is a gain that is not monotone in the horizon and that the
+   * app's own single transfer beats. Measured on the demo, same squad, same
+   * week, unclamped:
+   *
+   *   horizon      1       2       3       5       8
+   *   wildcard   0.269   3.164   0.663   0.690   5.440
+   *   1 transfer 0.375   1.199   1.143   1.283   2.663
+   *
+   * At horizons 1, 3 and 5 the "best squad your money can buy" is worth less
+   * than a move the app recommends making with one free transfer — which
+   * cannot be true, because a wildcard can make that move too. Rendered
+   * through `Math.max(0, ...)` the reader saw "your squad is ~0.7 points
+   * behind an optimal one", i.e. all but optimal, on the same panel as
+   * "+1.3 xp vs keeping".
+   *
+   * The floor is the fix, and it is free: every squad the beam search already
+   * evaluated is reachable on a wildcard WITHOUT the hit, so `grossXp` — the
+   * plan's score before its hit is deducted — is a lower bound on what the
+   * chip can reach. Keeping the squad is another. This does not repair the
+   * builder's objective mismatch, which is a real and separate defect noted in
+   * CLAUDE.md's "known gaps"; it stops the number contradicting the card next
+   * to it.
+   */
+  const wcBase = Math.max(
+    horizonScore(dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank)), xp, gws, scoreCache),
+    keepHorizonXp,
+    ...plans.map((p) => p.grossXp)
   );
+  const wcGain = wcBase - keepHorizonXp;
   chipAdvice.push({
     chip: "wildcard",
     label: "Wildcard",
@@ -708,10 +738,11 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     /*
      * SAY WHAT THIS NUMBER IS, BECAUSE IT IS NOT WHAT IT LOOKS LIKE.
      *
-     * `wcGain` is `max(0, bestSquadWithinValue - keepSquad)` over the horizon.
-     * It is bounded below by zero and a freshly optimised squad beats a held one
-     * over ANY window, so it is almost always comfortably positive — and the
-     * card then sorts to the top of the advisor and reads as "play this now".
+     * `wcGain` is the best reachable squad minus keeping, over the horizon —
+     * see `wcBase` above for the three things it takes the best of. It is
+     * bounded below by zero and by the best transfer plan on screen, so it is
+     * almost always comfortably positive — and the card then sorts to the top
+     * of the advisor and reads as "play this now".
      * It is not that. It is the gap between your squad and the best one your
      * money can buy, which is a statement about your squad and says nothing
      * about whether this week is the week. The timing note beside it is what
