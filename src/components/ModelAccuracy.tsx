@@ -23,7 +23,24 @@ export default function ModelAccuracy({ demo }: { demo: boolean }) {
   const fmtPct = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(0)}%`;
   const first = log[0];
   const last = log[log.length - 1];
-  const improving = log.length >= 2 && last.mae < first.mae - 1e-9;
+  /*
+   * REPORTED IN BOTH DIRECTIONS, WHICH IT WAS NOT.
+   *
+   * This line was `improving = ... last.mae < first.mae` and the summary
+   * rendered under `{improving && ...}`, so a reader never saw "average miss
+   * UP from X to Y" — the card reported itself only when the news was good,
+   * directly under the unhedged sentence "Systematic misses shrink
+   * automatically over time". That is a self-grading card supplying its own
+   * evidence, and a previous round already removed the causal claim from this
+   * line while leaving both the paragraph and the one-sided rendering in place.
+   *
+   * The threshold is symmetric and the direction decides the wording and the
+   * colour. Nothing is claimed for a change inside it: two gameweeks of
+   * gradeable data is a handful of players and the difference between 1.71 and
+   * 1.73 is not a trend.
+   */
+  const maeDelta = log.length >= 2 ? last.mae - first.mae : 0;
+  const moved = Math.abs(maeDelta) > 0.01;
 
   return (
     <div className="card p-4">
@@ -41,7 +58,8 @@ export default function ModelAccuracy({ demo }: { demo: boolean }) {
             presses the button. */}
         How much to trust this app&apos;s projections: before every deadline the app saves what it
         predicted, then compares against the real points once the gameweek finishes and adjusts
-        its own weights. Systematic misses shrink automatically over time.
+        its own weights. Whether that has helped is the line under the table, and it is
+        reported either way.
       </p>
 
       {log.length === 0 ? (
@@ -104,11 +122,20 @@ export default function ModelAccuracy({ demo }: { demo: boolean }) {
             is 12 — so after twelve graded gameweeks "since GW{n}" starts
             sliding forward with nothing on screen saying so.
           */}
-          {improving && (
-            <div className="mt-2 text-xs text-accent">
-              ▼ Average miss down from {first.mae.toFixed(2)} to {last.mae.toFixed(2)} pts per
-              player, over the {log.length} graded gameweeks kept here (GW{first.gw}–GW
-              {last.gw}).
+          {log.length >= 2 && (
+            <div className={`mt-2 text-xs ${!moved ? "text-muted" : maeDelta < 0 ? "text-accent" : "text-warn"}`}>
+              {!moved ? (
+                <>
+                  ◆ Average miss flat at {last.mae.toFixed(2)} pts per player, over the{" "}
+                  {log.length} graded gameweeks kept here (GW{first.gw}–GW{last.gw}).
+                </>
+              ) : (
+                <>
+                  {maeDelta < 0 ? "▼" : "▲"} Average miss {maeDelta < 0 ? "down" : "up"} from{" "}
+                  {first.mae.toFixed(2)} to {last.mae.toFixed(2)} pts per player, over the{" "}
+                  {log.length} graded gameweeks kept here (GW{first.gw}–GW{last.gw}).
+                </>
+              )}
             </div>
           )}
         </>

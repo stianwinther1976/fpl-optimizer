@@ -327,6 +327,12 @@ export interface OptimizerResult {
    * Exposure, not edge — see `FieldSplit`.
    */
   fieldSplit: FieldSplit;
+  /**
+   * True when `fieldSplit` describes the post-transfer eleven rather than the
+   * one you hold now — see the note at the `splitByField` call. The copy has to
+   * say which, because the pitch below it is switchable.
+   */
+  fieldXiIsPlan: boolean;
   chipAdvice: ChipAdvice[];
   dreamTeam: BestXi;
   dreamSquad: Element[];
@@ -480,9 +486,29 @@ export function optimize(input: OptimizerInput): OptimizerResult {
   const captainReads = new Map(
     readCaptains(captainRanking, bootstrap).map((r) => [r.element.id, r])
   );
+  /*
+   * THE XI THE PANEL ACTUALLY SHOWS, WHICH WAS NOT THE ONE THIS DESCRIBED.
+   *
+   * `keepXi` is the no-transfer eleven. The Line-up section below the "Against
+   * the field" card defaults to "Best plan" — the post-transfer eleven — so on
+   * the demo the number read 50.2 above a pitch whose eleven summed to 50.4,
+   * differing by one player: ARS Back 3 (9.7% owned) in the figure, BOU Back 3
+   * (6.3%) on the pitch. The one number on the page whose entire subject is
+   * ownership exposure ignored the transfer the app had just recommended —
+   * which in that case made the reader MORE differential, so the card
+   * understated the very thing it exists to report.
+   *
+   * The recommendation is the same one the panel makes: the best plan when it
+   * gains anything, otherwise keeping. The reader can still switch the pitch to
+   * "No transfers" or "Dream £100m", so the copy names which eleven this is.
+   */
+  const bestPlan = [...plans].sort((a, b) => b.netXp - a.netXp)[0];
+  const fieldXi =
+    bestPlan && bestPlan.gainVsKeep > 0.05 ? bestPlan.nextXi : keepXi;
   const fieldSplit = splitByField(
-    keepXi.starters.map((s) => ({ element: s.element, xp: s.xp }))
+    fieldXi.starters.map((s) => ({ element: s.element, xp: s.xp }))
   );
+  const fieldXiIsPlan = fieldXi !== keepXi;
 
   // --- Dream team (ignore current squad, £100m) ---
   const { squad: dreamSquad } = buildDreamSquad(bootstrap.elements, xp);
@@ -676,13 +702,15 @@ export function optimize(input: OptimizerInput): OptimizerResult {
       input.usedChips
     );
 
+  // "over the next 1 gameweeks" was on screen at horizon 1.
+  const gwCount = (n: number) => `${n} gameweek${n === 1 ? "" : "s"}`;
   chipAdvice.push({
     chip: "bboost",
     label: "Bench Boost",
     projectedGain: bbBest.gain,
     detail:
       bbBest.gw == null
-        ? `No gameweek in the next ${gws.length} is inside this chip's window.`
+        ? `No gameweek in the next ${gwCount(gws.length)} is inside this chip's window.`
         : `Best in GW${bbBest.gw}${gwNote(bbBest.gw)}: your bench projects ${bbBest.gain.toFixed(1)} pts that week.`,
     timing: timingFor("bboost"),
   });
@@ -692,7 +720,7 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     projectedGain: tcBest.gain,
     detail:
       tcBest.gw == null
-        ? `No gameweek in the next ${gws.length} is inside this chip's window.`
+        ? `No gameweek in the next ${gwCount(gws.length)} is inside this chip's window.`
         : `Best in GW${tcBest.gw}${gwNote(tcBest.gw)}: ${tcBest.name} would add ~${tcBest.gain.toFixed(1)} extra points (3x instead of 2x).`,
     timing: timingFor("3xc"),
   });
@@ -748,7 +776,7 @@ export function optimize(input: OptimizerInput): OptimizerResult {
      * about whether this week is the week. The timing note beside it is what
      * addresses that, and the copy now stops short of implying otherwise.
      */
-    detail: `Your squad is ~${wcGain.toFixed(1)} points behind an optimal one within your team value, over the next ${gws.length} gameweeks. That is the size of the gap, not a reason to play the chip this week.`,
+    detail: `Your squad is ~${wcGain.toFixed(1)} points behind an optimal one within your team value, over the next ${gwCount(gws.length)}. That is the size of the gap, not a reason to play the chip this week.`,
     timing: timingFor("wildcard"),
   });
   chipAdvice.push({
@@ -757,7 +785,7 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     projectedGain: Math.max(0, fhBest.gain),
     detail:
       fhBest.gw == null
-        ? `No gameweek in the next ${gws.length} is inside this chip's window.`
+        ? `No gameweek in the next ${gwCount(gws.length)} is inside this chip's window.`
         : `Best in GW${fhBest.gw}${gwNote(fhBest.gw)}: an optimal one-week squad projects ~${Math.max(0, fhBest.gain).toFixed(1)} pts more than your team that week.`,
     timing: timingFor("freehit"),
   });
@@ -772,6 +800,7 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     captainRanking,
     captainReads,
     fieldSplit,
+    fieldXiIsPlan,
     chipAdvice,
     dreamTeam,
     dreamSquad,

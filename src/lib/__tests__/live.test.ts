@@ -1,8 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { fixtureLines, matchMinute, projectAutoSubs, provisionalBonus, isInPlay } from "../live";
+import {
+  bandMedianScore,
+  fixtureLines,
+  matchMinute,
+  projectAutoSubs,
+  provisionalBonus,
+  isInPlay,
+} from "../live";
 import { availabilityAt, XP_CONFIG } from "../xp";
 import { makeElement } from "./mockdata";
-import type { Bootstrap, Element, EventLive, Fixture, Pick } from "../types";
+import type { Bootstrap, Element, EntryEventPicks, EventLive, Fixture, Pick } from "../types";
 
 // Squad: GK(1) + 4 DEF + 4 MID + 2 FWD starters, bench: GK, DEF, MID, FWD
 function makeSquad(): Map<number, Element> {
@@ -840,5 +847,78 @@ describe("fixtureLines reads one match, not the gameweek", () => {
 
   it("returns nothing at all without a live feed", () => {
     expect(fixtureLines(fx(1), null).size).toBe(0);
+  });
+});
+
+
+describe("the safety score compares like with like", () => {
+  /*
+   * The reader's own total on this tab is `(raw + projectedBonus) * multiplier`
+   * and the rank-band benchmark was `stats.total_points` alone. Through the
+   * window CLAUDE.md describes as "hours apart" — final whistle to bonus
+   * confirmation — that credits the reader two to eight points it credits
+   * nobody they are being compared against, and the tab then prints "you're N
+   * above; on course to climb".
+   *
+   * It does not bite on the demo, whose in-play fixtures itemise bonus in
+   * `explain` so `provisionalBonus` returns an empty map, which is why it could
+   * only be found by reading the two code paths against each other.
+   */
+  const elements = makeSquad();
+  const fixtures = makeFinishedFixtures();
+  const entry = (id: number, chip: string | null = null): EntryEventPicks =>
+    ({
+      active_chip: chip,
+      picks: makePicks(),
+      entry_history: { event: 10, points: 0, event_transfers_cost: 0 },
+      entry: id,
+    }) as unknown as EntryEventPicks;
+
+  const five = [1, 2, 3, 4, 5].map((i) => entry(i));
+
+  it("counts projected bonus for rivals, exactly as it does for the reader", () => {
+    const live = makeLive({});
+    const without = bandMedianScore(five, elements, live, fixtures, 10, null)!;
+    // Three points of provisional bonus to a player in everyone's XI.
+    const with_ = bandMedianScore(five, elements, live, fixtures, 10, new Map([[1, 3]]))!;
+    expect(without).toBeGreaterThan(0);
+    expect(with_).toBe(without + 3);
+  });
+
+  it("doubles a captain's projected bonus, like any other point", () => {
+    const live = makeLive({});
+    const base = bandMedianScore(five, elements, live, fixtures, 10, null)!;
+    // Element 8 is the captain in `makePicks`, but the multiplier there is 1 —
+    // so give one rival a real armband and check it through the pick.
+    const capped = five.map((p) => ({
+      ...p,
+      picks: p.picks.map((pk) => (pk.element === 8 ? { ...pk, multiplier: 2 } : pk)),
+    }));
+    const noBonus = bandMedianScore(capped, elements, live, fixtures, 10, null)!;
+    const withBonus = bandMedianScore(capped, elements, live, fixtures, 10, new Map([[8, 3]]))!;
+    expect(withBonus - noBonus).toBe(6);
+    expect(noBonus).toBe(base + 2);
+  });
+
+  it("nets the hit off, on both sides of the comparison", () => {
+    const live = makeLive({});
+    const plain = bandMedianScore(five, elements, live, fixtures, 10, null)!;
+    const hit = five.map((p) => ({
+      ...p,
+      entry_history: { ...p.entry_history, event_transfers_cost: 4 },
+    }));
+    expect(bandMedianScore(hit, elements, live, fixtures, 10, null)).toBe(plain - 4);
+  });
+
+  it("refuses to call three managers a rank band", () => {
+    expect(bandMedianScore(five.slice(0, 3), elements, makeLive({}), fixtures, 10, null)).toBeNull();
+  });
+
+  it("takes the bench too under Bench Boost", () => {
+    const live = makeLive({});
+    const plain = bandMedianScore(five, elements, live, fixtures, 10, null)!;
+    const bb = [1, 2, 3, 4, 5].map((i) => entry(i, "bboost"));
+    // Four more players at two points each.
+    expect(bandMedianScore(bb, elements, live, fixtures, 10, null)).toBe(plain + 8);
   });
 });

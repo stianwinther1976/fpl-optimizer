@@ -1052,10 +1052,20 @@ export default function OptimizePanel({
                   Two numbers, both labelled "your XI's projected points",
                   6.5 apart, and nothing said the difference was the armband.
                 */}
+                {/*
+                  NAME THE ELEVEN. This used to be computed from the
+                  no-transfer XI while the Line-up section below defaults to
+                  "Best plan" — one player different on the demo, and the one
+                  number on the page whose subject is ownership exposure was
+                  describing a team the reader was being advised not to field.
+                  It now follows the recommendation, and says which that is,
+                  because the pitch below is switchable.
+                */}
                 <span className="text-sm text-muted">
-                  of your XI&apos;s {result.fieldSplit.total.toFixed(1)} projected points
-                  (before the captain&apos;s second multiple) are not already shared with
-                  the rest of the field.
+                  of {result.fieldXiIsPlan ? "the recommended XI" : "your XI"}&apos;s{" "}
+                  {result.fieldSplit.total.toFixed(1)} projected points (before the
+                  captain&apos;s second multiple) are not already shared with the rest of
+                  the field.
                 </span>
               </div>
               <p className="mt-2 text-xs text-muted">

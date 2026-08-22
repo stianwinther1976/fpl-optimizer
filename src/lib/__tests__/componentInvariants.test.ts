@@ -1537,3 +1537,57 @@ describe("the transfer card prints the plain horizon total", () => {
     expect(src).toMatch(/ranked on a weighted total/);
   });
 });
+
+describe("the safety score follows the feed and counts the same points", () => {
+  /*
+   * `bandMedianScore` is tested properly in `live.test.ts`. What cannot be
+   * tested there is that `LiveTab` calls it, and that the sample is FETCHED
+   * once but SCORED every poll. Both halves were wrong in the same
+   * comparison: one effect did the fetching and the scoring behind a ref that
+   * never reset, so the benchmark froze at the first live payload while the
+   * reader's own total moved every thirty seconds; and the reader's total
+   * carried projected bonus while the benchmark did not.
+   */
+  it("scores the sample in a memo over the live payload, not in the fetch", () => {
+    const src = read("LiveTab.tsx");
+    expect(src).toMatch(/const bandSafety = useMemo\(/);
+    expect(src).toMatch(/bandMedianScore\(/);
+    // The fetch stores picks and nothing else — no median inside it.
+    const at = src.indexOf("bandTried.current = true;");
+    expect(at).toBeGreaterThan(0);
+    const end = src.indexOf("}, [currentEvent, data.entry]);", at);
+    expect(end).toBeGreaterThan(at);
+    const effect = src.slice(at, end);
+    expect(effect).toContain("setBandPicks(picks)");
+    // No scoring inside the fetch — that is the half that used to freeze.
+    expect(effect).not.toContain("total_points");
+    expect(effect).not.toContain("bandMedianScore");
+  });
+
+  it("hands the rivals the same projected bonus the reader gets", () => {
+    const src = read("LiveTab.tsx");
+    expect(src).toMatch(/bonus\?\.byElement \?\? null/);
+  });
+});
+
+describe("the accuracy card reports itself in both directions", () => {
+  /*
+   * `improving = last.mae < first.mae` gating the summary meant a reader never
+   * saw "average miss UP from X to Y" — a self-grading card that only reported
+   * itself when the news was good, directly under the unhedged sentence
+   * "Systematic misses shrink automatically over time".
+   */
+  it("has no one-sided gate on the trend line", () => {
+    const src = read("ModelAccuracy.tsx");
+    expect(src).not.toMatch(/const improving\b/);
+    expect(src).toMatch(/const maeDelta = /);
+    // Both words are in the file, and the arrow follows the sign.
+    expect(src).toMatch(/maeDelta < 0 \? "down" : "up"/);
+    expect(src).toMatch(/maeDelta < 0 \? "▼" : "▲"/);
+  });
+
+  it("stopped promising in prose what the table has to show", () => {
+    const src = read("ModelAccuracy.tsx");
+    expect(src).not.toContain("Systematic misses shrink automatically over time");
+  });
+});

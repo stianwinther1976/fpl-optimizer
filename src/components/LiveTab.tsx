@@ -2,8 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type TeamData } from "@/lib/fpl";
-import type { EventLive, Fixture, Pick } from "@/lib/types";
-import { matchMinute, projectAutoSubs, provisionalBonus, isInPlay, LIVE_REFRESH_MS } from "@/lib/live";
+import type { EntryEventPicks, EventLive, Fixture, Pick } from "@/lib/types";
+import {
+  bandMedianScore,
+  matchMinute,
+  projectAutoSubs,
+  provisionalBonus,
+  isInPlay,
+  LIVE_REFRESH_MS,
+} from "@/lib/live";
 import { autoSubView, benchPoints, kickoffLabel, publishedAverage } from "@/lib/display";
 import { ErrorBox, Skeleton, Badge } from "./ui";
 import MatchModal from "./MatchModal";
@@ -24,7 +31,7 @@ export default function LiveTab({
   const [fixtures, setFixtures] = useState<Fixture[]>(data.fixtures);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
-  const [bandSafety, setBandSafety] = useState<number | null>(null);
+  const [bandPicks, setBandPicks] = useState<EntryEventPicks[] | null>(null);
   const bandTried = useRef(false);
   const [matchOpen, setMatchOpen] = useState<Fixture | null>(null);
   // Latest-wins guard: an older in-flight response must never overwrite a
@@ -95,11 +102,26 @@ export default function LiveTab({
     [data.bootstrap]
   );
 
-  // Personalised safety score: sample ~20 managers at the user's overall-rank
-  // band (the Overall league is paged in rank order) and take the median of
-  // their net live scores — the score needed to keep pace with your peers.
+  /*
+   * Personalised safety score: sample ~20 managers at the reader's overall-rank
+   * band (the Overall league is paged in rank order) and take the median of
+   * their net live scores — the score needed to keep pace with their peers.
+   *
+   * FETCHED ONCE, SCORED EVERY POLL. It used to be both: one effect fetched the
+   * picks AND scored them, behind a `bandTried` ref that never reset, so the
+   * benchmark was a snapshot of the first live payload while the reader's own
+   * total kept moving every thirty seconds. Left long enough that is not a
+   * comparison at all — the number the app tells you to beat is the score your
+   * rivals had when you opened the tab, and "you're N above; on course to climb"
+   * is what almost everyone sees by the end of a Saturday.
+   *
+   * Picks genuinely do not change during a gameweek, so fetching them once is
+   * right; the scoring is what has to follow the feed. Splitting the two also
+   * closes the second asymmetry in the same comparison — see the bonus note in
+   * the memo below.
+   */
   useEffect(() => {
-    if (bandTried.current || live == null || currentEvent == null) return;
+    if (bandTried.current || currentEvent == null) return;
     const rank = data.entry.summary_overall_rank;
     if (rank == null) return;
     bandTried.current = true;
@@ -112,37 +134,15 @@ export default function LiveTab({
         // Spread the sample across the whole rank page for a fairer median.
         const all = standings.standings.results;
         const sample = all.filter((_, i) => i % Math.max(1, Math.floor(all.length / 20)) === 0).slice(0, 20);
-        const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
-        const scores = (
+        const picks = (
           await Promise.all(
-            sample.map(async (r) => {
-              try {
-                const p = await api.picks(r.entry, currentEvent);
-                const bb = p.active_chip === "bboost";
-                // Project auto-subs for rivals too, so the benchmark matches
-                // what their final score will actually be.
-                const subs = projectAutoSubs(p.picks, elementById, live, fixtures, currentEvent);
-                const effXi = new Set(subs.effectiveXi);
-                let pts = 0;
-                for (const pk of p.picks) {
-                  if (!bb && !effXi.has(pk.element)) continue;
-                  const mult = pk.multiplier > 1 ? pk.multiplier : 1;
-                  pts += (pointsOf.get(pk.element) ?? 0) * mult;
-                }
-                return pts - p.entry_history.event_transfers_cost;
-              } catch {
-                return null;
-              }
-            })
+            sample.map((r) => api.picks(r.entry, currentEvent).catch(() => null))
           )
-        ).filter((x): x is number => x != null);
-        if (scores.length >= 5) {
-          scores.sort((a, b) => a - b);
-          setBandSafety(scores[Math.floor(scores.length / 2)]);
-        }
+        ).filter((p): p is EntryEventPicks => p != null);
+        if (picks.length >= 5) setBandPicks(picks);
       } catch {}
     })();
-  }, [live, currentEvent, data.entry, elementById, fixtures]);
+  }, [currentEvent, data.entry]);
 
   const teams = useMemo(
     () => new Map(data.bootstrap.teams.map((t) => [t.id, t])),
@@ -163,6 +163,39 @@ export default function LiveTab({
         ? provisionalBonus(data.bootstrap, fixtures, live, currentEvent)
         : null,
     [live, fixtures, data.bootstrap, currentEvent]
+  );
+
+  /**
+   * The rank band's median live score, recomputed on every poll.
+   *
+   * PROVISIONAL BONUS ON BOTH SIDES, WHICH IT WAS NOT. The reader's own total
+   * is `(raw + projectedBonus) * multiplier`; the benchmark was
+   * `stats.total_points` alone. So through the window CLAUDE.md describes as
+   * "hours apart" — final whistle to bonus confirmation — the app credited the
+   * reader two to eight points it credited nobody they were being compared
+   * against, and then printed "you're N above; on course to climb". Everything
+   * else in this comparison is already symmetric: both sides net of hits, both
+   * with projected auto-subs. `provisionalBonus` is per PLAYER, so the same map
+   * applies to a rival's picks unchanged.
+   *
+   * It does not bite on the demo — `demo.ts` itemises bonus in `explain` for
+   * in-play fixtures, so `provisionalBonus` returns an empty map there — which
+   * is why it could only be found by reading the two code paths against each
+   * other.
+   */
+  const bandSafety = useMemo(
+    () =>
+      bandPicks && live && currentEvent != null
+        ? bandMedianScore(
+            bandPicks,
+            elementById,
+            live,
+            fixtures,
+            currentEvent,
+            bonus?.byElement ?? null
+          )
+        : null,
+    [bandPicks, live, bonus, elementById, fixtures, currentEvent]
   );
 
   // Projected auto-subs: once a starter's matches have finished with 0
@@ -403,9 +436,17 @@ export default function LiveTab({
               >
                 🛡️ Safety score {personalized ? "(your rank band)" : "(est.)"}:{" "}
                 <b>{needed} pts</b> —{" "}
-                {total >= needed
-                  ? `you're ${total - needed} above; on course to climb ▲`
-                  : `${needed - total} more needed to hold your rank`}
+                {/*
+                  LEVEL IS LEVEL. `total >= needed` sent an exact tie down the
+                  "climbing" branch, which then read "you're 0 above; on course
+                  to climb ▲" — matching the median holds your rank, it does not
+                  improve it, and that is the whole meaning of the number.
+                */}
+                {total === needed
+                  ? "level with your rank band — on course to hold your rank"
+                  : total > needed
+                    ? `you're ${total - needed} above; on course to climb ▲`
+                    : `${needed - total} more needed to hold your rank`}
               </div>
             );
           })()}

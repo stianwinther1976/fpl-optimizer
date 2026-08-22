@@ -1,7 +1,14 @@
 // Live-gameweek helpers: provisional bonus from BPS, auto-substitution
 // projection and live match state.
 
-import type { Bootstrap, Element, EventLive, Fixture, Pick as FplPick } from "./types";
+import type {
+  Bootstrap,
+  Element,
+  EntryEventPicks,
+  EventLive,
+  Fixture,
+  Pick as FplPick,
+} from "./types";
 import { isValidFormation } from "./rules";
 
 /**
@@ -448,4 +455,58 @@ export function matchMinute(f: Fixture, now: Date = new Date()): string {
   if (mins >= 45 && mins <= 60) return "HT~";
   const capped = Math.min(mins > 60 ? mins - 15 : mins, 90); // rough half-time adjustment
   return `${capped}'`;
+}
+
+
+/**
+ * The median live score of a sample of rival managers, scored exactly the way
+ * the reader's own total is.
+ *
+ * SYMMETRY IS THE WHOLE POINT, and two things broke it while this lived inline
+ * in `LiveTab`:
+ *
+ *  - The sample was fetched AND scored in one effect behind a ref that never
+ *    reset, so the benchmark was a snapshot of the first live payload while the
+ *    reader's total moved every thirty seconds. Left long enough that is not a
+ *    comparison: the number you are told to beat is the score your rivals had
+ *    when you opened the tab, and "you're N above; on course to climb" is what
+ *    almost everyone sees by the end of a Saturday. Picks do not change during
+ *    a gameweek, so they are still fetched once; the SCORING is what has to
+ *    follow the feed, which is why it is a pure function here.
+ *
+ *  - `provisionalBonus` was applied to the reader and to nobody else. Through
+ *    the window CLAUDE.md describes as "hours apart" — final whistle to bonus
+ *    confirmation — that credited the reader two to eight points the benchmark
+ *    credited no one. The bonus map is per PLAYER, so it applies to a rival's
+ *    picks unchanged.
+ *
+ * Everything else was already symmetric: both sides net of hits, both with
+ * projected auto-subs. Returns null below `minSample`, because a median of
+ * three managers is not a rank band.
+ */
+export function bandMedianScore(
+  picks: EntryEventPicks[],
+  elements: Map<number, Element>,
+  live: EventLive,
+  fixtures: Fixture[],
+  gw: number,
+  bonusByElement: Map<number, number> | null,
+  minSample = 5
+): number | null {
+  const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
+  const scores: number[] = [];
+  for (const p of picks) {
+    const bb = p.active_chip === "bboost";
+    const effXi = new Set(projectAutoSubs(p.picks, elements, live, fixtures, gw).effectiveXi);
+    let pts = 0;
+    for (const pk of p.picks) {
+      if (!bb && !effXi.has(pk.element)) continue;
+      const mult = pk.multiplier > 1 ? pk.multiplier : 1;
+      pts += ((pointsOf.get(pk.element) ?? 0) + (bonusByElement?.get(pk.element) ?? 0)) * mult;
+    }
+    scores.push(pts - (p.entry_history?.event_transfers_cost ?? 0));
+  }
+  if (scores.length < minSample) return null;
+  scores.sort((a, b) => a - b);
+  return scores[Math.floor(scores.length / 2)];
 }

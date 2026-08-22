@@ -1163,9 +1163,17 @@ describe("captaincy against the field", () => {
     expect([...r.captainReads.values()].some((x) => x.wasTemplateCaptain)).toBe(false);
   });
 
-  it("splits the keep XI into what the field has and what it does not", () => {
+  it("splits the RECOMMENDED XI into what the field has and what it does not", () => {
+    /*
+     * It used to be the keep XI, while the Line-up section below the card
+     * defaults to "Best plan" — one player different on the demo, and the one
+     * number on the page whose subject is ownership exposure was describing a
+     * team the reader was being advised not to field.
+     */
     const r = run();
-    const total = r.keepXi.starters.reduce((a, s) => a + s.xp, 0);
+    const best = [...r.plans].sort((a, b) => b.netXp - a.netXp)[0];
+    const shown = best && best.gainVsKeep > 0.05 ? best.nextXi : r.keepXi;
+    const total = shown.starters.reduce((a, s) => a + s.xp, 0);
     expect(r.fieldSplit.total).toBeCloseTo(total, 6);
     expect(r.fieldSplit.shared + r.fieldSplit.differential).toBeCloseTo(total, 6);
     // Every mock element carries a published ownership, so none is dropped.
@@ -1787,5 +1795,86 @@ describe("the Wildcard cannot be worth less than one transfer", () => {
       const wc = run(horizon).chipAdvice?.find((c) => c.chip === "wildcard");
       expect(wc!.projectedGain).toBeGreaterThanOrEqual(0);
     }
+  });
+});
+
+describe("'Against the field' describes the XI the panel recommends", () => {
+  /*
+   * `splitByField` was fed `keepXi.starters` — the NO-TRANSFER eleven — while
+   * the Line-up section below that card defaults to "Best plan". On the demo
+   * that was one player different: ARS Back 3 (9.7% owned) in the number, BOU
+   * Back 3 (6.3%) on the pitch. The one figure on the page whose entire subject
+   * is ownership exposure ignored the transfer the app had just recommended.
+   */
+  const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+  const res = (() => {
+    const u = makeDemoUniverse(NOW);
+    const bootstrap = u.bootstrap;
+    const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
+      const element = bootstrap.elements.find((e) => e.id === p.element)!;
+      return {
+        element,
+        sellPrice: element.now_cost,
+        purchasePrice: element.now_cost,
+        pickPosition: i + 1,
+        isCaptain: p.is_captain,
+        isViceCaptain: p.is_vice_captain,
+      };
+    });
+    return optimize({
+      bootstrap,
+      fixtures: u.fixtures,
+      owned,
+      bank: 5,
+      freeTransfers: 1,
+      nextEvent: bootstrap.events.find((e) => e.is_next)!.id,
+      horizon: 5,
+    });
+  })();
+
+  it("totals the same eleven the pitch draws by default", () => {
+    const best = [...res.plans].sort((a, b) => b.netXp - a.netXp)[0];
+    const shown = best && best.gainVsKeep > 0.05 ? best.nextXi : res.keepXi;
+    const sum = shown.starters.reduce((s, x) => s + x.xp, 0);
+    // `splitByField` drops players whose ownership FPL has not published, so
+    // the totals agree only up to those.
+    expect(res.fieldSplit.total).toBeCloseTo(sum, 6);
+    expect(res.fieldSplit.unknown).toBe(0);
+  });
+
+  it("says which eleven it is describing", () => {
+    const best = [...res.plans].sort((a, b) => b.netXp - a.netXp)[0];
+    expect(res.fieldXiIsPlan).toBe(Boolean(best && best.gainVsKeep > 0.05));
+  });
+
+  it("falls back to the held XI when no transfer is worth making", () => {
+    // With the recommendation switched off there is nothing to describe but
+    // the squad the reader holds.
+    const u = makeDemoUniverse(NOW);
+    const bootstrap = u.bootstrap;
+    const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
+      const element = bootstrap.elements.find((e) => e.id === p.element)!;
+      return {
+        element,
+        sellPrice: element.now_cost,
+        purchasePrice: element.now_cost,
+        pickPosition: i + 1,
+        isCaptain: p.is_captain,
+        isViceCaptain: p.is_vice_captain,
+      };
+    });
+    const noMoves = optimize({
+      bootstrap,
+      fixtures: u.fixtures,
+      owned,
+      bank: 5,
+      freeTransfers: 1,
+      nextEvent: bootstrap.events.find((e) => e.is_next)!.id,
+      horizon: 5,
+      maxTransfers: 0,
+    });
+    expect(noMoves.fieldXiIsPlan).toBe(false);
+    const sum = noMoves.keepXi.starters.reduce((s, x) => s + x.xp, 0);
+    expect(noMoves.fieldSplit.total).toBeCloseTo(sum, 6);
   });
 });
