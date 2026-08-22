@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { markNavigation } from "@/lib/nav";
 import { api, DEMO_ENTRY_ID, fmtNum, type TeamData } from "@/lib/fpl";
 import type { EventLive, LeagueStandings } from "@/lib/types";
 import { CHIP_LABELS } from "@/lib/rules";
@@ -26,6 +27,12 @@ interface LeagueOwnership {
 
 export default function MiniLeague({ data, entryId }: { data: TeamData; entryId: number }) {
   const router = useRouter();
+  // Recorded, so the rival's own back control returns to this table rather
+  // than to the landing page — see `nav.ts`.
+  const goToTeam = (id: number) => {
+    markNavigation();
+    router.push(`/team/${id}`);
+  };
   // Rival dashboards only work with real FPL data, not the demo universe.
   const canOpenRivals = entryId !== DEMO_ENTRY_ID;
   const [leagueId, setLeagueId] = useState("");
@@ -363,7 +370,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                   <tr
                     key={r.entry}
                     className={`${mine ? "bg-accent/10" : "hover:bg-panel-2/60 active:bg-panel-2"} ${clickable ? "cursor-pointer" : ""}`}
-                    onClick={clickable ? () => router.push(`/team/${r.entry}`) : undefined}
+                    onClick={clickable ? () => goToTeam(r.entry) : undefined}
                     tabIndex={clickable ? 0 : undefined}
                     aria-label={clickable ? `${r.entry_name} — open this team` : undefined}
                     onKeyDown={
@@ -371,7 +378,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                         ? (ev) => {
                             if (ev.key === "Enter" || ev.key === " ") {
                               ev.preventDefault();
-                              router.push(`/team/${r.entry}`);
+                              goToTeam(r.entry);
                             }
                           }
                         : undefined

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { canGoBack } from "@/lib/nav";
 import dynamic from "next/dynamic";
 import { api, entryNotFoundMessage, FplApiError, loadTeamData, fmtNum, fmtRank, rankPercentile, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
 import type { Element, EntryEventPicks, EventLive, Fixture } from "@/lib/types";
@@ -244,6 +246,19 @@ export default function Dashboard({
    */
   // The gameweek a line-up call is about. Same anchor `projectAll` calls
   // offset 0, so a stamped call and the projection cannot disagree.
+  const router = useRouter();
+  /*
+   * Read once on mount, into state. `canGoBack()` is module state React cannot
+   * see change, and reading it during render would make the button's label
+   * depend on something outside React's model — the same class of mistake
+   * `pastSeasonStore` and `recentFormStore` both exist to avoid. It cannot
+   * change while this screen is mounted anyway: a navigation away unmounts it.
+   */
+  const [backable, setBackable] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- module state is not readable during SSR, and this is the client-only answer
+    setBackable(canGoBack());
+  }, []);
   const squadNextEvent = data?.squad?.nextEvent ?? null;
   const callsVersion = useSyncExternalStore(
     subscribeStartCalls,
@@ -812,12 +827,29 @@ export default function Dashboard({
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <Link
-            href="/"
+          {/*
+            ONE STEP BACK WHEN THERE IS ONE, AND THE LABEL FOLLOWS.
+            This was `<Link href="/">` labelled "← Switch team". For the
+            ordinary journey — landing page, then a team — the two destinations
+            coincide, so it read correctly. They come apart on the route the
+            mini-league opens: tap a rival and you are on THEIR team, where the
+            arrow points at your own league table and the link went to the
+            landing page instead.
+
+            The fallback is the reason this is not just `router.back()`.
+            Reached cold — a shared link, a bookmark, the home-screen icon —
+            there is no in-app screen behind this one, and going back would
+            eject the reader from the app entirely. `nav.ts` is what tells the
+            two apart; `history.length` cannot, because it counts the whole
+            tab's history and not this app's.
+          */}
+          <button
+            type="button"
+            onClick={() => (backable ? router.back() : router.push("/"))}
             className="-ml-2 inline-flex min-h-11 items-center px-2 text-xs text-muted hover:text-accent"
           >
-            ← Switch team
-          </Link>
+            ← {backable ? "Back" : "Switch team"}
+          </button>
           <h1 className="text-xl font-bold sm:text-2xl">
             {entry.name}{" "}
             <span className="text-sm font-normal text-muted sm:text-base">

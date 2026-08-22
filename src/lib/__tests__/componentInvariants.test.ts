@@ -991,7 +991,9 @@ describe("the recent-teams pill keeps its two actions apart", () => {
 
   it("suppresses navigation while the list is being edited", () => {
     const src = readApp("page.tsx");
-    const at = src.indexOf("router.push(`/team/${t.id}`)");
+    // `goTo`, not `router.push` — every in-app navigation now goes through a
+    // marker so the dashboard's back control knows there is a step behind it.
+    const at = src.indexOf("goTo(`/team/${t.id}`)");
     expect(src.slice(at, at + 220)).toMatch(/disabled=\{editing\}/);
   });
 

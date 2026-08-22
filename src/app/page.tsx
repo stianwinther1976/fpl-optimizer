@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { markNavigation } from "@/lib/nav";
 import { api, entryNotFoundMessage, FplApiError, DEMO_ENTRY_ID, setDemoMode } from "@/lib/fpl";
 import type { Entry } from "@/lib/types";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -16,6 +17,16 @@ const FEATURES: [string, string, string, string][] = [
 
 export default function Home() {
   const router = useRouter();
+  /*
+   * Every route push goes through here, so `nav.ts` sees the step and the
+   * dashboard's back control knows there is a screen to return to. Pushing
+   * directly from a call site is how one of them ends up unrecorded, and the
+   * button then ejects the reader from the app.
+   */
+  const goTo = (href: string) => {
+    markNavigation();
+    router.push(href);
+  };
   const inputRef = useRef<HTMLInputElement>(null);
   const [id, setId] = useState("");
   const [checking, setChecking] = useState(false);
@@ -103,7 +114,7 @@ export default function Home() {
   function openFeature(tab: string) {
     const num = parseInt(id, 10);
     if (num > 0) {
-      router.push(`/team/${num}?tab=${tab}`);
+      goTo(`/team/${num}?tab=${tab}`);
     } else {
       inputRef.current?.focus();
       setError("Enter your FPL ID first — then this opens straight in the dashboard.");
@@ -163,7 +174,7 @@ export default function Home() {
                   >
                     <button
                       type="button"
-                      onClick={() => router.push(`/team/${t.id}`)}
+                      onClick={() => goTo(`/team/${t.id}`)}
                       disabled={editing}
                       className="flex items-center gap-2 rounded-full px-3 py-2 hover:bg-accent/20 active:bg-accent/20 disabled:cursor-default disabled:opacity-70 disabled:hover:bg-transparent"
                       title={`${t.manager} · ID ${t.id}`}
@@ -211,7 +222,7 @@ export default function Home() {
             Find it at fantasy.premierleague.com → “Points” — the number in the URL
             (…/entry/<b>1234567</b>/event/…).{" "}
             <button
-              onClick={() => router.push(`/team/${DEMO_ENTRY_ID}`)}
+              onClick={() => goTo(`/team/${DEMO_ENTRY_ID}`)}
               className="font-medium text-accent hover:underline"
             >
               Or try the mid-season demo →
@@ -235,7 +246,7 @@ export default function Home() {
                   ` · rank ${entry.summary_overall_rank.toLocaleString("en-GB")}`}
               </div>
               <button
-                onClick={() => router.push(`/team/${entry.id}`)}
+                onClick={() => goTo(`/team/${entry.id}`)}
                 className="btn-primary mt-3 w-full rounded-lg px-4 py-2.5"
               >
                 Open dashboard →
