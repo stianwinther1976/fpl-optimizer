@@ -7,6 +7,7 @@ import {
   projectAutoSubs,
   provisionalBonus,
   isInPlay,
+  squadMatchState,
   liveMatchMinutes,
   feedStallMs,
   advanceFeedWatch,
@@ -1275,5 +1276,161 @@ describe("matchMinute prefers whichever clock was refreshed most recently", () =
   it("does not let the live clock start a match FPL has not started", () => {
     const notStarted = { ...fx(0), started: false } as Fixture;
     expect(matchMinute(notStarted, undefined, 12)).toBe("");
+  });
+});
+
+describe("squadMatchState — how much football is still to come", () => {
+  const els = makeSquad();
+  // makeSquad's teams: GK id1 -> team1; ids 2-5 -> teams 3,4,5,0->6? see helper.
+  const teamOf = (id: number) => els.get(id)!.team;
+
+  const fixture = (
+    id: number,
+    home: number,
+    away: number,
+    state: "todo" | "live" | "done"
+  ): Fixture =>
+    ({
+      id,
+      event: 1,
+      team_h: home,
+      team_a: away,
+      started: state !== "todo",
+      finished: state === "done",
+      finished_provisional: state === "done",
+      minutes: state === "todo" ? 0 : 90,
+      kickoff_time: "2026-08-22T14:00:00Z",
+      team_h_score: 0,
+      team_a_score: 0,
+      team_h_difficulty: 3,
+      team_a_difficulty: 3,
+      stats: [],
+    }) as Fixture;
+
+  const liveAll = (): EventLive =>
+    ({
+      elements: [...els.keys()].map((id) => ({
+        id,
+        stats: { minutes: 90, total_points: 2 },
+        explain: [],
+      })),
+    }) as unknown as EventLive;
+
+  it("counts every counting player exactly once", () => {
+    const picks = makePicks();
+    const teams = [...new Set([...els.values()].map((e) => e.team))];
+    const fixtures = teams.map((t, i) => fixture(100 + i, t, 90 + i, "live"));
+    const st = squadMatchState(
+      { picks, active_chip: null, entry_history: { event_transfers_cost: 0 } } as EntryEventPicks,
+      els,
+      liveAll(),
+      fixtures,
+      1
+    );
+    // The eleven that count, no more: the bench is not in play for anybody.
+    expect(st.inPlay + st.toStart + st.played + st.blank).toBe(11);
+    expect(st.inPlay).toBe(11);
+  });
+
+  it("counts all fifteen under Bench Boost", () => {
+    const picks = makePicks();
+    const teams = [...new Set([...els.values()].map((e) => e.team))];
+    const fixtures = teams.map((t, i) => fixture(100 + i, t, 90 + i, "todo"));
+    const st = squadMatchState(
+      {
+        picks,
+        active_chip: "bboost",
+        entry_history: { event_transfers_cost: 0 },
+      } as EntryEventPicks,
+      els,
+      liveAll(),
+      fixtures,
+      1
+    );
+    expect(st.toStart).toBe(15);
+  });
+
+  it("separates running, waiting and finished", () => {
+    const picks = makePicks();
+    const teams = [...new Set([...els.values()].map((e) => e.team))];
+    const fixtures = teams.map((t, i) =>
+      fixture(100 + i, t, 90 + i, i === 0 ? "live" : i === 1 ? "todo" : "done")
+    );
+    const st = squadMatchState(
+      { picks, active_chip: null, entry_history: { event_transfers_cost: 0 } } as EntryEventPicks,
+      els,
+      liveAll(),
+      fixtures,
+      1
+    );
+    expect(st.inPlay).toBeGreaterThan(0);
+    expect(st.toStart).toBeGreaterThan(0);
+    expect(st.played).toBeGreaterThan(0);
+  });
+
+  it("reports a blank club separately instead of calling it finished", () => {
+    // No fixture at all is neither waiting nor played, and folding it into
+    // "played" would tell a reader their week was over when it never started.
+    const picks = makePicks();
+    const st = squadMatchState(
+      { picks, active_chip: null, entry_history: { event_transfers_cost: 0 } } as EntryEventPicks,
+      els,
+      liveAll(),
+      [],
+      1
+    );
+    expect(st.blank).toBe(11);
+    expect(st.played).toBe(0);
+  });
+
+  it("calls a double gameweek in play while either leg is running", () => {
+    const picks = makePicks();
+    const t = teamOf(1);
+    const st = squadMatchState(
+      { picks, active_chip: null, entry_history: { event_transfers_cost: 0 } } as EntryEventPicks,
+      els,
+      liveAll(),
+      [fixture(1, t, 99, "done"), fixture(2, t, 98, "live")],
+      1
+    );
+    expect(st.inPlay).toBeGreaterThan(0);
+  });
+
+  it("prefers IN PLAY over TO START when a double has both", () => {
+    /*
+     * A man on the pitch right now who also has a second match later is
+     * playing, not waiting. Ordering the two checks the other way round reads
+     * as "yet to kick off" for someone visibly on the field — and the first
+     * version of the test above could not tell the difference, because both
+     * its legs had already started. It survived the mutation.
+     */
+    const picks = makePicks();
+    const t = teamOf(1);
+    const st = squadMatchState(
+      { picks, active_chip: null, entry_history: { event_transfers_cost: 0 } } as EntryEventPicks,
+      els,
+      liveAll(),
+      [fixture(1, t, 99, "live"), fixture(2, t, 98, "todo")],
+      1
+    );
+    // Two of the eleven share that club in `makeSquad`; the count is not the
+    // point. Nobody being called "yet to kick off" is.
+    expect(st.toStart).toBe(0);
+    expect(st.inPlay).toBeGreaterThan(0);
+  });
+
+  it("ignores fixtures from other gameweeks", () => {
+    const picks = makePicks();
+    const t = teamOf(1);
+    const other = { ...fixture(1, t, 99, "live"), event: 2 } as Fixture;
+    const st = squadMatchState(
+      { picks, active_chip: null, entry_history: { event_transfers_cost: 0 } } as EntryEventPicks,
+      els,
+      liveAll(),
+      [other],
+      1
+    );
+    expect(st.inPlay).toBe(0);
+    expect(st.blank).toBe(11);
   });
 });

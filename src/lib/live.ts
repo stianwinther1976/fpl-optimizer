@@ -758,3 +758,56 @@ export function feedStallMs(watch: FeedWatch, now: number): number | null {
   const held = now - watch.at;
   return held >= FEED_STALL_MS ? held : null;
 }
+
+/**
+ * How much football a manager's counting players still have in front of them.
+ *
+ * The number a live table is actually read for. A rival two points ahead with
+ * five players still to kick off is in a different position from one two
+ * points ahead with none, and the score alone cannot tell them apart — which
+ * is why every live standings view worth using prints this beside it.
+ *
+ * COUNTED OVER THE SAME PLAYERS THE SCORE IS. Auto-subs and Bench Boost decide
+ * who counts, so this runs `projectAutoSubs` exactly as `liveEntryScore` does;
+ * counting the raw first eleven would credit a rival for a benched player's
+ * fixture and miss the substitute who actually replaced him.
+ *
+ * A player is resolved against HIS CLUB'S fixtures in this gameweek, not one
+ * fixture, so a double gameweek answers sensibly: in play if any leg is
+ * running, otherwise to start if any leg has not kicked off, otherwise done.
+ * `blank` is players with no fixture at all — neither waiting nor playing, and
+ * reported separately rather than quietly counted as finished.
+ */
+export function squadMatchState(
+  p: EntryEventPicks,
+  elements: Map<number, Element>,
+  live: EventLive,
+  fixtures: Fixture[],
+  gw: number
+): { inPlay: number; toStart: number; played: number; blank: number } {
+  const bb = p.active_chip === "bboost";
+  const effXi = new Set(projectAutoSubs(p.picks, elements, live, fixtures, gw).effectiveXi);
+  const byTeam = new Map<number, Fixture[]>();
+  for (const f of fixtures) {
+    if (f.event !== gw) continue;
+    for (const t of [f.team_h, f.team_a]) {
+      const list = byTeam.get(t);
+      if (list) list.push(f);
+      else byTeam.set(t, [f]);
+    }
+  }
+  let inPlay = 0;
+  let toStart = 0;
+  let played = 0;
+  let blank = 0;
+  for (const pk of p.picks) {
+    if (!bb && !effXi.has(pk.element)) continue;
+    const team = elements.get(pk.element)?.team;
+    const legs = team == null ? [] : (byTeam.get(team) ?? []);
+    if (legs.length === 0) blank++;
+    else if (legs.some((f) => isInPlay(f))) inPlay++;
+    else if (legs.some((f) => !f.started)) toStart++;
+    else played++;
+  }
+  return { inPlay, toStart, played, blank };
+}

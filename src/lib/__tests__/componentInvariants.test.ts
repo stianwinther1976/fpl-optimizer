@@ -1952,3 +1952,26 @@ describe("the Live tab cannot present stale numbers as live", () => {
     expect(src).not.toMatch(/^\s*if \(error\)\s*$/m);
   });
 });
+
+describe("the league table says how much football is left", () => {
+  /*
+   * A live standings row is read for two things: the score, and how much is
+   * still to come. Two points ahead with five players yet to kick off is a
+   * different position from two points ahead with none, and the score alone
+   * cannot tell them apart.
+   */
+  const src = read("MiniLeague.tsx");
+
+  it("counts over the same players the score counts", () => {
+    // `squadMatchState` runs `projectAutoSubs` and honours Bench Boost, the
+    // same as `liveEntryScore`. Counting the raw first eleven here would
+    // credit a benched player's fixture and miss his replacement.
+    expect(src).toContain("squadMatchState(picks, elementById, live, data.fixtures, currentEvent)");
+  });
+
+  it("renders both counts and stays quiet once neither applies", () => {
+    expect(src).toMatch(/d\.inPlay > 0 \|\| d\.toStart > 0/);
+    // Not "0 · 0" on every row of a finished gameweek.
+    expect(src).not.toMatch(/\{d\.inPlay\}\s*·\s*\{d\.toStart\}/);
+  });
+});

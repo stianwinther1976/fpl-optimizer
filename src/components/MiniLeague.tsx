@@ -6,7 +6,7 @@ import { markNavigation } from "@/lib/nav";
 import { api, DEMO_ENTRY_ID, fmtNum, type TeamData } from "@/lib/fpl";
 import type { EventLive, LeagueStandings } from "@/lib/types";
 import { CHIP_LABELS } from "@/lib/rules";
-import { liveEntryScore, provisionalBonus } from "@/lib/live";
+import { liveEntryScore, provisionalBonus, squadMatchState } from "@/lib/live";
 import { ErrorBox, Skeleton } from "./ui";
 
 const MAX_RIVAL_DETAILS = 20;
@@ -17,6 +17,9 @@ interface RivalDetail {
   chip: string | null;
   livePoints: number | null; // incl. hits (net)
   hits: number;
+  /** Counting players whose match is running, and whose has not kicked off. */
+  inPlay: number;
+  toStart: number;
 }
 
 interface LeagueOwnership {
@@ -205,6 +208,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               chip: picks.active_chip,
               livePoints: net,
               hits,
+              ...squadMatchState(picks, elementById, live, data.fixtures, currentEvent),
             };
             return [r.entry, detail] as const;
           } catch {
@@ -416,6 +420,27 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                       {d && d.hits > 0 && (
                         <div className="text-[10px] leading-tight text-danger">−{d.hits}</div>
                       )}
+                      {/*
+                        WHAT THE SCORE ON ITS OWN CANNOT SAY. Two points ahead
+                        with five still to kick off is a different position from
+                        two points ahead with none left. See `squadMatchState`.
+                        Zeroes are omitted rather than printed: a finished
+                        gameweek should go quiet here, not render "0 · 0" on
+                        every row.
+                      */}
+                      {d && (d.inPlay > 0 || d.toStart > 0) && (
+                        <div className="text-[10px] leading-tight text-muted">
+                          {d.inPlay > 0 && (
+                            <span className="text-accent" title={`${d.inPlay} playing now`}>
+                              ●{d.inPlay}
+                            </span>
+                          )}
+                          {d.inPlay > 0 && d.toStart > 0 && " "}
+                          {d.toStart > 0 && (
+                            <span title={`${d.toStart} yet to kick off`}>▸{d.toStart}</span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono font-bold">{fmtNum(r.total)}</td>
                   </tr>
@@ -425,7 +450,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
           </table>
           {standings.standings.results.length > MAX_RIVAL_DETAILS && (
             <div className="border-t border-border-c px-4 py-2 text-xs text-muted">
-              Captain/chip/live details shown for the top {MAX_RIVAL_DETAILS} teams.
+              Captain/chip/live details shown for the top {MAX_RIVAL_DETAILS} teams. ● playing now, ▸ yet to kick off.
             </div>
           )}
         </div>
