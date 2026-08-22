@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchMinute, projectAutoSubs, provisionalBonus, isInPlay } from "../live";
+import { fixtureLines, matchMinute, projectAutoSubs, provisionalBonus, isInPlay } from "../live";
 import { availabilityAt, XP_CONFIG } from "../xp";
 import { makeElement } from "./mockdata";
 import type { Bootstrap, Element, EventLive, Fixture, Pick } from "../types";
@@ -693,5 +693,93 @@ describe("isInPlay", () => {
 
   it("is false before kickoff", () => {
     expect(isInPlay(f({ started: false }))).toBe(false);
+  });
+});
+
+describe("fixtureLines reads one match, not the gameweek", () => {
+  const bootstrap = { elements: [1, 2, 3].map((id) => makeElement({ id, team: id === 3 ? 2 : 1 })) } as Bootstrap;
+  void bootstrap;
+
+  const fx = (id: number, stats?: Fixture["stats"]): Fixture =>
+    ({
+      id,
+      event: 10,
+      team_h: 1,
+      team_a: 2,
+      team_h_difficulty: 3,
+      team_a_difficulty: 3,
+      kickoff_time: "2026-01-01T15:00:00Z",
+      finished: false,
+      started: true,
+      team_h_score: 1,
+      team_a_score: 0,
+      stats,
+    }) as Fixture;
+
+  const feed = (
+    spec: Record<number, { bps: number; legs: { fixture: number; minutes: number; points: number }[] }>
+  ): EventLive => ({
+    elements: Object.entries(spec).map(([id, s]) => ({
+      id: Number(id),
+      stats: {
+        minutes: s.legs.reduce((a, l) => a + l.minutes, 0),
+        total_points: s.legs.reduce((a, l) => a + l.points, 0),
+        bonus: 0,
+        bps: s.bps,
+        goals_scored: 0,
+        assists: 0,
+      },
+      explain: s.legs.map((l) => ({
+        fixture: l.fixture,
+        stats: [{ identifier: "minutes", points: l.points, value: l.minutes }],
+      })),
+    })),
+  }) as unknown as EventLive;
+
+  const dgw = feed({
+    1: { bps: 45, legs: [{ fixture: 1, minutes: 90, points: 9 }] },
+    2: { bps: 65, legs: [{ fixture: 1, minutes: 90, points: 8 }, { fixture: 2, minutes: 60, points: 3 }] },
+    3: { bps: 26, legs: [{ fixture: 2, minutes: 60, points: 5 }] },
+  });
+
+  it("leaves out a player who did not appear in this leg", () => {
+    /*
+     * Read off gameweek totals, the leg-2 sheet listed element 1 — who only
+     * played leg 1 — as a top performer in leg 2, at 90 minutes he did not play
+     * there, ranked on 45 BPS he did not earn there.
+     */
+    const lines = fixtureLines(fx(2), dgw);
+    expect(lines.has(1)).toBe(false);
+    expect(lines.get(2)).toEqual({ minutes: 60, points: 3, bps: null });
+    expect(lines.get(3)).toEqual({ minutes: 60, points: 5, bps: null });
+  });
+
+  it("does not add two legs' minutes together", () => {
+    // 90 + 60 = 150 across the gameweek; 90 in leg 1 and 60 in leg 2.
+    expect(fixtureLines(fx(1), dgw).get(2)!.minutes).toBe(90);
+    expect(fixtureLines(fx(2), dgw).get(2)!.minutes).toBe(60);
+  });
+
+  it("uses the fixture's own BPS ladder when it publishes one", () => {
+    const withBps = fx(2, [
+      { identifier: "bps", h: [{ element: 2, value: 20 }], a: [{ element: 3, value: 26 }] },
+    ]);
+    const lines = fixtureLines(withBps, dgw);
+    expect(lines.get(2)!.bps).toBe(20);
+    expect(lines.get(3)!.bps).toBe(26);
+  });
+
+  it("falls back to gameweek totals when the feed itemises nothing", () => {
+    // A stub feed, or a single-fixture gameweek — where the two agree anyway.
+    const flat = {
+      elements: [
+        { id: 1, stats: { minutes: 90, total_points: 9, bonus: 0, bps: 45, goals_scored: 0, assists: 0 } },
+      ],
+    } as unknown as EventLive;
+    expect(fixtureLines(fx(1), flat).get(1)).toEqual({ minutes: 90, points: 9, bps: 45 });
+  });
+
+  it("returns nothing at all without a live feed", () => {
+    expect(fixtureLines(fx(1), null).size).toBe(0);
   });
 });

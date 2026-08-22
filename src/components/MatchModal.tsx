@@ -1,7 +1,7 @@
 "use client";
 
 import type { Element, EventLive, Fixture, Team } from "@/lib/types";
-import { matchMinute, isInPlay } from "@/lib/live";
+import { fixtureLines, isInPlay, matchMinute } from "@/lib/live";
 import { kickoffLabel } from "@/lib/display";
 import { PlayerAvatar } from "./Pitch";
 import Sheet, { SheetClose } from "./Sheet";
@@ -26,7 +26,14 @@ export default function MatchModal({
   const home = teams.get(fixture.team_h);
   const away = teams.get(fixture.team_a);
   const liveNow = isInPlay(fixture);
-  const statOf = new Map(live?.elements.map((e) => [e.id, e.stats]) ?? []);
+  /*
+   * THIS MATCH'S NUMBERS, NOT THE GAMEWEEK'S. `live.elements[].stats` is a
+   * gameweek total, so in a double gameweek the leg-2 sheet listed players who
+   * only appeared in leg 1, showed them at 180', and ranked "top performers in
+   * this match" by two legs of BPS. Same family of defect as the one
+   * `provisionalBonus` was rewritten to remove, still live one file over.
+   */
+  const statOf = fixtureLines(fixture, live);
 
   const inMatch = elements.filter(
     (e) => e.team === fixture.team_h || e.team === fixture.team_a
@@ -36,7 +43,7 @@ export default function MatchModal({
     .filter((e) => (statOf.get(e.id)?.minutes ?? 0) > 0 && !squadIds.has(e.id))
     .sort(
       (a, b) =>
-        (statOf.get(b.id)?.total_points ?? 0) - (statOf.get(a.id)?.total_points ?? 0) ||
+        (statOf.get(b.id)?.points ?? 0) - (statOf.get(a.id)?.points ?? 0) ||
         (statOf.get(b.id)?.bps ?? 0) - (statOf.get(a.id)?.bps ?? 0)
     )
     .slice(0, 6);
@@ -67,10 +74,11 @@ export default function MatchModal({
           <span className="block truncate font-medium">{el.web_name}</span>
           <span className="block text-[11px] text-muted">
             {teams.get(el.team)?.short_name}
-            {s ? ` · ${s.minutes}' · bps ${s.bps}` : ""}
+            {s ? ` · ${s.minutes}'` : ""}
+            {s && s.bps != null ? ` · bps ${s.bps}` : ""}
           </span>
         </span>
-        <span className="shrink-0 font-mono font-bold">{s?.total_points ?? 0}</span>
+        <span className="shrink-0 font-mono font-bold">{s?.points ?? 0}</span>
       </button>
     );
   };

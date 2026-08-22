@@ -468,6 +468,9 @@ export default function OptimizePanel({
         recentForm: recent,
         // `loadRecentForm` has already awaited this, so the read is settled.
         pastSeason: cachedPastSeason() ?? undefined,
+        // Which half's chip window the reader is still reasoning about depends
+        // on which copies they have spent — see `chipWindow`.
+        usedChips: data.history?.chips ?? [],
       });
       setResult(res);
     } catch {
@@ -554,6 +557,7 @@ export default function OptimizePanel({
           precomputedXp: result?.xp,
           recentForm: recent,
           pastSeason: past,
+          usedChips: data.history?.chips ?? [],
         },
         chip
       );
@@ -1063,12 +1067,20 @@ export default function OptimizePanel({
                     {a.timing.note && (
                       <div
                         className={`mt-2 border-t border-border-c pt-2 text-xs ${
-                          a.timing.verdict === "structural-window-ahead"
+                          available && a.timing.verdict === "structural-window-ahead"
                             ? "text-warn"
                             : "text-muted"
                         }`}
                       >
-                        {a.timing.verdict === "structural-window-ahead" ? "⏳ " : ""}
+                        {/*
+                          A CHIP YOU DO NOT HAVE GETS NO HOURGLASS. The card
+                          dims and badges itself "Used / outside window", but the
+                          timing note rendered at full strength regardless — so a
+                          spent chip still urged the reader to wait for a
+                          gameweek they cannot play it in, in the one colour on
+                          the card that means "act on this".
+                        */}
+                        {available && a.timing.verdict === "structural-window-ahead" ? "⏳ " : ""}
                         {a.timing.note}
                       </div>
                     )}
@@ -1207,8 +1219,17 @@ function ChipSheet({
           {s.note && <span className="font-normal"> — {s.note}</span>}
         </div>
         <div className="mt-0.5 text-muted">
+          {/*
+            THE SAME CAVEAT THE CARD CARRIES, ON THE MORE PROMINENT RENDER.
+            `wcGain` is `max(0, bestSquadWithinValue − keepSquad)` — bounded
+            below by zero, and a freshly optimised squad beats a held one over
+            ANY window, so it is almost always comfortably positive. The advisor
+            card says in so many words that this is the size of a gap and not a
+            reason to play the chip; this sheet showed the identical quantity
+            with no such sentence, under a bigger heading.
+          */}
           {s.chip === "wildcard" && (
-            <>Projected to gain <b className="text-foreground">+{s.gain.toFixed(1)} pts</b> over {s.horizon} gameweeks vs keeping your team.</>
+            <>Projected to gain <b className="text-foreground">+{s.gain.toFixed(1)} pts</b> over {s.horizon} gameweeks vs keeping your team. That is the size of the gap between your squad and the best one your money can buy — not a reason to play the chip this week.</>
           )}
           {s.chip === "freehit" && (
             <>A one-week squad projects <b className="text-foreground">+{s.gain.toFixed(1)} pts</b> more than your team that gameweek.</>

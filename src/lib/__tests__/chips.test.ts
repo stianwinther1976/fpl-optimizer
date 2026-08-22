@@ -375,3 +375,53 @@ describe("chipWindow picks the window that is actually open", () => {
     expect(chipWindow("freehit", [], 35)).toBeNull();
   });
 });
+
+describe("chipWindow follows the chip the reader still holds", () => {
+  /*
+   * Since 2025/26 there are two of each chip, one per half. A manager who spent
+   * their first-half Bench Boost in GW5 and reads the advisor in GW10 was given
+   * the GW1-19 window — the one they have already used — so the note reasoned
+   * over the weeks to GW19 and never mentioned a double sitting in the
+   * second-half window, which is the only window their remaining chip can be
+   * played in.
+   */
+  const CHIPS = [
+    { name: "bboost", start_event: 2, stop_event: 19, number: 1 },
+    { name: "bboost", start_event: 20, stop_event: 38, number: 1 },
+  ];
+
+  it("skips a window whose chip is already spent", () => {
+    expect(chipWindow("bboost", CHIPS, 10, [{ name: "bboost", event: 5 }])).toEqual({
+      start: 20,
+      stop: 38,
+    });
+  });
+
+  it("keeps the current window when the chip spent was a different one", () => {
+    expect(chipWindow("bboost", CHIPS, 10, [{ name: "3xc", event: 5 }])).toEqual({
+      start: 2,
+      stop: 19,
+    });
+    // And when the copy spent belongs to the OTHER half.
+    expect(chipWindow("bboost", CHIPS, 10, [{ name: "bboost", event: 25 }])).toEqual({
+      start: 2,
+      stop: 19,
+    });
+  });
+
+  it("falls back to the real windows once every copy is spent", () => {
+    // "You have used them all" is a different answer from "the game published
+    // no window" — the card that dims itself already knows which remain, and
+    // this must not start returning null and silencing the expiry note.
+    const used = [
+      { name: "bboost", event: 5 },
+      { name: "bboost", event: 25 },
+    ];
+    expect(chipWindow("bboost", CHIPS, 30, used)).toEqual({ start: 20, stop: 38 });
+  });
+
+  it("is unchanged when nothing is passed", () => {
+    expect(chipWindow("bboost", CHIPS, 10)).toEqual({ start: 2, stop: 19 });
+    expect(chipWindow("bboost", CHIPS, 10, [])).toEqual({ start: 2, stop: 19 });
+  });
+});

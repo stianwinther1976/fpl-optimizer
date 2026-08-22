@@ -147,14 +147,41 @@ export function seasonStructure(
  */
 export function chipWindow(
   chipName: string,
-  bootstrapChips: { name: string; start_event: number; stop_event: number }[] | null | undefined,
-  nextEvent: number
+  bootstrapChips:
+    | { name: string; start_event: number; stop_event: number; number?: number }[]
+    | null
+    | undefined,
+  nextEvent: number,
+  /**
+   * Chips the reader has already played, with the gameweek each was played in.
+   *
+   * WITHOUT THIS THE ADVISOR REASONS ABOUT A WINDOW THE READER HAS NO CHIP FOR.
+   * Since 2025/26 there are two of each chip, one per half. A manager who spent
+   * their first-half Bench Boost in GW5 and reads the advisor in GW10 was given
+   * the GW1-19 window — the one they have already used — so the note talked
+   * about the weeks between now and GW19 and never mentioned the double
+   * gameweek sitting in the second-half window, which is the only window their
+   * remaining chip can be played in.
+   */
+  usedChips?: { name: string; event: number }[]
 ): { start: number; stop: number } | null {
   if (!bootstrapChips || bootstrapChips.length === 0) return null;
-  const mine = bootstrapChips
+  const all = bootstrapChips
     .filter((c) => c.name === chipName)
     .sort((a, b) => a.stop_event - b.stop_event);
-  if (mine.length === 0) return null;
+  if (all.length === 0) return null;
+  const spent = (c: { start_event: number; stop_event: number; number?: number }) => {
+    const used = (usedChips ?? []).filter(
+      (u) => u.name === chipName && u.event >= c.start_event && u.event <= c.stop_event
+    ).length;
+    return used >= (c.number ?? 1);
+  };
+  // Windows the reader still holds a chip for. If they hold none, fall back to
+  // the full list rather than returning null: "you have used them all" is a
+  // different answer from "the game published no window", and the caller that
+  // dims the card already knows which chips remain.
+  const unspent = all.filter((c) => !spent(c));
+  const mine = unspent.length > 0 ? unspent : all;
   /*
    * "THE GAME PUBLISHED NO WINDOW" AND "EVERY WINDOW HAS PASSED" ARE DIFFERENT
    * ANSWERS, and returning null for both conflated them — a chip read in GW25
@@ -304,7 +331,10 @@ export function chipTiming(
   leagueTeamIds: number[],
   nextEvent: number,
   lastEvent: number,
-  bootstrapChips: { name: string; start_event: number; stop_event: number }[] | null | undefined,
+  bootstrapChips:
+    | { name: string; start_event: number; stop_event: number; number?: number }[]
+    | null
+    | undefined,
   /** Gameweeks already scored on expected points, which need no flagging. */
   horizonEnd: number,
   /**
@@ -312,9 +342,11 @@ export function chipTiming(
    * structural read, which is all the caller can offer if it has no projection
    * reaching that far.
    */
-  scoring?: ChipScoring
+  scoring?: ChipScoring,
+  /** See `chipWindow`: which half's window the reader still holds a chip for. */
+  usedChips?: { name: string; event: number }[]
 ): ChipTiming {
-  const window = chipWindow(chip, bootstrapChips, nextEvent);
+  const window = chipWindow(chip, bootstrapChips, nextEvent, usedChips);
   if (window === null) {
     return { chip, window: null, windows: [], scored: [], verdict: "unknown-window", note: "" };
   }

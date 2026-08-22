@@ -1215,3 +1215,66 @@ describe("things the accessibility tree has to be told", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("the match sheet reads one match", () => {
+  it("goes through fixtureLines rather than the gameweek totals", () => {
+    /*
+     * `live.elements[].stats` is a GAMEWEEK total. Read as a per-match figure
+     * it listed players who only appeared in the other leg, showed them at
+     * 180', and ranked "top performers in this match" on two legs of BPS —
+     * the same family of defect `provisionalBonus` was rewritten to remove,
+     * still live one file over.
+     */
+    const src = read("MatchModal.tsx");
+    expect(src).toContain("fixtureLines(fixture, live)");
+    expect(src).not.toMatch(/live\?\.elements\.map\(\(e\) => \[e\.id, e\.stats\]\)/);
+    expect(src).not.toContain("total_points");
+  });
+});
+
+describe("the chip advisor's copy", () => {
+  const src = read("OptimizePanel.tsx");
+
+  it("carries the wildcard caveat on the sheet as well as the card", () => {
+    /*
+     * `wcGain` is `max(0, bestSquadWithinValue − keepSquad)`: bounded below by
+     * zero, and a freshly optimised squad beats a held one over any window, so
+     * it is almost always comfortably positive. The advisor card says in so
+     * many words that this is the size of a gap and not a reason to play the
+     * chip; the sheet showed the identical quantity under a bigger heading with
+     * no such sentence.
+     */
+    const at = src.indexOf('s.chip === "wildcard" && (');
+    expect(at).toBeGreaterThan(0);
+    expect(src.slice(at, at + 500)).toMatch(/not a reason to play the chip this week/);
+  });
+
+  it("gives a chip the reader does not hold no call to action", () => {
+    // The card dims and badges itself "Used / outside window", but the timing
+    // note rendered at full strength regardless — urging the reader to wait for
+    // a gameweek they cannot play it in, in the one colour that means "act".
+    const at = src.indexOf("{a.timing.note && (");
+    expect(at).toBeGreaterThan(0);
+    const block = src.slice(at, at + 1400);
+    expect(
+      (block.match(/available && a\.timing\.verdict === "structural-window-ahead"/g) ?? []).length
+    ).toBe(2); // the colour and the hourglass
+  });
+
+  it("uses the reader's spent chips to decide which window to reason about", () => {
+    // Two of each chip since 2025/26, one per half. Without this the advisor
+    // reasons over a window the reader has no chip left for.
+    expect(src).toContain("usedChips: data.history?.chips ?? []");
+    expect((src.match(/usedChips: data\.history\?\.chips \?\? \[\]/g) ?? []).length).toBe(2);
+  });
+
+  it("scores a chip preview on the same projection as the advisor", () => {
+    // `showChip` awaited the past-season load and not the recent-form load, so
+    // a chip tapped before Optimize projected without recent form while the
+    // advisor projected with it — Wildcard "+2.3 pts" against +0.0.
+    const at = src.indexOf("async function showChip");
+    const body = src.slice(at, src.indexOf("setChipView(scen)", at));
+    expect(body).toContain("await loadRecentForm()");
+    expect(body).toContain("recentForm: recent");
+  });
+});

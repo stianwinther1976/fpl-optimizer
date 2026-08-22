@@ -192,6 +192,62 @@ export function provisionalBonus(
   return { byElement };
 }
 
+/** One player's line in ONE fixture, rather than across the gameweek. */
+export interface FixtureLine {
+  minutes: number;
+  points: number;
+  /** Null when the fixture publishes no BPS ladder — see `provisionalBonus`. */
+  bps: number | null;
+}
+
+/**
+ * Everyone who appeared in ONE fixture, with that fixture's own numbers.
+ *
+ * `live.elements[].stats` IS A GAMEWEEK TOTAL. Read as a per-match figure it
+ * says a player who only appeared in leg 1 played in leg 2, gives him 180
+ * minutes, and ranks him by two legs of BPS — which is exactly the family of
+ * defect `provisionalBonus` was rewritten to remove, and it was still live one
+ * file over in the match sheet.
+ *
+ * `explain` carries a `fixture` id, so minutes and points are answerable per
+ * leg; `fixture.stats` carries the BPS ladder when FPL has published one. Where
+ * the feed itemises nothing at all — a stub, or a gameweek with a single
+ * fixture — the gameweek total IS this fixture's total and is used as-is.
+ */
+export function fixtureLines(fixture: Fixture, live: EventLive | null): Map<number, FixtureLine> {
+  const out = new Map<number, FixtureLine>();
+  if (!live) return out;
+  const bpsRow = fixture.stats?.find((st) => st.identifier === "bps");
+  const bpsOf = bpsRow
+    ? new Map<number, number>([...bpsRow.h, ...bpsRow.a].map((r) => [r.element, r.value]))
+    : null;
+  const itemised = live.elements.some((e) => (e.explain ?? []).length > 0);
+  for (const e of live.elements) {
+    const legs = (e.explain ?? []).filter((ex) => ex.fixture === fixture.id);
+    if (itemised && legs.length === 0) continue;
+    let minutes = 0;
+    let points = 0;
+    if (itemised) {
+      for (const leg of legs) {
+        for (const st of leg.stats) {
+          points += st.points;
+          if (st.identifier === "minutes") minutes += st.value;
+        }
+      }
+    } else {
+      minutes = e.stats.minutes;
+      points = e.stats.total_points;
+    }
+    if (minutes <= 0 && points === 0) continue;
+    out.set(e.id, {
+      minutes,
+      points,
+      bps: bpsOf ? (bpsOf.get(e.id) ?? null) : itemised ? null : e.stats.bps,
+    });
+  }
+  return out;
+}
+
 export interface AutoSubResult {
   /** element ids of starters projected to be replaced */
   out: number[];

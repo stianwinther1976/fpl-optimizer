@@ -259,6 +259,16 @@ export interface OptimizerInput {
    */
   pastSeason?: Map<number, PastSeasonStats>;
   /**
+   * Chips already played, with the gameweek each was played in — `history.chips`
+   * verbatim.
+   *
+   * Since 2025/26 there are two of each chip, one per half, so which window a
+   * reader is still reasoning about depends on which copies they have spent.
+   * Without this the advisor hands out timing advice for a window they have no
+   * chip left for, and says nothing about the one they do. See `chipWindow`.
+   */
+  usedChips?: { name: string; event: number }[];
+  /**
    * How many projected points the reader will trade for a pick the field is
    * not on, when choosing a captain. Zero — the default — means "do not ask",
    * and leaves every ordering here exactly as it was.
@@ -504,7 +514,7 @@ export function optimize(input: OptimizerInput): OptimizerResult {
    * so there is nothing here for it to get wrong.
    */
   const inChipWindow = (chip: string): ((gw: number) => boolean) => {
-    const w = chipWindow(chip, bootstrap.chips, nextEvent);
+    const w = chipWindow(chip, bootstrap.chips, nextEvent, input.usedChips);
     // No published window is not "every gameweek is fine", but it is the only
     // honest reading left: `chipWindow` returns null precisely when the game
     // has said nothing, and every caller then declines to constrain.
@@ -634,7 +644,8 @@ export function optimize(input: OptimizerInput): OptimizerResult {
       lastEvent,
       bootstrap.chips,
       horizonEnd,
-      scoringFor(chip)
+      scoringFor(chip),
+      input.usedChips
     );
 
   chipAdvice.push({
