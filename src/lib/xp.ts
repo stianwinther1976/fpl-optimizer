@@ -2001,7 +2001,35 @@ function buildStrengths(bootstrap: Bootstrap, fixtures: Fixture[]): StrengthTabl
   const avgAttA = avg((t) => t.strength_attack_away);
   const avgDefH = avg((t) => t.strength_defence_home);
   const avgDefA = avg((t) => t.strength_defence_away);
-  // Ratings are "usable" when they actually vary between teams.
+  /*
+   * Ratings are "usable" when they actually vary between teams.
+   *
+   * WHAT THE LIVE FEED ACTUALLY CONTAINS, read off both snapshots in this
+   * repo's sibling directory — 2026-08-07 (pre-season) and 2026-08-21 (GW1 in
+   * progress, one fixture played):
+   *
+   *     strength                 null      on all 20 clubs, both snapshots
+   *     strength_attack_home     0         on all 20, both
+   *     strength_attack_away     0         on all 20, both
+   *     strength_defence_home    0         on all 20, both
+   *     strength_defence_away    0         on all 20, both
+   *     strength_overall_home    2..4      integers
+   *     strength_overall_away    2..5      integers
+   *
+   * So `spread` is ZERO and this is not usable — the Poisson branch below does
+   * not run, and every projection goes through the FDR fallback. CLAUDE.md
+   * records that as the pre-season state; what the GW1 snapshot adds is that it
+   * had not changed a fixture into the season.
+   *
+   * WHETHER IT EVER CHANGES IS UNVERIFIED. Nothing here can reach the live API,
+   * and no snapshot from later in a season exists to check. The 40 threshold
+   * assumes the ~1000-1400 scale the four breakdown ratings used to carry; if
+   * FPL has moved them to the 1-5 scale `strength_overall_*` now uses, a
+   * genuine spread of 3 would still read as unusable and the branch would be
+   * dead for good. Take a snapshot mid-season and look before assuming either.
+   * `src/lib/demo.ts` builds its clubs on the old scale, so the tests exercise
+   * the branch production may never reach.
+   */
   const spread =
     Math.max(...teams.map((t) => t.strength_attack_home)) -
     Math.min(...teams.map((t) => t.strength_attack_home));
@@ -2015,6 +2043,13 @@ function buildStrengths(bootstrap: Bootstrap, fixtures: Fixture[]): StrengthTabl
   // Overall ratings live on a 1-5 scale pre-season and ~1000-1400 in-season, so
   // they are used only as a ratio to the league mean — that works on both, and
   // collapses harmlessly to 1.0 when every club is rated the same.
+  //
+  // THE RATIO IS SCALE-FREE; ITS SPREAD IS NOT. On the live 1-5 scale the ratio
+  // runs 0.656..1.475 across the twenty clubs; on the demo's 1000-1400 scale it
+  // runs 0.860..1.140. The clamps this feeds downstream — `clamp(q, 0.65, 1.4)`,
+  // `clamp(q, 0.45, 1.6)`, `clamp(1 / q, 0.6, 1.8)` — therefore bite on real
+  // data and never bite on demo data, so nothing in the suite covers the regime
+  // the app actually runs in.
   const overall = (t: Team) => (t.strength_overall_home + t.strength_overall_away) / 2;
   const meanOverall = avg(overall);
   const ownQuality = new Map<number, number>();

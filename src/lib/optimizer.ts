@@ -997,9 +997,24 @@ export function benchAwareScore(squad: Element[], scoreOf: (id: number) => numbe
  * property that makes it correct can be asserted directly: the CHEAPEST
  * eligible player at each position must be reachable. A pool of "the best 40"
  * is the natural thing to write and is exactly wrong here — on real data the
- * cheapest keeper is somewhere past rank 60, so a search restricted to the
- * best 40 cannot build a cheap bench and would return the greedy draft while
- * looking like it had tried.
+ * cheapest player at a position can rank far below 40 on score, so a search
+ * restricted to the best 40 cannot build a cheap bench and would return the
+ * greedy draft while looking like it had tried.
+ *
+ * THE KEEPER IS THE ONE POSITION THIS IS FALSE OF, and this paragraph used to
+ * name him. Re-measured on the 2026-08-19 snapshot (595 elements, launch pool,
+ * with last season's record), score-ranked by `totalDiscounted`:
+ *
+ *   pos  eligible  floor price  at the floor  best score-rank at the floor  in top 40
+ *   GK       59       £4.0m          16                   22                   7
+ *   DEF     183       £4.0m          45                   69                   0
+ *   MID     250       £4.5m          24                  118                   0
+ *   FWD      63       £4.5m           9                   35                   1
+ *
+ * There are only 59 keepers in the whole pool, so "past rank 60" is not
+ * something a keeper can be, and the cheapest ones are comfortably inside 40.
+ * The union with `byPrice` is genuinely load-bearing — for DEFENDERS and
+ * MIDFIELDERS, where not one floor-priced player is in the best 40.
  */
 export function benchAwarePool(
   elements: Element[],
@@ -1147,13 +1162,22 @@ export interface LaunchVariant {
    *
    * THIS EXISTS BECAUSE `xi.totalXp` RANKS THE DRAFTS THE OTHER WAY ROUND.
    * That field is next-GW only, and the card used to show it as the draft's
-   * headline number. Measured on the 2026-08-07 snapshot:
+   * headline number. Re-measured on the 2026-08-19 snapshot (595 elements, with
+   * last season's record); the 2026-08-07 figures this table used to carry are
+   * in the history, and the two annotations attached to them had drifted onto
+   * the wrong rows:
    *
    *   draft       GW1 XI    XI summed over GW1-5
-   *   value        46.31          217.98   <- best on GW1, worst on the horizon
-   *   balanced     45.94          219.70
+   *   value        46.18          218.63   <- worst on the horizon
+   *   balanced     46.31          220.47   <- best on GW1
    *   strongxi     47.10          222.99
-   *   stars        44.87          223.00   <- worst on GW1, best on the horizon
+   *   stars        44.80          222.72   <- worst on GW1
+   *
+   * The orderings are still close to reversed, which is the point the table
+   * exists to make: GW1 runs strongxi > balanced > value > stars and the
+   * horizon runs strongxi > stars > balanced > value. What has changed is that
+   * the same draft no longer tops both ends — strongxi now leads on the horizon
+   * as well, and `value` is no longer best on GW1.
    *
    * A reader picking the biggest number on screen was picking the draft that
    * scores least over the period they will actually hold it. The note above
@@ -1197,6 +1221,12 @@ export interface LaunchRanking {
  * WHY A TIE RULE AT ALL, AND WHY IT IS THE PRINTED PRECISION.
  * On the 2026-08-07 snapshot the top two drafts came out at 223.00 (stars) and
  * 222.99 (strongxi): 0.01 points over five gameweeks, i.e. 0.002 a week. The
+ * ILLUSTRATION NO LONGER REPRODUCES — on 2026-08-19 the same two are 222.99
+ * (strongxi) and 222.72 (stars), which prints as 223.0 against 222.7 and is not
+ * a tie. The rule is unchanged and should stay: a gap that was 0.01 one week
+ * and 0.27 the next is exactly the instability it exists to absorb, and
+ * re-deriving the tie threshold from whichever snapshot is to hand is how noise
+ * gets shipped. The
  * card printed both as "223 xp/5gw" and hung a BEST badge on one of them, so
  * the badge contradicted the number printed an inch to its right. A reader can
  * only read that as the app knowing something it is not showing them, and it
@@ -1252,20 +1282,26 @@ export const VALUE_CAP = 85;
  * dearest pick falls to £8.5m or below — the two builds then come out
  * byte-identical, `buildLaunchVariants` dedupes one away, and the manager is
  * shown three cards where four were promised, with nothing failing anywhere.
- * That is not hypothetical, but it is narrower than it first looks: on the
- * 2026-27 pool the balanced draft's dearest pick is £12.0m when last season's
- * minutes are available and £8.0m when they are not, so the bug bites only on
- * the fallback path `OptimizePanel` takes when the per-player history could
- * not be fetched — which is the path a manager hits when the FPL API is flaky,
- * i.e. the one nobody tests by hand.
+ * That is not hypothetical, AND IT IS NOT CONFINED TO THE FALLBACK PATH, which
+ * is what this paragraph used to claim. Re-measured on the 2026-08-19 snapshot,
+ * the balanced draft's dearest pick is £8.5m on BOTH paths — with last season's
+ * minutes and without. At £8.5m the guard `dearest > VALUE_CAP` is `85 > 85`,
+ * which is false, so the conditional fires on the normal path too. It is
+ * load-bearing there: with history, a fixed £8.5m cap builds a squad sharing
+ * 15 of 15 with balanced, so the two cards would be byte-identical, one would
+ * be deduped away, and the manager would be shown three where four were
+ * promised. The code is right; the evidence recorded for why was stale and
+ * pointed at the wrong path.
  *
  * But deriving the cap from the balanced draft ALONE is worse, for a reason
- * that is easy to get backwards — I did. On the normal path the balanced
- * draft's dearest player is £12.0m, so a pure "one tier below" rule gives an
- * £11.5m cap. Measured, that cap produces a squad BYTE-IDENTICAL to the one
- * the £8.5m cap produces (both share 12 of 15 with balanced, both top out at
- * £8.5m): the greedy build simply never wanted anyone between £8.5m and
- * £11.5m. So the derived cap costs nothing in squad terms — the damage is
+ * that is easy to get backwards — I did. When the balanced draft's dearest
+ * player is a premium, a pure "one tier below" rule gives a cap just under it,
+ * and measured against a fixed £8.5m that produced a BYTE-IDENTICAL squad: the
+ * greedy build simply never wanted anyone in between. (On 2026-08-19 the
+ * balanced draft tops out at £8.5m itself, so the derived cap and the fixed one
+ * coincide and the comparison is degenerate — the argument stands on the case
+ * where they differ, which is why it is stated as a rule and not as a table.)
+ * So the derived cap costs nothing in squad terms — the damage is
  * entirely in the card, which would announce an £11.5m ceiling for a draft
  * whose dearest player is £8.5m, and would move that headline number around
  * from season to season for no reason a manager could act on.
@@ -1399,12 +1435,12 @@ export function buildLaunchVariants(
       "Balanced",
       // Names the metric it wins on, deliberately. Each card also shows its
       // starting XI's projected points, and "Strong XI" beats this one on that
-      // number — 47.9 against 49.9 on the current pool. Measured, not by
-      // construction: `benchAwareScore` maximises discounted xP over five
+      // number — 46.31 against 47.10 on the 2026-08-19 snapshot. Measured, not
+      // by construction: `benchAwareScore` maximises discounted xP over five
       // gameweeks with no captain term, while the card prints next-GW xP with
       // the captain doubled, so the two are not the same objective and nothing
       // guarantees the ordering. It just happens to hold on both real-pool
-      // paths (42.6 against 45.0 on the no-history fallback). A card
+      // paths (43.81 against 45.68 on the no-history fallback). A card
       // that called itself "the model's single best draft", which this one
       // did, was therefore contradicted by the figure printed beside it.
       "Highest projected points across all fifteen — best on the squad total, not on the eleven alone.",
