@@ -2600,9 +2600,45 @@ function preseasonMinutes(
     // measurement covers. It also makes the pull's ceiling here 0.55, so the
     // record-less half of `penaltyTakerRate`'s 0.60 never fully lands — that is
     // the cap winning an argument it has already won once, not an oversight.
-    const capped = cfg.preseasonRecordlessCapExemptsSetPieces
-      ? Math.max(Math.min(prior, cfg.preseasonRecordlessGlobalCap), role)
-      : Math.min(role, cfg.preseasonRecordlessGlobalCap);
+    /*
+     * THE EXEMPT BRANCH SAID `role` WHERE IT MEANT `floor`, WHICH MADE IT NOT
+     * AN EXEMPTION AT ALL — IT REMOVED THE CAP FOR EVERYONE.
+     *
+     * `role` is `max(floor, withDuty(0, 0, prior))` and `withDuty` returns at
+     * least `plain = prior`, so `role >= prior >= min(prior, cap)` always, and
+     * `max(min(prior, cap), role)` collapses to `role` for every record-less
+     * player whether he takes a set piece or not. Checked on the pre-season
+     * snapshot: `exempt = true` was bit-identical to setting
+     * `preseasonRecordlessGlobalCap` to 1 across all 529 outfielders, and it
+     * lifted players with no first-choice set-piece duty at all.
+     *
+     * That matters beyond the dead branch, because it is what the archive
+     * sweep recorded above actually measured: NO record-less cap, not a
+     * set-piece exemption. The doc on `movable` two thousand lines down states
+     * the intended formula as `max(min(prior, globalCap), floor)` and reasons
+     * from `floor` throughout — so the doc was right and the code was not.
+     *
+     * So the branch is gated on the thing it is named after. `floor > 0` IS
+     * "first-choice corner or free-kick taker" — `setPieceStartFloor` returns
+     * `setPieceTakerPStart` for exactly those players and 0 for everyone else —
+     * so a taker escapes the cap and nobody else does. Substituting `floor` for
+     * `role` was tried first and is worse: with `setPieceTakerPStart` (0.5)
+     * below `preseasonRecordlessGlobalCap` (0.55) it makes the flag a pure
+     * no-op, which loses the executable losing branch rather than fixing it.
+     *
+     * WHAT THIS DOES TO THE SWEEP RECORDED ABOVE: the archive measurement that
+     * refuted the exemption was run against the collapsed form, so it measured
+     * removing the record-less cap from EVERY record-less player, not exempting
+     * takers. It is evidence against a bigger change than the one this flag now
+     * names, and it is not evidence about this one. The flag stays off — the
+     * shipped path is `min(role, cap)` either way and does not move — but
+     * anyone re-opening the argument has to re-measure rather than cite the
+     * table above.
+     */
+    const capped =
+      cfg.preseasonRecordlessCapExemptsSetPieces && floor > 0
+        ? role
+        : Math.min(role, cfg.preseasonRecordlessGlobalCap);
     const pStart = clamp(capped, 0, 1);
     return { pStart, minsPerStart: mps, share: clamp((pStart * mps) / 90, 0, 1) };
   }
@@ -3096,7 +3132,24 @@ function minutesModel(
     // came out at `{0, 0, 0}` and was modelled at the 0.03 floor in `xMins`,
     // however many minutes he was really playing. A floor can only ever raise a
     // player, so nobody who does start is demoted by it.
-    const subFloor = mm.pStart === 0 ? recent.minsPerGame / 90 : 0;
+    //
+    // AND THAT LAST SENTENCE IS THE ARGUMENT FOR NOT GATING IT, WHICH IT WAS.
+    // The test was `mm.pStart === 0`, i.e. "has never started this season", so
+    // one solitary start switched the floor off while the `share` overwrite
+    // stayed. Two players with identical minutes (1400 of a possible 1800) and
+    // identical recent form (`startShare` 0, `minsPerGame` 70), differing only
+    // in one start all season:
+    //
+    //     never started   pStart 0.0000   share 0.7778   next xP 0.922
+    //     started once    pStart 0.0175   share 0.0175   next xP 0.462
+    //
+    // A 44-fold understatement of playing time, and the sign is inverted: the
+    // man with MORE evidence of starting projects at half the points. The
+    // near-miss case — a regular substitute with one start behind him — is the
+    // population the floor was written for and it was the one case it missed.
+    // `minsPerGame` is minutes per RECORDED ROUND including unused benchings,
+    // which is the same axis as `share`, so it floors like for like.
+    const subFloor = recent.minsPerGame / 90;
     const share = Math.max((pStart * minsPerStart) / 90, subFloor);
     return { pStart, minsPerStart, share: clamp(share, 0, 1) };
   }
@@ -3533,6 +3586,52 @@ function fixtureXp(
 }
 
 /** Full xP projection for every element over the horizon. */
+/**
+ * Cap each keeper's conditional start share and push what the cap takes off
+ * onto the keepers who still have room for it, weighted by their own strength.
+ *
+ * EXPORTED SO THE RULE CAN BE ASSERTED. The loop lives four levels inside
+ * `projectAll`'s club scan, and its two defects were both invisible from
+ * outside: reachable inputs need a whole club of doubtful keepers, and by the
+ * time the number leaves `projectAll` it has been through the outfield mass
+ * rebalance as well, so nothing a pipeline test can read is this quantity.
+ * That is the same argument `display.ts` makes for its own existence.
+ *
+ * `p` is the unconditional probability each keeper starts, already summing to
+ * the club's slot mass. `av` is availability and `raw` the depth-chart weight.
+ * The result is CONDITIONAL on the keeper being fit, because `fixtureXp`
+ * multiplies availability back in for everyone alike — which is what makes the
+ * cap dangerous rather than decorative, and is set out at the call site.
+ */
+export function capAndRedistribute(
+  p: readonly number[],
+  av: readonly number[],
+  raw: readonly number[],
+  cap: number
+): number[] {
+  const cond = p.map((v, i) => (av[i] > 0 ? v / av[i] : 0));
+  for (let pass = 0; pass < cond.length; pass++) {
+    let spare = 0;
+    const room: number[] = [];
+    for (let i = 0; i < cond.length; i++) {
+      if (cond[i] > cap) {
+        spare += (cond[i] - cap) * av[i];
+        cond[i] = cap;
+      } else if (av[i] > 0 && cond[i] < cap) {
+        // ROOM MEANS ROOM. `cond[i] > cap` is strict, so without the second
+        // test a keeper sitting at exactly the cap fell through to here and was
+        // re-admitted as a RECIPIENT — taking a share weighted by the largest
+        // `raw` there is and having every point of it clamped away again.
+        room.push(i);
+      }
+    }
+    const wsum = room.reduce((s, i) => s + av[i] * raw[i], 0);
+    if (spare <= 0 || wsum <= 0) break;
+    for (const i of room) cond[i] += (spare * raw[i]) / wsum;
+  }
+  return cond;
+}
+
 export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
   const cfg = XP_CONFIG;
   const horizon = ctx.horizon ?? cfg.horizon;
@@ -3702,22 +3801,25 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
         // certain to start a game he is fit for — but the probability it takes
         // off is real and is pushed onto the keepers who have room for it,
         // in proportion to their own weight, rather than thrown away. Repeated
-        // because a redistribution can push the next man over the cap in turn;
-        // it converges in at most one pass per keeper.
-        const cond = list.map((_, i) => (av[i] > 0 ? p[i] / av[i] : 0));
-        for (let pass = 0; pass < list.length; pass++) {
-          let spare = 0;
-          const room: number[] = [];
-          for (let i = 0; i < cond.length; i++) {
-            if (cond[i] > cfg.preseasonMaxPStart) {
-              spare += (cond[i] - cfg.preseasonMaxPStart) * av[i];
-              cond[i] = cfg.preseasonMaxPStart;
-            } else if (av[i] > 0) room.push(i);
-          }
-          const wsum = room.reduce((s, i) => s + av[i] * raw[i], 0);
-          if (spare <= 0 || wsum <= 0) break;
-          for (const i of room) cond[i] += (spare * raw[i]) / wsum;
-        }
+        // because a redistribution can push the next man over the cap in turn.
+        //
+        // "ROOM" MEANS ROOM, AND A KEEPER PINNED AT THE CAP HAS NONE. The test
+        // was `av[i] > 0` alone, and `cond[i] > max` is strict, so a keeper
+        // sitting at exactly the cap failed the first branch and was re-admitted
+        // as a RECIPIENT on the next pass. He then took a share weighted by
+        // `raw[i] = exp(beta * score)` — which for a pinned favourite is the
+        // largest weight there is — and every point of it was destroyed by the
+        // final clamp. That is the same defect this whole block was written to
+        // fix, one level down.
+        //
+        // It needs two passes to bite, which is why it survived: pass 0 pins
+        // the favourites and hands the spare to the deputy, and only if the
+        // DEPUTY then overshoots does pass 1 generate spare while the pinned
+        // men are in `room`. Found by grid search over availability and score,
+        // worst case av [0.2, 0.5, 0.3] with scores [0.8, 1.0, 0]: the club's
+        // keepers covered 0.7975 of a shirt against a `slotMass` of 0.95, and
+        // the deputy took 0.395 where he should have 0.903.
+        const cond = capAndRedistribute(p, av, raw, cfg.preseasonMaxPStart);
         list.forEach((_, i) => {
           shares[i][off] = clamp(cond[i], 0, cfg.preseasonMaxPStart);
         });

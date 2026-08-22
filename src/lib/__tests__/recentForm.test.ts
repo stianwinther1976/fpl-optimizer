@@ -222,3 +222,44 @@ describe("recent minutes reach minsPerStart", () => {
     expect(mm.get(1)!.minsPerStart).toBe(0);
   });
 });
+
+describe("the substitute-minutes floor is not switched off by one start", () => {
+  /*
+   * The recency branch OVERWRITES the season `share` computed from actual
+   * minutes, and the floor that put those minutes back was gated on
+   * `mm.pStart === 0` — "has never started this season". One solitary start
+   * therefore switched the floor off while the overwrite stayed, so the man
+   * with MORE evidence of starting projected at a fraction of the man with
+   * none. The near-miss case is the population the floor was written for.
+   */
+  const regularSub = (id: number, starts: number) =>
+    el({ id, team: 1, element_type: 3, starts, minutes: 700 });
+  const lastFive = (id: number) =>
+    new Map([[id, { startShare: 0, minsPerGame: 70, minsPerStart: null }]]);
+
+  it("carries a regular substitute's real minutes whether or not he once started", () => {
+    const never = minutesOf([regularSub(1, 0)], lastFive(1));
+    const once = minutesOf([regularSub(1, 1)], lastFive(1));
+    const a = never.mm.get(1)!;
+    const b = once.mm.get(1)!;
+    // Both are floored at the recent per-round minutes, 70/90.
+    expect(a.share).toBeCloseTo(70 / 90, 6);
+    expect(b.share).toBeCloseTo(70 / 90, 6);
+    /*
+     * And the projections track rather than differing by a factor. They are not
+     * identical — one start moves other terms too — but the gap is a few per
+     * cent where it used to be a halving: measured 2.126 against 2.063, 3.0%.
+     * The bar is 10%, well inside the 50% the gated floor produced.
+     */
+    const a2 = never.xp.get(1)!.next;
+    const b2 = once.xp.get(1)!.next;
+    expect(Math.abs(a2 - b2) / a2).toBeLessThan(0.1);
+  });
+
+  it("never lowers a player who does start", () => {
+    // A floor can only raise. A regular starter's own share must survive it.
+    const starter = el({ id: 1, team: 1, element_type: 3, starts: 10, minutes: 890 });
+    const withForm = minutesOf([starter], new Map([[1, { startShare: 1, minsPerGame: 89, minsPerStart: 89 }]]));
+    expect(withForm.mm.get(1)!.share).toBeGreaterThan(0.95);
+  });
+});

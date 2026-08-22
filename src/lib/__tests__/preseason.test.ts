@@ -2387,6 +2387,41 @@ describe("pre-season club start mass", () => {
     // should know the thing they would be switching on is much smaller than the
     // thing that was measured. The bound is what pins that claim.
     expect(exempt).toBeLessThan(shipped + 0.05);
+
+    /*
+     * AND IT EXEMPTS SET-PIECE TAKERS, WHICH IS WHAT IT IS CALLED.
+     *
+     * The branch read `max(min(prior, cap), role)`, and `role` is
+     * `max(floor, withDuty(0, 0, prior))` while `withDuty` returns at least
+     * `prior` — so `role >= prior >= min(prior, cap)` always and the whole
+     * expression collapsed to `role`. That is not an exemption, it is the cap
+     * switched off for every record-less player in the game. The control below
+     * is the assertion that was missing: this test only ever exercised a taker,
+     * so it passed under either reading, which is precisely the failure mode
+     * CLAUDE.md describes — the test and the code sharing a misunderstanding.
+     */
+    const withFlag = <T,>(on: boolean, f: () => T): T => {
+      const k = XP_CONFIG.preseasonRecordlessCapExemptsSetPieces;
+      try {
+        XP_CONFIG.preseasonRecordlessCapExemptsSetPieces = on;
+        return f();
+      } finally {
+        XP_CONFIG.preseasonRecordlessCapExemptsSetPieces = k;
+      }
+    };
+    /*
+     * The control has to be a player the CEILING ACTUALLY BINDS, or switching
+     * the flag cannot move him and the assertion is vacuous either way. The
+     * price ladder above records the prior reaching 0.550 on its own at £7.0m,
+     * so 705 at £6.0m (prior 0.377) is the right control for the role-term
+     * mutant and the wrong one for this. Re-priced to £10.0m his prior clears
+     * the ceiling, which is exactly the case the collapsed branch exempted him
+     * from despite his having no set-piece duty at all.
+     */
+    rest.find((e) => e.id === 705)!.now_cost = 100;
+    const cappedControl = noMass(705);
+    expect(cappedControl).toBeCloseTo(XP_CONFIG.preseasonRecordlessGlobalCap, 10);
+    expect(withFlag(true, () => noMass(705))).toBeCloseTo(cappedControl, 10);
   });
 
   it("does not apply the record-less ceiling to goalkeepers", () => {
@@ -2681,3 +2716,4 @@ describe("pre-season club start mass", () => {
     expect(sum(p, promoted)).toBe(0);
   });
 });
+
