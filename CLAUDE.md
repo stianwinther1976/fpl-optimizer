@@ -13,7 +13,7 @@ entry id.
 ```bash
 npm run dev               # local dev server
 npm run build             # production build — run before claiming anything is done
-npm test                  # vitest run — the main suite (~637 tests)
+npm test                  # vitest run — the main suite (~709 tests)
 npm run lint              # eslint
 npx tsc --noEmit          # typecheck the app
 npm run typecheck:scripts # typecheck scripts/ — a separate tsconfig
@@ -199,8 +199,29 @@ half time — measured 6 minutes fast at the death — while `minutes` sat in th
 payload unread. Then full time was read off the wrong flag while
 `finished_provisional` sat beside it, also unread.
 
-Before writing an estimator for anything, dump the actual payload and look. The
-snapshot on the `fpl-snapshot-out` branch is there precisely so you can.
+**It has now happened a third time.** `provisionalBonus` abstained from every
+double gameweek on the stated premise that "FPL publishes BPS only as a gameweek
+total". It does not: `fixtures/` carries a per-fixture `stats` array with a `bps`
+row for every player who appeared, split home and away, on the very objects that
+function was already being handed. Read off the snapshot — GW1 fixture 1, 30 rows
+for the 30 players who appeared, −8 to 41, and the top three are exactly the
+three the `bonus` rows pay 3, 2 and 1.
+
+Three for three, and the tests never help: in each case the suite asserted the
+same belief the code held. Before writing an estimator, an abstention, or a
+fallback for anything, **dump the actual payload and look.** The snapshot on the
+`fpl-snapshot-out` branch is there precisely so you can, and `fixtures.json` is
+worth re-reading in full whenever something in `live.ts` says the API does not
+send something.
+
+Two related habits that follow:
+
+- `SquadState.players` is the squad to OPTIMIZE FROM — pending transfers
+  applied, and in a Free Hit week the pre-Free-Hit fifteen. It is not what is on
+  the pitch. Anything rendering this gameweek's scores wants `currentPlayers`.
+- `live.elements[].stats` is a GAMEWEEK TOTAL. For anything about one match, use
+  `fixtureLines` in `live.ts`, which reads `explain[].fixture` and the fixture's
+  own `stats`.
 
 ### Live data must not be cached by the browser
 
@@ -246,6 +267,27 @@ always render at 58'. `makeDemoUniverse(NOW)` builds it; tests use
   measured for `buildSquadWithinBudget` and was worse on the live model; see the
   note at `src/lib/optimizer.ts:419`. No equivalent has been measured for
   `pickBestXi` itself.
+- **The in-season minutes model has no shrinkage.** `pStart` is `starts /
+  teamGames` at face value, so after one round a player is 1.000 or 0.000 with
+  no confidence scaling at any `teamGames` — while the pre-season branch shrinks
+  toward a prior with 6 pseudo-games. `buildStrengths` counts finished fixtures
+  PER CLUB, so at GW1 the two regimes are live simultaneously: two clubs scored
+  on one game against eighteen on the pre-season prior. Fixing it means a sweep
+  on `../fpl-data`, which no sandbox scoped to this repository can fetch —
+  `.github/workflows/measure.yml` is the route.
+- **`buildStrengths.usable` may be permanently false on the live feed.** All
+  four `strength_attack_*`/`strength_defence_*` are 0 on every snapshot taken so
+  far, including one with a gameweek in progress, and `strength_overall_*` are
+  now integers on a 1-5 scale rather than the ~1000-1400 the `spread > 40`
+  threshold assumes. So the Poisson opponent branch does not run in production,
+  and `demo.ts` builds its clubs on the old scale — meaning the tests exercise a
+  branch production may never reach. Take a mid-season snapshot and look before
+  concluding either way.
+- **`dcPer90` divides by an arbitrarily small denominator.** Every other rate in
+  `playerRates` goes through `shrunk90`; this one does not, so 5 defensive
+  contributions in 20 minutes reads as 22.5 per 90. Low impact today because the
+  players it reaches have low `pStart`, but it is the same shape as the bug
+  `shrunk90` exists to prevent.
 ## Chip timing: two registers that must not mix
 
 `src/lib/chips.ts` reasons about chips over the rest of the season. **Structure
