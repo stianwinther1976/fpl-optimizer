@@ -9,7 +9,7 @@ import { api, entryNotFoundMessage, FplApiError, loadTeamData, fmtNum, fmtRank, 
 import type { Element, EntryEventPicks, EventLive, Fixture } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
-import { projectAutoSubs, provisionalBonus, LIVE_REFRESH_MS } from "@/lib/live";
+import { projectAutoSubs, provisionalBonus, liveEntryScore, LIVE_REFRESH_MS } from "@/lib/live";
 import {
   benchBadgeFor,
   benchSortKey,
@@ -19,6 +19,7 @@ import {
   netGwDelta,
   netGwPoints,
   valueDelta,
+  liveOverallPoints,
 } from "@/lib/display";
 import { saveRecentTeam } from "@/lib/recent";
 import { currentSeasonName } from "@/lib/seasonArchive";
@@ -676,6 +677,27 @@ export default function Dashboard({
   }, [data, liveData, effectiveXiIds, livePointsOf, effCaptainId, capMult]);
   const liveHitNote = liveCornerNote(liveGross, liveHit);
 
+  /*
+   * THE HEADER'S OWN LIVE SCORE, and it is deliberately `liveEntryScore` and
+   * not the `liveGross - liveHit` two lines up. That figure is built for the
+   * corner note; this one has to agree, to the point, with the number the Live
+   * tab and the mini-league print, because a reader can see two of the three at
+   * once. `liveEntryScore` is the single definition — see its note — and using
+   * anything else here is how "Total points 3" ended up beside "7 pts".
+   */
+  const liveNet = useMemo(() => {
+    if (!data?.picks || !liveData || currentEvent == null || gwFinished) return null;
+    return liveEntryScore(
+      data.picks,
+      new Map(data.bootstrap.elements.map((e) => [e.id, e])),
+      liveData,
+      data.fixtures,
+      currentEvent,
+      liveBonus?.byElement ?? null,
+      gwFinished
+    );
+  }, [data, liveData, currentEvent, gwFinished, liveBonus]);
+
 
   if (error) {
     return (
@@ -899,9 +921,20 @@ export default function Dashboard({
 
       {/* KPI row */}
       <div className="mt-3 grid grid-cols-3 gap-2 sm:gap-3 lg:grid-cols-6">
+        {/*
+          LIVE WHILE THE GAMEWEEK IS LIVE. `summary_overall_points` is FPL's
+          stored figure: refreshed on their schedule and never carrying
+          provisional bonus, so it read 3 beside the Live tab's 7 for the same
+          quantity. See `liveOverallPoints`. Once the gameweek is finished
+          FPL's number is the authority again — it has the confirmed bonus.
+        */}
         <Stat
           label="Total points"
-          value={fmtNum(entry.summary_overall_points)}
+          value={fmtNum(
+            liveNet != null && currentEvent != null
+              ? liveOverallPoints(rows, currentEvent, liveNet)
+              : entry.summary_overall_points
+          )}
           accent
           delta={pointsDelta}
           trend={pointsTrend.length > 1 ? pointsTrend : undefined}
@@ -919,7 +952,11 @@ export default function Dashboard({
         <Stat
           label="Latest GW"
           value={
-            latestGwPoints != null ? `${latestGwPoints} pts` : "–"
+            liveNet != null
+              ? `${liveNet} pts`
+              : latestGwPoints != null
+                ? `${latestGwPoints} pts`
+                : "–"
           }
           delta={gwDelta}
           sub={

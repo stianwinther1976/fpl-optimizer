@@ -1921,6 +1921,31 @@ describe("the Live tab cannot present stale numbers as live", () => {
     );
   });
 
+  it("prints ONE live score, from the shared definition", () => {
+    /*
+     * The header read `entry.summary_overall_points` — FPL's stored figure,
+     * refreshed on their schedule and carrying no provisional bonus — while
+     * the Live tab computed from `event/{gw}/live/`. Reported: "Total points 3"
+     * two headings above "7 pts", same quantity, same moment.
+     *
+     * Both now go through `liveEntryScore`, which already owned the bench
+     * filter, the captain multiplier, the vice-captain takeover and the hit.
+     * A second implementation that agrees today is the shape this repo has
+     * been bitten by before.
+     */
+    expect(src).toContain("const total = data.picks");
+    expect(src).toContain("liveEntryScore(");
+    // The old inline sum survives only as the no-picks fallback, never as the
+    // primary path.
+    expect(src).not.toMatch(/const total = rows\.reduce/);
+
+    const dash = read("Dashboard.tsx");
+    expect(dash).toContain("liveEntryScore(");
+    expect(dash).toContain("liveOverallPoints(rows, currentEvent, liveNet)");
+    // NOT `liveGross - liveHit`, which is built for the corner note.
+    expect(dash).not.toMatch(/liveOverallPoints\(rows, currentEvent, liveGross/);
+  });
+
   it("does not blank a populated live view because one poll failed", () => {
     // `if (error)` threw away fifteen rows, the scores and the bench mid-match.
     expect(src).toMatch(/if \(error && !live\)/);

@@ -14,6 +14,7 @@ import {
   publishedAverage,
   kickOffPassed,
   liveStaleMinutes,
+  liveOverallPoints,
   netEventPoints,
   netGwDelta,
   netGwPoints,
@@ -646,5 +647,44 @@ describe("liveStaleMinutes", () => {
 
   it("does not report staleness from a clock that ran backwards", () => {
     expect(liveStaleMinutes(t(60_000), NOW, POLL)).toBeNull();
+  });
+});
+
+describe("liveOverallPoints", () => {
+  it("is the live score itself in GW1, where nothing precedes it", () => {
+    // The reported case: header 3, live tab 7, same quantity.
+    expect(liveOverallPoints([{ event: 1, total_points: 3 }], 1, 7)).toBe(7);
+    expect(liveOverallPoints([], 1, 7)).toBe(7);
+  });
+
+  it("adds the live score to the last COMPLETED gameweek's cumulative total", () => {
+    const rows = [
+      { event: 1, total_points: 60 },
+      { event: 2, total_points: 118 },
+      { event: 3, total_points: 121 }, // in play, FPL's partial figure
+    ];
+    expect(liveOverallPoints(rows, 3, 55)).toBe(173);
+  });
+
+  it("never reads the current row, which already holds a partial live figure", () => {
+    // Counting it would bank the same points twice.
+    const rows = [
+      { event: 1, total_points: 60 },
+      { event: 2, total_points: 118 },
+    ];
+    expect(liveOverallPoints(rows, 2, 40)).toBe(100);
+  });
+
+  it("takes the latest prior row regardless of array order", () => {
+    const rows = [
+      { event: 2, total_points: 118 },
+      { event: 1, total_points: 60 },
+    ];
+    expect(liveOverallPoints(rows, 3, 10)).toBe(128);
+  });
+
+  it("carries a negative live week through", () => {
+    // A -8 week that scored 4 is a net -4 and must reduce the total.
+    expect(liveOverallPoints([{ event: 1, total_points: 60 }], 2, -4)).toBe(56);
   });
 });

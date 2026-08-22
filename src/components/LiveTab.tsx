@@ -7,6 +7,7 @@ import {
   bandMedianScore,
   matchMinute,
   liveMatchMinutes,
+  liveEntryScore,
   projectAutoSubs,
   provisionalBonus,
   isInPlay,
@@ -364,7 +365,31 @@ export default function LiveTab({
     })
     .sort((a, b) => a.p.pickPosition - b.p.pickPosition);
 
-  const total = rows.reduce((sum, r) => sum + r.points, 0) - hits;
+  /*
+   * ONE DEFINITION, NOT A SECOND ONE THAT AGREES BY LUCK. Summing `rows` here
+   * reimplemented the bench/bboost filter, the captain multiplier, the
+   * vice-captain takeover and the hit — the same four rules `liveEntryScore`
+   * already owns, in a second place, in a component no test can render. The
+   * dashboard header and the mini-league both print this number too, and a
+   * reader can see two of them at once. `rows` stays for the per-player list;
+   * the headline comes from the shared function.
+   */
+  const total = data.picks
+    ? liveEntryScore(
+        data.picks,
+        elementById,
+        live,
+        fixtures,
+        currentEvent,
+        bonus?.byElement ?? null,
+        gwDone
+      )
+    : // No `EntryEventPicks` to hand the shared function — the picks fetch
+      // failed, or there are none yet. `rows` is then built from the squad
+      // alone, with no captain and no hit to apply, and summing it is all
+      // there is. Not a second definition of a live score so much as the
+      // degenerate case of one.
+      rows.reduce((sum, r) => sum + r.points, 0) - hits;
   const benchTotal = benchPoints(
     rows.map((r) => ({
       elementId: r.p.element.id,

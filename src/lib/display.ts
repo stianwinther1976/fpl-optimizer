@@ -472,3 +472,41 @@ export function liveStaleMinutes(
   if (!Number.isFinite(age) || age < pollMs * 2.5) return null;
   return Math.floor(age / 60_000);
 }
+
+/**
+ * A manager's overall total DURING a gameweek in play, built from the live
+ * score rather than from FPL's stored summary.
+ *
+ * WHY THE TWO DISAGREE ON ONE SCREEN, which is the thing this fixes. The
+ * header's "Total points" reads `entry.summary_overall_points` — FPL's stored
+ * cumulative figure, which they refresh on their own schedule during a live
+ * gameweek and which never carries provisional bonus. The Live tab computes
+ * from `event/{gw}/live/`, which is about ninety seconds fresh and does. So
+ * the app showed 3 and 7 for the same quantity, at the same moment, two
+ * headings apart, and both were "right" about different sources.
+ *
+ * The cumulative half comes from the LAST COMPLETED gameweek, never from the
+ * current row. `history.current[].total_points` for a gameweek in play already
+ * holds FPL's partial live figure, so adding the live score to it would count
+ * the same points twice — at GW1, where no earlier row exists at all, that
+ * would have doubled the whole total.
+ *
+ * `total_points` is cumulative NET, and `liveNet` is expected net of its own
+ * hit (which is what `liveEntryScore` returns), so the two compose directly.
+ */
+export function liveOverallPoints(
+  rows: { event: number; total_points: number }[],
+  currentEvent: number,
+  liveNet: number
+): number {
+  let before = 0;
+  let bestEvent = -Infinity;
+  for (const r of rows) {
+    if (r.event >= currentEvent) continue;
+    if (r.event > bestEvent) {
+      bestEvent = r.event;
+      before = r.total_points;
+    }
+  }
+  return before + liveNet;
+}
