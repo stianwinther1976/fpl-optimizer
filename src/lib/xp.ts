@@ -201,13 +201,22 @@ export const XP_CONFIG = {
    *     75-80  2268   0.892   0.908    1.000
    *     80-85  4004   0.924   0.930    1.000
    *     85-90  7329   0.948   0.948    1.000
-   *     90     7350   0.963   0.961    1.000
+   *     90     7350   0.963   0.955    1.000
+   *
+   * SIX OF THE SEVEN FITTED VALUES RECONSTRUCT from `{-2.441, 0.061}` at the
+   * bin midpoint to within 0.0004. The seventh did not: the last row read
+   * 0.961, which the curve reaches at `minsPerStart` 92.55, and `minsPerStart`
+   * is capped at 90 everywhere it is built. Corrected to 0.955, the value at
+   * 90 — the fit is unchanged, only the number written down beside it.
    *
    * The headline is that certainty was never justified: even a man who averages
    * a full ninety minutes gets substituted, sent off or injured before the hour
-   * in about one start in twenty-seven. Averaged over all 23,158 starts the old
-   * step overstated this probability by 3.3 percentage points, on a term that
-   * every outfield player's floor is built from.
+   * in about one start in twenty-seven (1 - 0.963 = 1/27 exactly). Weighted by
+   * the table's own `n`, the old step overstated the probability by 6.5
+   * percentage points over the 22,965 rows at 60 minutes or more, and 6.6
+   * including the 171 rows below it — on a term every outfield player's floor
+   * is built from. An earlier version of this sentence said 3.3, which does not
+   * reconstruct from the table above it under any weighting.
    *
    * Below 60 the fit is deliberately NOT pinned to the measurement. Only 171 of
    * the 23,158 rows are down there, they read ~0.82 against a fitted 0.61-0.74,
@@ -235,11 +244,12 @@ export const XP_CONFIG = {
    * would be needed to use it safely is a much larger change than the effect
    * being chased. The positional rate holds its shape across four seasons —
    * always GK lowest, FWD next, DEF and MID clear at the top — which is the
-   * argument for using it. Its LEVEL is less settled than that ordering: GK and
-   * FWD move by under a point season to season, DEF by 1.3 and MID by 3.1
-   * (0.149 to 0.180, about +/-9% of the pooled figure). An earlier version of
-   * this comment said "stable to about a point" for all four, which the table
-   * directly above it contradicts for MID.
+   * argument for using it. Its LEVEL is less settled than that ordering: GK
+   * moves 0.7 points season to season, DEF and FWD 1.3 each (0.162-0.175 and
+   * 0.104-0.117), and MID 3.1 (0.149 to 0.180, about +/-9% of the pooled
+   * figure). Two earlier versions of this sentence were wrong from the table
+   * directly above it: "stable to about a point" for all four, and then GK and
+   * FWD grouped as "under a point" when FWD moves exactly as much as DEF.
    */
   bookingRate: [0, 0.0762, 0.1684, 0.1651, 0.1118],
   /**
@@ -708,11 +718,15 @@ export const XP_CONFIG = {
    *     season     rows   starts > 0   starts == 0 with minutes > 0
    *     2019/20     105            0                             92
    *     2020/21     146            0                            121
-   *     2021/22     168            0                            145
-   *     2022/23     233          186                             12
-   *     2023/24     277          226                             17
-   *     2024/25     347          294                             24
-   *     2025/26     454          369                             35
+   *     2021/22     170            0                            146
+   *     2022/23     238          189                             13
+   *     2023/24     285          231                             17
+   *     2024/25     354          296                             25
+   *     2025/26     461          370                             35
+   *
+   * (Re-counted on the 2026-08-19 snapshot; the shape is unchanged and the
+   * counts have drifted by a handful of rows since the version measured on
+   * 2026-08-07, which is what a fortnight of squad registrations looks like.)
    *
    * The break is total and it is at 2022/23: not one row of 2021/22 or earlier
    * reports a start, and from 2022/23 on the field behaves normally (the
@@ -727,7 +741,7 @@ export const XP_CONFIG = {
    * his record is a clean instance of the defect — 3404 minutes in 2020/21 and
    * 2871 in 2021/22, every one of them reported with `starts: 0`, then 697
    * minutes across the three recorded seasons since. He came out of the broken
-   * model at `pStart` 0.031 and comes out of the fixed one at 0.090.
+   * model at `pStart` 0.035 and comes out of the fixed one at 0.094.
    *
    * ON "CREDITED MINUTES", because an earlier version of this paragraph quoted
    * 6295 of them and an audit could not reconstruct the figure from anything.
@@ -745,11 +759,16 @@ export const XP_CONFIG = {
    * Neither figure reproduces in any regime, and the ordering is backwards in
    * all of them: Hull is the club Targett plays for, so Hull is the club the
    * defect hurts most. Measured on the raw sums with `clubStartMass` switched
-   * off, all outfielders, defect restored -> fixed: HUL 4.52 -> 5.04, COV
-   * 4.86 -> 4.86, IPS 6.00 -> 6.06. So the fix is worth half a start to Hull,
-   * a rounding error to Ipswich, and nothing at all to Coventry, whose
-   * record-less players are record-less for the ordinary reason rather than
-   * this one.
+   * off, all outfielders, defect restored -> fixed: HUL 5.03 -> 5.52, COV
+   * 5.58 -> 5.58, IPS 6.75 -> 7.04. So the fix is worth half a start to Hull,
+   * a quarter to Ipswich, and nothing at all to Coventry, whose record-less
+   * players are record-less for the ordinary reason rather than this one.
+   *
+   * (Those three are the ALL-OUTFIELD, mechanism-off regime — the one this
+   * paragraph is about. `LIVE=1` prints four blocks and they do not agree with
+   * each other by construction; quoting the wrong one is how the club ordering
+   * came out inverted once already, which is why the harness now says so above
+   * the launch-pool block.)
    *
    * The mechanism downstream is still the reason it matters — `clubStartMass`
    * hands a club's missing start mass to whoever has no record at all, so an
@@ -766,28 +785,31 @@ export const XP_CONFIG = {
    * the players with NO Premier League record absorb the difference.
    *
    * TOWARD, NOT TO. This comment used to say the sum is "made to sum to at
-   * least this", which is false, and then it blamed the wrong thing for making
-   * it false. All figures below are the LIVE 2026/27 SNAPSHOT, ALL OUTFIELDERS,
-   * regenerated by `scripts/preseasonBrier.test.ts` with `LIVE=1`:
+   * least this", which is false. All figures below are the LIVE 2026/27
+   * SNAPSHOT AT 2026-08-19, ALL OUTFIELDERS, regenerated by
+   * `scripts/preseasonBrier.test.ts` with `LIVE=1`:
    *
-   *     mechanism off ............ 12 of 20 clubs short
-   *     mechanism on, ceiling and clamp off ...  3 short: FUL 7.65 BOU 8.48 EVE 9.59
-   *     shipped .................................  3 short: FUL 7.65 BOU 8.06 EVE 8.75
+   *     mechanism off ............ 11 of 20 clubs short
+   *     mechanism on, ceiling and clamp off ...  0 short
+   *     shipped .................................  4 short:
+   *                                 FUL 8.74  EVE 9.14  LEE 9.22  BOU 9.44
    *
-   * THE COUNT IS THREE ON BOTH SIDES OF THE RECORD-LESS RULE. The old text
-   * attributed the shortfall to `preseasonRecordlessMaxPStart` arriving, and
-   * the arithmetic refuses: the mechanism closed 12 clubs down to 3 before that
-   * constant existed and closes 12 down to the same 3 with it. What the rule
-   * changes is the DEPTH of two of the three shortfalls (BOU 8.48 -> 8.06, EVE
-   * 9.59 -> 8.75), not whether they exist.
+   * THE SHORTFALL IS THE RECORD-LESS RULE, and this paragraph used to argue the
+   * opposite from an earlier snapshot on which the count was three either side.
+   * It is not three either side now: with the mechanism at full strength and
+   * the ceiling off, EVERY club reaches the target. Turning the ceiling on is
+   * what leaves four short, because a club whose record-less players all hit
+   * 0.55 has nobody left to absorb the rest of its deficit.
    *
-   * The real reason "at least" was never true is FUL, which sits at 7.65 under
-   * every one of the three settings including the mechanism at full strength.
-   * Fulham is short and has nobody record-less to lift, so there is no one for
-   * the deficit to be allocated to and no ceiling involved in refusing it. A
-   * club whose record-less players all hit the 0.55 ceiling is the SECOND way
-   * to be left short — real, and what BOU and EVE show — but it is the smaller
-   * effect and it is not the one that broke the invariant.
+   * FUL WAS THE COUNTEREXAMPLE THIS PARAGRAPH RESTED ON, and it is not one. It
+   * used to say Fulham "has nobody record-less to lift"; it has two in the
+   * launch pool (Gonzalo and Palacios, both pinned at the 0.55 ceiling), and
+   * the mechanism lifts the club from 7.99 to 8.74. It is short for the same
+   * reason the other three are — the ceiling, not an absence of candidates.
+   *
+   * The figures moved because the SNAPSHOT moved, not because the model did.
+   * That is the point of stamping the date on them: a paragraph that reasons
+   * from a club's exact deficit is reasoning from one Tuesday's squad lists.
    *
    * (On the archive the shipped setting leaves 2024/25 with one club at 9.11
    * and 2025/26 with three at 8.47, 8.72 and 9.52; `FINAL=1` prints those.)
@@ -821,6 +843,22 @@ export const XP_CONFIG = {
    * measurably worse (+.00141, CI clear of zero), and pushing the target to
    * 10.5 or beyond is measurably worse (+.00091, +.00202). Between those the
    * sweep is a plateau, and 9.0 being the numeric argmin by .00002 is noise.
+   *
+   * ⚠ THIS SWEEP IS RUN A SECOND TIME LOWER IN THIS SAME DOC BLOCK, ON
+   * `preseasonClubStartMass` ITSELF, AND THE TWO DISAGREE. Both are labelled
+   * n = 5680, paired bootstrap, shipped regime; the second reports 9.6 at
+   * 0.19866 against this table's .19578, and mechanism-off at +0.00088 with an
+   * interval that CROSSES ZERO against this table's +.00141 that does not. Both
+   * cannot be a measurement of the shipped code, and neither can be re-run
+   * without `../fpl-data`, which no sandbox scoped to this repository can
+   * fetch — `.github/workflows/measure.yml` is the way to settle it.
+   *
+   * What survives under both readings, and is all that should be relied on: the
+   * surface between 7.0 and 10.0 is flat, so `preseasonClubStartMass` is an
+   * interior point nobody has identified. What does NOT survive is the sentence
+   * above about the mechanism being measurably worth having — that is clear of
+   * zero in this table and crosses it in the other, so treat it as unsettled
+   * rather than as the finding it reads like.
    *
    * THIS TABLE REPLACES ONE THAT REPRODUCED IN NO REGIME AT ALL, and the
    * corrections are not cosmetic — the old text drew conclusions the numbers
@@ -1043,6 +1081,13 @@ export const XP_CONFIG = {
    * THE TARGET ITSELF IS NOT IDENTIFIED, and until this block said so it was
    * the last figure in the pre-season config with no sweep behind it. Run with
    * `MASS_SWEEP=1`, n = 5680, baseline the shipped 9.6, paired bootstrap:
+   *
+   * ⚠ THE SAME SWEEP IS TABULATED EARLIER IN THIS DOC BLOCK WITH DIFFERENT
+   * NUMBERS — see the warning there. Both claim the same protocol and the same
+   * n; they disagree on 9.6's Brier in the third decimal and on whether
+   * mechanism-off is distinguishable from it. Neither is re-runnable from a
+   * sandbox without `../fpl-data`. The flat surface is the only conclusion both
+   * support, and it is the one this constant's status rests on.
    *
    *   SHIPPED REGIME (ceiling 0.55, clamp 0.55, scope recordless)
    *     target   Brier    vs 9.6                95% CI
@@ -1316,14 +1361,20 @@ export const XP_CONFIG = {
    * (2023/24 min 9.60, 2024/25 9.11, 2025/26 8.47) because the lift ceiling was
    * already the binding constraint in exactly those clubs.
    *
-   * WHAT IT ACTUALLY DOES TO THE 2026/27 LAUNCH SQUAD: nothing, and that is
-   * worth stating plainly rather than leaving a reader to assume a Brier
-   * improvement bought a better team. On the live snapshot the launch pool
-   * holds 399 players of whom 37 are record-less; the rule moves 27 of them —
-   * 14 up and 13 down — and the recommended fifteen and the recommended XI are
-   * IDENTICAL under all three configurations (no rule, lift ceiling only,
-   * shipped). `LIVE=1 npx vitest run -c vitest.preseason.config.ts` prints all
-   * 27 with club, price, ownership and both `pStart` values.
+   * WHAT IT ACTUALLY DOES TO THE 2026/27 LAUNCH SQUAD, re-measured on the
+   * 2026-08-19 snapshot: the launch pool holds 396 players of whom 48 are
+   * record-less, and the rule moves 33 of them — 20 up and 13 down.
+   * `LIVE=1 npx vitest run -c vitest.preseason.config.ts` prints all 33 with
+   * club, price, ownership and both `pStart` values.
+   *
+   * IT CHANGES THE SQUAD, and this paragraph used to say it did not. The
+   * ceiling swaps ONE player: with no rule the drafter takes Gonzalo (FUL,
+   * £6.0m, record-less, unclamped at 0.970); with the ceiling on it takes
+   * Evanilson (BOU, £6.0m) instead. Lift-ceiling-only and shipped agree with
+   * each other — squad and XI identical — so the clamp is what buys nothing
+   * here, not the rule. The earlier "identical under all three" was measured
+   * on a snapshot where the swap did not happen, which is precisely why a
+   * claim like this needs the date attached.
    *
    * THE CHARACTERISATION THAT USED TO BE HERE WAS WRONG THREE WAYS, and how it
    * got wrong is the more useful half. It said "every one of the twenty-seven
@@ -1331,18 +1382,19 @@ export const XP_CONFIG = {
    * Measured:
    *
    *  - PRICE. The range is GBP 4.0-6.0. Rodriguez (BOU, GBP 6.0m) is outside
-   *    the stated band, and he is the largest single cut in the list
-   *    (0.970 -> 0.550).
-   *  - CLUBS. Six clubs are represented — BOU, COV, EVE, HUL, IPS, LEE — and
-   *    only COV, HUL and IPS were promoted. Hackney (EVE) and Muharemovic
-   *    (LEE) are record-less at established clubs, which is the ordinary case
-   *    of a signing from abroad and not a promotion artefact at all.
-   *  - OWNERSHIP. van Ewijk (COV, GBP 4.0m) is owned by 16.9% of managers and
-   *    the rule cuts him from 0.854 to 0.550. He is the single most-owned
-   *    player the rule touches and he sits at the 96th percentile of ownership
-   *    in the whole pool. "Under 2%" is not a near miss on him, it is the
-   *    opposite of the truth, and he is the reason this paragraph matters:
-   *    the rule is not confined to players nobody holds.
+   *    the stated band. (He is a TINY cut, 0.554 -> 0.550 — an earlier version
+   *    of this line called him the largest, which he is not; the largest cuts
+   *    are Hackney, Gonzalo and Palacios, all 0.970 -> 0.550.)
+   *  - CLUBS. Ten clubs are represented — BHA, BOU, COV, EVE, FUL, HUL, IPS,
+   *    LEE, NEW, SUN — and only COV, HUL and IPS were promoted. Hackney (EVE)
+   *    and Muharemovic (LEE) are record-less at established clubs, which is the
+   *    ordinary case of a signing from abroad and not a promotion artefact at
+   *    all.
+   *  - OWNERSHIP. van Ewijk (COV, GBP 4.0m) is owned by 14.4% of managers and
+   *    the rule cuts him from 0.712 to 0.550. He is the single most-owned
+   *    player the rule touches, by a wide margin. "Under 2%" is not a near miss
+   *    on him, it is the opposite of the truth, and he is the reason this
+   *    paragraph matters: the rule is not confined to players nobody holds.
    *
    * The paragraph was wrong because the throwaway probe that produced it
    * printed the fifteen players the PRIOR CLAMP moved that the lift ceiling did
@@ -1352,15 +1404,17 @@ export const XP_CONFIG = {
    * probe was then deleted, which is why it took an audit rather than a re-read
    * to catch. The measurement lives in `scripts/preseasonBrier.test.ts` now.
    *
-   * (For the record, since the old text is quoted elsewhere: of the 15 the
-   * clamp reaches beyond the ceiling, three are clamped downward — Wright
-   * (COV), Crooks (HUL) and Rudoni (COV), all sitting on a set-piece floor —
-   * and the other twelve rise slightly, because the start mass those three give
-   * up is redistributed to their own team-mates.)
+   * (The old text also said the prior clamp reaches fifteen players and cuts
+   * three of them — Wright, Crooks and Rudoni. That does not reproduce on
+   * 2026-08-19: the clamp moves exactly ONE player beyond what the ceiling
+   * already does, Gonzalo (FUL). Wright and Crooks are ceiling movers and
+   * Rudoni is not a mover at all. The harness prints the attribution per player
+   * now, so the next version of this sentence can be read off rather than
+   * remembered.)
    *
    * A FLAT CEILING IS A FLAT CEILING, and the two ends of that list are the
-   * caveat: van Ewijk at the 96th ownership percentile and Rodriguez at the
-   * 12th both land on exactly 0.550. The rule does not claim these two men are
+   * caveat: van Ewijk at 14.4% ownership and Svoboda at 0.0% both land on
+   * exactly 0.550. The rule does not claim these two men are
    * equally likely to start. It claims neither has a Premier League record, so
    * neither has evidence the model can rank them on above that line, and
    * ownership is a fact about managers rather than about team sheets. When
@@ -1407,14 +1461,16 @@ export const XP_CONFIG = {
    * price and ownership even with no record on either man, because the question
    * is only "which of these two", never "does either play at all".
    *
-   * Latent on the live snapshot in any case. There are 24 record-less keepers
-   * in the 2026/27 bootstrap and 2 of them are inside the launch pool; the
-   * highest is Butland (HUL) at 0.509, and Dovin (COV) at 0.484 is the highest
-   * one pooled. ZERO sit above 0.55, so the exemption changes nothing today; it
-   * is documented, pinned by a unit test, and regenerated by
-   * `scripts/preseasonBrier.test.ts` with `LIVE=1`, so that it stays a decision
-   * rather than becoming an accident the first time a promoted club's number
-   * one is priced up.
+   * NO LONGER LATENT, and the sentence here used to say it was. Re-measured on
+   * the 2026-08-19 snapshot: 29 record-less keepers in the bootstrap, 3 of them
+   * inside the launch pool, and ONE sits above the 0.55 line — Tzolakis (HUL)
+   * at 0.564. The previous reading found 24 keepers, 2 pooled and none above
+   * the line, and named Butland (HUL) and Dovin (COV), neither of whom appears
+   * at all now. A fortnight of squad registrations was enough, which is exactly
+   * the "first time a promoted club's number one is priced up" this paragraph
+   * was written to anticipate. The exemption is documented, pinned by a unit
+   * test, and regenerated by `scripts/preseasonBrier.test.ts` with `LIVE=1`, so
+   * it stays a decision rather than becoming an accident.
    *
    * The two constants are kept separate rather than collapsed into one so this
    * decomposition stays reproducible: `scripts/preseasonBrier.test.ts` with
@@ -1684,7 +1740,11 @@ export const XP_CONFIG = {
    *   mean   0.607 0.616  0.623  0.623  0.623  0.620
    *
    * A broad plateau over 0.35-0.65, which is what a real effect looks like, and
-   * 0.40 is its centre. One caveat belongs on the record: 2022-23 pulls the
+   * 0.40 sits inside it. NOT "its centre", which this line used to claim and
+   * which is 0.50; the tie at the maximum (.623) runs 0.35-0.50 and centres on
+   * 0.425. 0.40 is an interior point of a flat surface, and the reason to keep
+   * it is that nothing here identifies a better one — which is a weaker and
+   * truer statement than being the middle of anything. One caveat belongs on the record: 2022-23 pulls the
    * other way (0.579 at floor 0 down to 0.559 at 0.40) because it is the
    * earliest season in the archive, so no player in it has a preceding season
    * and all 573 run through this branch with zero evidence. That is a harness
@@ -2208,8 +2268,10 @@ function priorPStart(el: Element, ownPct?: number): number {
   const [lo, hi] = cfg.priorPStartRange;
   // Clamped BEFORE the blend, not after, and that ordering is the whole
   // difference between a weight that means something and one that does not.
-  // The raw price term is unbounded above — it passes 1.1 at £8.9m for a
-  // midfielder — so blending raw and clamping the result left every premium
+  // The raw price term is unbounded above — for a midfielder it is 1.0908 at
+  // £8.9m and first crosses 1.1 at £8.9375m, i.e. at the next price step FPL
+  // actually offers, £9.0m (1.1154) — so blending raw and clamping the result
+  // left every premium
   // pinned at `hi` no matter where the crowd had put him: an £8.0m defender
   // came out 0.900 at the 1st percentile of ownership and 0.900 at the 99th.
   // The ownership term was not weighted down for those players, it was
@@ -2865,14 +2927,14 @@ function preseasonMinutes(
  *    that were both mostly asleep. Filtering on `team_join_date` moves the
  *    archive into the same regime as a live August bootstrap — 10 and 11 clubs
  *    of 20 below target on the two archive seasons that carry the column,
- *    against 12 of 20 on the live 2026/27 snapshot (COV 4.86, HUL 5.04, IPS
- *    6.06, FUL 7.65, BOU 7.74, EVE 8.03, then six clubs between 9.1 and 9.6).
- *    An earlier version of this bullet said 15 of 20; that number was never
- *    measured and does not reproduce.
+ *    against 11 of 20 on the live 2026/27 snapshot at 2026-08-19 (HUL 5.52,
+ *    COV 5.58, IPS 7.04, FUL 7.99, BOU 8.23, EVE 8.44, NEW 8.58, BHA 8.76,
+ *    SUN 9.00, LEE 9.14, BRE 9.38). An earlier version of this bullet said
+ *    15 of 20; that number was never measured and does not reproduce.
  *
  *    THE SNAPSHOT FIGURES ARE ALL OUTFIELDERS WITH THE MECHANISM OFF, and the
  *    regime has to be stated because there are four of them and they disagree.
- *    Summing over the LAUNCH POOL instead gives 15 of 20 and a different
+ *    Summing over the LAUNCH POOL instead gives 16 of 20 and a different
  *    ordering, and it is the wrong measure however natural it looks: this rule
  *    allocates over a club's whole element list, so summing a subset of that
  *    list must come out under target and "short" stops meaning anything. Two
