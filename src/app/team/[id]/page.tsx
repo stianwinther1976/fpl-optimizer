@@ -1,5 +1,20 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import Dashboard from "@/components/Dashboard";
+
+/**
+ * A team page is not the homepage, which the inherited metadata said it was.
+ *
+ * `robots.txt` already disallows `/team/`, so this was never indexed and never
+ * mattered — but the root layout's `canonical: "/"` is inherited, so every
+ * dashboard rendered a tag claiming to be a different page. `noindex` states
+ * the same intent as robots.txt in the one place a crawler that ignored it
+ * would still look: these pages are one reader's team, not content.
+ */
+export const metadata: Metadata = {
+  robots: { index: false, follow: false },
+  alternates: { canonical: null },
+};
 
 /**
  * An FPL entry id, or null.

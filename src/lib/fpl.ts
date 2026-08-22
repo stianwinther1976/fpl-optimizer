@@ -614,10 +614,16 @@ export function buildSquadState(
    *   transfer out the vice     -> captains [3]  vices []    no vice at all
    *   transfer out the captain  -> captains [4]  vices [4]   one man wears both
    *
-   * Neither is a cosmetic mislabel. With no vice, the vice-takeover path in
-   * `Dashboard` and `LiveTab` is silently dead for the week and no V badge is
-   * drawn; with both armbands on one player, captain and vice resolve to the
-   * same element, so if he blanks the takeover cannot fire either.
+   * WHAT IT DOES NOT AFFECT, since an audit found this note claiming otherwise:
+   * the vice-takeover in `Dashboard` and `LiveTab`. Both read `currentPlayers`,
+   * which is built from the RAW picks and never passes through here. Grep for
+   * `isCaptain` across `src/` and no shipped consumer reads the armband off
+   * `players` at all — the optimizer picks its own captain on xP.
+   *
+   * So this is a correctness fix on a field nothing currently renders, kept
+   * because a `SquadState` that hands out two captains or none is a trap laid
+   * for the next consumer, and because the same normalisation is what makes the
+   * pending-transfer path safe to extend.
    *
    * Restated after the loop rather than patched inside it, because two
    * transfers in one gameweek can take both holders and only the final state is

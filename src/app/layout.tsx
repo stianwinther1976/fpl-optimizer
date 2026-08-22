@@ -23,6 +23,14 @@ export const metadata: Metadata = {
     "fantasy football optimizer",
   ],
   manifest: "/manifest.webmanifest",
+  /*
+   * SELF-REFERENCING FOR THE HOMEPAGE, AND OVERRIDDEN BY `/team/[id]`. Metadata
+   * in the root layout is INHERITED, so this alone made every team page declare
+   * the homepage as its canonical URL — verified in the rendered HTML. That
+   * route now sets its own; `robots.txt` disallows `/team/` anyway, which is
+   * why it never mattered, but a page saying it is a different page is wrong
+   * whether or not anyone is reading.
+   */
   alternates: { canonical: "/" },
   openGraph: {
     type: "website",
