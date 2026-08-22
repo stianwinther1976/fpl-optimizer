@@ -123,28 +123,45 @@ function ArchivedDetail({ a }: { a: ArchivedSeason }) {
 function DerivedDetail({
   points,
   rank,
-  avgPoints,
+  others,
   prevRank,
   season,
 }: {
   points: number;
   rank: number;
-  avgPoints: number;
+  /** Every OTHER season's total, so the comparison excludes this one. */
+  others: number[];
   prevRank: number | null;
   season: string;
 }) {
   const perGw = points / GWS_IN_SEASON;
-  const diff = Math.round(points - avgPoints);
+  /*
+   * "vs your OTHER seasons", and this compared against an average that INCLUDES
+   * the season on screen. With one past season a manager therefore always saw
+   * `+0` — the season was being measured against itself. With two, each is
+   * pulled halfway toward the other and the gap prints at half its size.
+   *
+   * `avgOthers` is null when there is nothing to compare against, and the chip
+   * then says nothing rather than saying zero.
+   */
+  const avgOthers = others.length > 0 ? others.reduce((s, p) => s + p, 0) / others.length : null;
+  const diff = avgOthers == null ? null : Math.round(points - avgOthers);
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
         <Chip label="Total points" value={points.toLocaleString("en-GB")} />
         <Chip label="Overall rank" value={rank.toLocaleString("en-GB")} />
-        <Chip label="Points per GW" value={perGw.toFixed(1)} />
-        <Chip
-          label="vs your average"
-          value={`${diff > 0 ? "+" : ""}${diff.toLocaleString("en-GB")}`}
-        />
+        {/* `/38` IS A CONSTANT AND A SEASON IS NOT ALWAYS 38 GAMEWEEKS FOR THE
+            MANAGER — one who joined in November played fewer, and FPL publishes
+            no per-season gameweek count on `history_past`. So the label says
+            which denominator it used rather than implying it knows. */}
+        <Chip label={`Points per GW (of ${GWS_IN_SEASON})`} value={perGw.toFixed(1)} />
+        {diff != null && (
+          <Chip
+            label="vs your other seasons"
+            value={`${diff > 0 ? "+" : diff < 0 ? "−" : ""}${Math.abs(diff).toLocaleString("en-GB")}`}
+          />
+        )}
         {prevRank != null && (
           <Chip
             label="Rank move"
@@ -235,7 +252,7 @@ export default function PastSeasons({ data, entryId }: { data: TeamData; entryId
                     <DerivedDetail
                       points={p.total_points}
                       rank={p.rank}
-                      avgPoints={avgPoints}
+                      others={past.filter((q) => q.season_name !== p.season_name).map((q) => q.total_points)}
                       prevRank={prev?.rank ?? null}
                       season={p.season_name}
                     />

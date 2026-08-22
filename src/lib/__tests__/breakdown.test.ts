@@ -252,6 +252,42 @@ describe("a gameweek that could not be read is reported, not deleted", () => {
     expect(bd.gws).not.toContain(3);
   });
 
+  it("names a gameweek whose LIVE feed failed, not just its picks", async () => {
+    /*
+     * Run as one `Promise.all`, the catch could not tell which leg 404'd — and
+     * "the manager had no picks that gameweek" is a fact about PICKS only.
+     * Probed before the fix by 404-ing the live feed alone: `gws` came back
+     * [1,2,4,5] with `missing: []`, a whole gameweek deleted in silence.
+     */
+    const real = globalThis.fetch;
+    const uni = u as unknown as {
+      picksFor: (id: number, gw: number) => unknown;
+      liveFor: (gw: number) => unknown;
+    };
+    globalThis.fetch = (async (url: string) => {
+      const str = String(url);
+      const gw = Number(/event\/(\d+)/.exec(str)?.[1] ?? 0);
+      if (/\/live/.test(str) && gw === 3) return { ok: false, status: 404 } as Response;
+      const body = /\/live/.test(str) ? uni.liveFor(gw) : uni.picksFor(DEMO_ENTRY_ID, gw);
+      return { ok: true, status: 200, json: async () => body } as Response;
+    }) as unknown as typeof fetch;
+    try {
+      resetFetchCache();
+      const bd = await loadSeasonBreakdown(
+        DEMO_ENTRY_ID,
+        [1, 2, 3, 4, 5],
+        elementById,
+        u.fixtures,
+        1
+      );
+      expect(bd.missing).toEqual([3]);
+      expect(bd.gws).not.toContain(3);
+    } finally {
+      globalThis.fetch = real;
+      resetFetchCache();
+    }
+  });
+
   it("reports nothing when everything loads", async () => {
     const bd = await withFailures(() => 200);
     expect(bd.missing).toEqual([]);

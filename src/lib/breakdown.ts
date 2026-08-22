@@ -253,18 +253,41 @@ export async function loadSeasonBreakdown(
       const gw = queue.shift();
       if (gw == null) return;
       try {
-        const [picks, live] = await Promise.all([api.picks(entryId, gw), api.live(gw)]);
+        /*
+         * SEQUENTIAL, so a 404 can be attributed. Run together, the catch
+         * cannot tell which leg failed — and "the manager had no picks that
+         * gameweek" is a fact about PICKS only. A 404 from `event/{gw}/live/`
+         * is a gameweek we could not read, and folding it into the benign case
+         * deleted it silently: probed by 404-ing the live feed alone, `gws`
+         * came back [1,2,4,5] with `missing: []`.
+         *
+         * The cost is one round trip's latency per gameweek instead of two in
+         * parallel, and `api.live(gw)` is shared across every entry in the
+         * session anyway — the second worker to want it gets the memo.
+         */
+        const picks = await api.picks(entryId, gw).catch((e) => {
+          // The one benign 404 there is.
+          if (e instanceof FplApiError && e.status === 404) return null;
+          throw e;
+        });
+        if (picks == null) {
+          done++;
+          onProgress?.(done, total);
+          continue;
+        }
+        const live = await api.live(gw);
         collected.push({ gw, picks, live });
       } catch (e) {
         /*
-         * A 404 IS A FACT AND ANYTHING ELSE IS A FAILURE, and this used to
-         * treat them the same. "The manager had no picks that gameweek" is the
-         * case the bare catch was written for and it is a 404; a 503 while FPL
-         * updates the game, or a dropped connection, is a gameweek we could not
-         * read — and swallowing it silently removed real points from the season
-         * total with nothing on screen to say so.
+         * Everything that reaches here is a failure. The one benign case — a
+         * 404 on PICKS, meaning the manager had no team that gameweek — is
+         * handled above and never throws. A 503 while FPL updates the game, a
+         * dropped connection, or a 404 from the LIVE feed is a gameweek we
+         * could not read, and swallowing it silently removed real points from
+         * the season total with nothing on screen to say so.
          */
-        if (!(e instanceof FplApiError) || e.status !== 404) missing.push(gw);
+        void e;
+        missing.push(gw);
       }
       done++;
       onProgress?.(done, total);

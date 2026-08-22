@@ -618,8 +618,8 @@ export default function Dashboard({
   const comparable = curr != null && past != null && past.event < curr.event;
   const period = comparable ? `vs GW${past.event}` : "";
 
-  const fmtSigned = (n: number, digits = 0) =>
-    `${n > 0 ? "+" : n < 0 ? "−" : "±"}${Math.abs(n).toLocaleString("en-GB", {
+  const fmtSigned = (n: number, digits = 0, unit = "") =>
+    `${n > 0 ? "+" : n < 0 ? "−" : "±"}${unit}${Math.abs(n).toLocaleString("en-GB", {
       minimumFractionDigits: digits,
       maximumFractionDigits: digits,
     })}`;
@@ -675,7 +675,9 @@ export default function Dashboard({
   if (comparable) {
     const diff = valueDelta(curr, past);
     valueStat = {
-      text: `${fmtSigned(diff / 10, 1)}m`,
+      // `£` on both sides of the sign, because the modal that opens from this
+      // card renders `£0.0m` for the same pair and the card rendered `±0.0m`.
+      text: `${fmtSigned(diff / 10, 1, "£")}m`,
       period,
       good: diff === 0 ? null : diff > 0,
       direction: diff >= 0 ? "up" : "down",

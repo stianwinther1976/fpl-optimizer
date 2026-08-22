@@ -31,7 +31,9 @@ export default function KpiHistoryModal({
   const chipAt = (gw: number) => data.history.chips.find((c) => c.event === gw)?.name ?? null;
 
   const num = (n: number) => n.toLocaleString("en-GB");
-  const signed = (n: number) => (n > 0 ? `+${num(n)}` : num(n));
+  // U+2212 MINUS, not the hyphen `toLocaleString` produces. The same modal
+  // prints `−4 hit` two columns over, so one row carried both glyphs.
+  const signed = (n: number) => (n > 0 ? `+${num(n)}` : n < 0 ? `−${num(Math.abs(n))}` : num(n));
 
   const nameOf = new Map(data.bootstrap.elements.map((e) => [e.id, e.web_name]));
   const chipShort: Record<string, string> = {

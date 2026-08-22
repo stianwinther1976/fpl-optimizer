@@ -240,9 +240,17 @@ export interface CaptainRead {
   ownership: number | null;
   klass: TemplateClass | null;
   /**
-   * Was this the field's most-captained player the last time FPL published
-   * one? Not a share, and not this week's — but the one hard statement about
-   * armbands available, and it identifies the pick that moves nobody.
+   * Was this the field's most-captained player the last time FPL published one?
+   *
+   * Not a share — it names one player, not a percentage. And IT MAY WELL BE
+   * THIS WEEK'S: FPL fills `most_captained` in at the deadline, not at bonus
+   * confirmation, so from the moment a gameweek locks this is that gameweek's
+   * answer. (It said "not this week's" while `lastTemplateCaptain` required
+   * `finished`, which made the sentence true and the behaviour wrong — through
+   * an in-progress gameweek nobody was marked at all.)
+   *
+   * Still the one hard statement about armbands the public API makes, and it
+   * identifies the pick that moves nobody.
    */
   wasTemplateCaptain: boolean;
 }

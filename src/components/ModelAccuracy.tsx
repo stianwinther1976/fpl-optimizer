@@ -36,7 +36,10 @@ export default function ModelAccuracy({ demo }: { demo: boolean }) {
         )}
       </div>
       <p className="mt-1 text-sm text-muted">
-        How much to trust the projections above: before every deadline the app saves what it
+        {/* NOT "the projections above" — this card renders on first visit to
+            the Optimize tab, where there is nothing above it until the reader
+            presses the button. */}
+        How much to trust this app&apos;s projections: before every deadline the app saves what it
         predicted, then compares against the real points once the gameweek finishes and adjusts
         its own weights. Systematic misses shrink automatically over time.
       </p>
