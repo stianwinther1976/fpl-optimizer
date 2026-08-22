@@ -64,8 +64,32 @@ export function cachedRecentForm(): Map<number, RecentForm> | null {
  * records a wider one had already paid for — the same mistake
  * `pastSeasonStore` documents at length and guards against.
  */
-export function setRecentForm(map: Map<number, RecentForm>): void {
-  const feed = currentFeed();
+export function setRecentForm(map: Map<number, RecentForm>, feed: string): void {
+  /*
+   * `feed` IS THE FEED THE DATA CAME FROM, AND THE CALLER HAS TO SAY.
+   *
+   * This used to stamp `currentFeed()` at WRITE time, which is a different
+   * feed from the one the fetch ran under whenever the reader navigates
+   * mid-flight. `fetchRecentForm` is hundreds of element-summary round trips
+   * with no abort signal, and `setDemoMode` flips synchronously on navigation
+   * (`src/app/page.tsx`), so: press Optimize on `/team/N`, open the demo while
+   * it runs, and the load lands to find `cachedFeed !== "demo"`, clears, stamps
+   * itself "demo" and files real footballers' start shares under demo ids.
+   * `Dashboard` then reads them straight into its projection through
+   * `cachedRecentForm()`.
+   *
+   * Reproduced directly: `setDemoMode(false)`, build a map, `setDemoMode(true)`,
+   * `setRecentForm(map)` — and `cachedRecentForm()` under the demo returned
+   * `{42 => {startShare: 1, minsPerGame: 90}}` for a player it had never
+   * fetched. The read path was feed-gated from the start; the WRITE path was
+   * the hole, and the module's own header claims it works "the way
+   * `pastSeasonStore` already does", which records its key at commit time.
+   *
+   * A load overtaken by a feed switch is therefore dropped rather than filed
+   * under whatever is current now. That is the same conclusion
+   * `pastSeasonStore`'s `loadSeq` reaches for a superseded load.
+   */
+  if (feed !== currentFeed()) return;
   if (cachedFeed !== feed) {
     cached = null;
     cachedFeed = feed;

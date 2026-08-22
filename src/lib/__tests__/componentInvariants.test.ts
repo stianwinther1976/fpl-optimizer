@@ -1498,3 +1498,21 @@ describe("the chip sheet can say it has no gameweek", () => {
     expect(src).toMatch(/isSquadChip && s\.xi && s\.squad && s\.bestGw != null/);
   });
 });
+
+describe("a recent-form load is stamped with the feed it started under", () => {
+  /*
+   * `setRecentForm` drops a map whose feed is no longer current, but only if
+   * the caller tells it which feed the data came from. Capturing it AFTER the
+   * await would hand back exactly the bug the store now guards against —
+   * `currentFeed()` evaluated at write time is the feed the reader navigated
+   * TO, not the one the hundreds of element-summary round trips ran under.
+   */
+  it("captures the feed before the fetch, not after it", () => {
+    const src = read("OptimizePanel.tsx");
+    const at = src.indexOf("const feed = currentFeed();");
+    expect(at).toBeGreaterThan(0);
+    const fetchAt = src.indexOf("await fetchRecentForm(");
+    expect(fetchAt).toBeGreaterThan(at);
+    expect(src).toMatch(/publishRecentForm\(map, feed\)/);
+  });
+});

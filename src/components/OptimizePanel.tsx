@@ -442,13 +442,18 @@ export default function OptimizePanel({
         .slice(0, 15)
         .forEach((e) => ids.add(e.id));
     }
+    // Captured BEFORE the fetch, not after it. This is hundreds of round trips
+    // with no abort signal, and the reader can navigate to the demo while it
+    // runs; `setRecentForm` drops a map whose feed is no longer current rather
+    // than filing real footballers under demo ids.
+    const feed = currentFeed();
     const map = await fetchRecentForm([...ids], 5, 8, (done, total) =>
       setPhase(`Checking recent line-ups… ${done}/${total}`)
     );
     setRecentForm(map);
     // And publish it, so the Dashboard's own projection stops disagreeing with
     // this one about the same player — see `recentFormStore`.
-    publishRecentForm(map);
+    publishRecentForm(map, feed);
     return map;
   }
 
