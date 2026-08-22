@@ -1784,11 +1784,21 @@ export interface PlayerXp {
   /**
    * Set when the READER, not the model, decided whether this player starts.
    *
-   * Carried out of the projection so the UI can say so. Every other number in
-   * this struct is the model's opinion and is allowed to be quoted as such;
-   * this one is the reader's, and quoting it back at them unlabelled would be
-   * the app claiming credit for their team news. `undefined` means the model
-   * decided, which is the normal case.
+   * It marks the projection as reader-influenced so a consumer cannot quote it
+   * back as the model's own work. Two things it does NOT mean, both of which an
+   * earlier version of this doc got wrong:
+   *
+   *  - "Every other number in this struct is the model's opinion" is now the
+   *    wrong split. The call is applied at offset 0 only, so `next` is the
+   *    reader's and `total` / `totalDiscounted` are mostly the model's — four
+   *    fifths of them at the default horizon.
+   *  - It is not what puts the label on screen. No component reads this field;
+   *    `PlayerModal` reads `activeStartCalls()` directly, which is the same
+   *    answer from the store the reader wrote to. This is for a consumer of
+   *    `projectAll` that is not the UI — a script that passes its own
+   *    `startCalls` and wants to know which rows it touched.
+   *
+   * `undefined` means the model decided, which is the normal case.
    */
   startCall?: StartCall;
 }
@@ -1802,9 +1812,16 @@ export interface PlayerXp {
  * constants were fitted against a replica that had silently diverged) or it
  * reads the shipped value out of the shipped call. This is the second option.
  * Set `.minutes` to a Map before calling `projectAll` and every element's
- * final `MinutesModel` lands in it, after the keeper depth chart has had its
- * say and with the flag saying whether the shrinkage branch or the no-record
- * branch produced it.
+ * `MinutesModel` lands in it, after the keeper depth chart has had its say and
+ * with the flag saying whether the shrinkage branch or the no-record branch
+ * produced it.
+ *
+ * TWO THINGS IT IS NOT. It is the MODEL's minutes and never the reader's: a
+ * line-up override is applied at offset 0 inside the horizon loop and does not
+ * reach here, deliberately — see the note at the `startCalls.get` call, and
+ * `lineup.ts` on why calibration must not learn from the reader. And for a
+ * pre-season keeper it is the pre-depth-chart value, because `gkMm` varies by
+ * gameweek and there is no single model to record.
  *
  * Null in production: one `Map.set` per element per projection is not free and
  * nothing in the app reads it.
@@ -4084,31 +4101,57 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
      * with a prior.
      *
      * It is also the one place in this file whose output is not a model
-     * opinion, which is why `PlayerXp.startCall` carries it to the UI: a
-     * projection the reader moved has to be labelled as such, or the app is
-     * quoting a number back at them as though it had worked it out.
+     * opinion, so the projection carries `PlayerXp.startCall` to say which
+     * rows the reader moved: a number they decided must not be quoted back at
+     * them as though the app had worked it out. The UI does not read that
+     * field — `PlayerModal` labels the sheet from the store directly — so it
+     * is there for consumers of `projectAll` outside the app.
      */
     const call = startCalls.get(el.id);
     /*
      * THE CALL IS ABOUT ONE GAMEWEEK, AND IT WAS APPLIED TO ALL FIVE.
      *
-     * `StartCall`'s own doc says "for the gameweek in front of them", and a
-     * press conference is about one match. Folding it into `mm` here put it on
-     * every offset in the horizon loop below: measured on the demo, "Not in the
-     * XI" took a striker from 19.1 over five gameweeks to 5.3 — a 13.8-point
-     * write-off from a claim worth at most one gameweek of it. That figure then
-     * feeds `totalDiscounted`, which is what `planHorizon` ranks transfers on,
-     * so one tap became a sell recommendation.
+     * `StartCall`'s own doc says "for the gameweek in front of them". Folding
+     * it into `mm` here put it on every offset in the horizon loop below:
+     * measured on the demo, "Not in the XI" took a striker from 19.1 over five
+     * gameweeks to 5.3 — a 13.8-point write-off from a claim worth at most one
+     * gameweek of it. That figure then feeds `totalDiscounted`, which is what
+     * `planHorizon` ranks transfers on, so one tap became a sell
+     * recommendation.
+     *
+     * ONE GAMEWEEK, NOT ONE MATCH — and an earlier version of this note argued
+     * the fix from "a press conference is about one match", which is a
+     * different and stricter claim than anything the code makes. In a double
+     * gameweek the call lands on BOTH legs, because `mmGw` is per offset and
+     * `fixtureXp` is handed it once per fixture. Measured on the mock with a
+     * second GW11 fixture injected for the player's club, a "benched" call cut
+     * `next` by 1.197 against 0.531 on the single — 2.26x.
+     *
+     * That is deliberate and it is what the reader is told: the button's own
+     * copy says "his NEXT gameweek follows it", and `lineup.ts` says "for the
+     * gameweek in front of them". A reader who has seen a team sheet for the
+     * Saturday and marks a player out is making a claim about that player's
+     * week, not filing a per-fixture correction the UI gives them no way to
+     * express. The per-match reading would need a per-match control, and there
+     * is no evidence a reader could supply for the second leg anyway.
      *
      * So `mm` stays the model's own and the call is applied at offset 0 only,
-     * where the reader actually has information. `XP_DEBUG.minutes` shows the
-     * called version, because that is the gameweek the reader is looking at and
-     * it is what the tests read.
+     * where the reader actually has information.
+     *
+     * `XP_DEBUG.minutes` GETS THE MODEL'S, NOT THE READER'S. It used to be
+     * handed the called version, which contradicted its own doc ("every
+     * element's final `MinutesModel`") the moment the call stopped reaching
+     * past offset 0: with a "benched" call the sink reported `pStart` 0.08 for
+     * a player whose GW12-15 were projected at 1.0. The sink exists so a
+     * calibration study can read the value the app SHIPPED rather than
+     * reimplement the rule, and `lineup.ts` is explicit that calibration must
+     * never learn from the reader — so the model's own is the only value that
+     * serves it. Inert either way today: nothing in production reads the sink
+     * and every test and script runs with an empty call set.
      */
-    const mmCalled = call ? applyStartCall(mm, call) : mm;
     if (XP_DEBUG.minutes) {
       XP_DEBUG.minutes.set(el.id, {
-        ...mmCalled,
+        ...mm,
         preseason,
         hasEvidence: preseasonEvidence(el, past, seasonStartYear) != null,
       });

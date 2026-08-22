@@ -283,6 +283,18 @@ always render at 58'. `makeDemoUniverse(NOW)` builds it; tests use
   and `demo.ts` builds its clubs on the old scale — meaning the tests exercise a
   branch production may never reach. Take a mid-season snapshot and look before
   concluding either way.
+- **The price predictor has never been observed firing on real data.** Counted
+  on both live snapshots, all 600 elements: `price_change_percent` is the
+  string `"0"`, `price_change_hourly_rate` 0, `price_change_locked_until` null,
+  `price_change_calibrating` false, and all three `price_change_projections`
+  rows `{projected_percent: "0", likelihood: 0}` — FPL freezes prices until
+  after the GW1 deadline. So `priceChange.ts`'s thresholds have only ever been
+  exercised on the demo, which generates its own values. The four extra fields
+  are now in `types.ts` (the file's header used to say the API published none
+  of them, and reasoned from that); `likelihood` is exactly the confidence
+  `NOTABLE` and `imminent` approximate. Take a mid-season snapshot with prices
+  moving and look before building on any of it.
+
 - **`dcPer90` divides by an arbitrarily small denominator.** Every other rate in
   `playerRates` goes through `shrunk90`; this one does not, so 5 defensive
   contributions in 20 minutes reads as 22.5 per 90. Low impact today because the

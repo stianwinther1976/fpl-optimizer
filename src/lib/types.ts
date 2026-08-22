@@ -62,6 +62,25 @@ export interface Element {
    *  signed percentage string ("96" = 96% of the way to a rise, "-97" to a fall).
    *  Past ±100 the change is expected at the next 00:00 UK update. */
   price_change_percent?: string;
+  /**
+   * The rest of the 2026/27 predictor, which the API publishes and this app
+   * does not read — modelled so that stays a decision rather than an oversight.
+   * `src/lib/priceChange.ts` opened by saying these did not exist and used that
+   * as the reason for its own thresholds; see the note there for what every one
+   * of them is worth 0 / null / false on both live snapshots.
+   */
+  price_change_projections?: {
+    /** Days ahead: 0 is tonight's update, 1 and 2 the two after it. */
+    offset: number;
+    projected_percent: string;
+    /** FPL's own confidence, which `NOTABLE` and `imminent` approximate. */
+    likelihood: number;
+  }[];
+  price_change_hourly_rate?: number;
+  /** Non-null while FPL has frozen this player's price. */
+  price_change_locked_until?: string | null;
+  /** True while FPL says it does not yet trust its own percentage. */
+  price_change_calibrating?: boolean;
   /** Price movement so far this gameweek, in tenths of £m. */
   cost_change_event?: number;
 }
