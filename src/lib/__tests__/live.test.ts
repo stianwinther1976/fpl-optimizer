@@ -139,7 +139,22 @@ describe("provisionalBonus", () => {
       team_h_difficulty: 3,
       team_a_difficulty: 3,
       kickoff_time: "2026-01-01T15:00:00Z",
+      /*
+       * FULL TIME, BONUS NOT YET CONFIRMED — the one state `provisionalBonus`
+       * serves, and the state these tests used to skip.
+       *
+       * They ran on `started && !finished`, which is any minute of a live
+       * match, because that was the function's gate. It projected 3/2/1 from
+       * minute one, so at minute two the BPS table held a couple of completed
+       * passes and whoever topped it was awarded points of pure noise: reported
+       * from a live match, B.Fernandes captained showed 6 where FPL showed 2 —
+       * one appearance point plus a projected 2, doubled for the armband.
+       *
+       * The tests asserted the same belief the code held, which is why seven of
+       * them passed throughout.
+       */
       finished: false,
+      finished_provisional: true,
       started: true,
       team_h_score: 1,
       team_a_score: 0,
@@ -206,11 +221,39 @@ describe("provisionalBonus", () => {
     expect(res.byElement.get(3)).toBe(1);
   });
 
-  it("ignores fixtures that are finished or not yet started", () => {
+  it("does not put phantom points on a captain two minutes into a match", () => {
+    /*
+     * THE REPORT, REPRODUCED. At minute two the BPS table holds a couple of
+     * completed passes; the old gate projected 3/2/1 off it from the first
+     * minute. B.Fernandes had one appearance point, a projected 2 on top, and
+     * the armband doubled the pair: the app showed 6 where FPL showed 2.
+     */
+    const twoMinutesIn = inPlay.map((f) => ({
+      ...f,
+      finished_provisional: false,
+      minutes: 2,
+    }));
+    const early = provisionalBonus(bootstrap, twoMinutesIn, live({ 1: 3, 2: 2 }), 10);
+    expect(early.byElement.size).toBe(0);
+    // And the same ladder at full time IS read, so the fix removes the noise
+    // and not the feature.
+    const atFullTime = provisionalBonus(bootstrap, inPlay, live({ 1: 3, 2: 2 }), 10);
+    expect(atFullTime.byElement.get(1)).toBe(3);
+  });
+
+  it("ignores fixtures that are confirmed, unstarted, or STILL IN PLAY", () => {
     const done = inPlay.map((f) => ({ ...f, finished: true }));
     expect(provisionalBonus(bootstrap, done, live({ 1: 30, 2: 25 }), 10).byElement.size).toBe(0);
-    const notStarted = inPlay.map((f) => ({ ...f, started: false }));
+    const notStarted = inPlay.map((f) => ({ ...f, started: false, finished_provisional: false }));
     expect(provisionalBonus(bootstrap, notStarted, live({ 1: 30 }), 10).byElement.size).toBe(0);
+    /*
+     * The one this was missing. A match under way has a BPS table that is still
+     * moving, and reading 3/2/1 off it is a forecast — which this app does not
+     * put into a total it presents as the reader's score, least of all one the
+     * captain then doubles.
+     */
+    const running = inPlay.map((f) => ({ ...f, finished_provisional: false }));
+    expect(provisionalBonus(bootstrap, running, live({ 1: 30, 2: 25 }), 10).byElement.size).toBe(0);
   });
 });
 
@@ -442,6 +485,12 @@ describe("provisionalBonus across a double gameweek", () => {
     elements: [1, 2, 3].map((id) => makeElement({ id, team: id === 3 ? 2 : 1 })),
   } as Bootstrap;
 
+  /*
+   * `finished` is BONUS CONFIRMED. Both legs have been played either way, so
+   * `finished_provisional` is true on both — that is the state a double
+   * gameweek is actually read in, and the state `provisionalBonus` now
+   * requires: full time, confirmation outstanding.
+   */
   const fx = (id: number, finished: boolean): Fixture =>
     ({
       id,
@@ -452,6 +501,7 @@ describe("provisionalBonus across a double gameweek", () => {
       team_a_difficulty: 3,
       kickoff_time: "2026-01-01T15:00:00Z",
       finished,
+      finished_provisional: true,
       started: true,
       team_h_score: 1,
       team_a_score: 0,
@@ -772,7 +822,9 @@ describe("fixtureLines reads one match, not the gameweek", () => {
       team_h_difficulty: 3,
       team_a_difficulty: 3,
       kickoff_time: "2026-01-01T15:00:00Z",
+      // Full time, bonus unconfirmed — the only state `provisionalBonus` reads.
       finished: false,
+      finished_provisional: true,
       started: true,
       team_h_score: 1,
       team_a_score: 0,

@@ -211,6 +211,16 @@ half time — measured 6 minutes fast at the death — while `minutes` sat in th
 payload unread. Then full time was read off the wrong flag while
 `finished_provisional` sat beside it, also unread.
 
+**Provisional bonus is read at FULL TIME and not before.** The gate was
+`started && !finished`, so bonus was projected from the first minute of a
+match — and at minute two the BPS table holds a couple of completed passes, so
+whoever tops it is awarded points of pure noise. Reported from a live match:
+B.Fernandes captained, one appearance point, a projected 2 on top, doubled for
+the armband, and the app showed 6 where FPL showed 2. `finished_provisional` is
+the one state where the ladder is FINAL and only confirmation is outstanding,
+and it is the only one that has been measured. Seven tests passed throughout,
+because they built their fixtures the way the code read them.
+
 **It has now happened a third time.** `provisionalBonus` abstained from every
 double gameweek on the stated premise that "FPL publishes BPS only as a gameweek
 total". It does not: `fixtures/` carries a per-fixture `stats` array with a `bps`

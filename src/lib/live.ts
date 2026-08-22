@@ -43,10 +43,30 @@ export interface ProvisionalBonus {
 }
 
 /**
- * FPL awards 3/2/1 bonus to the top-BPS players per fixture. While a fixture is
- * live (or finished but not confirmed), we project bonus from current BPS.
+ * FPL awards 3/2/1 bonus to the top-BPS players per fixture. Once a fixture has
+ * finished but its bonus is not yet confirmed, we read it off the BPS ladder.
  * Ties follow the official pattern: tied players share the higher bonus and the
  * lower slots are skipped accordingly.
+ *
+ * AT FULL TIME ONLY, WHICH IT WAS NOT. The gate was `started && !finished`, so
+ * bonus was projected from the first minute of a match — and at minute two the
+ * BPS table holds a couple of completed passes, so whoever tops it is awarded
+ * 3, 2 or 1 points of pure noise. Reported from a live match: B.Fernandes
+ * captained, one appearance point, a projected 2 on top, doubled for the
+ * armband — the app showed 6 where FPL showed 2. Four phantom points on the
+ * headline total, at minute two.
+ *
+ * `finished_provisional` is the final whistle, and there the ladder is FINAL:
+ * nothing more can change it and only FPL's confirmation is outstanding. That
+ * is the window this function's own header describes as hours long, and it is
+ * the one state in which a reading off BPS is not a forecast. It is also the
+ * only one that has been measured — on the 2026-08-21 snapshot the fixture at
+ * `finished_provisional: true, finished: false` already carried the 3/2/1 rows
+ * beside its ladder, and the top three matched exactly.
+ *
+ * A mid-match projection is a forecast, and this app does not put forecasts in
+ * a total it presents as the reader's score. That the number was then
+ * multiplied by the captain is what turned a small wrong into a visible one.
  */
 export function provisionalBonus(
   bootstrap: Bootstrap,
@@ -111,7 +131,8 @@ export function provisionalBonus(
 
   for (const f of fixtures) {
     if (f.event !== event) continue;
-    if (!f.started || f.finished) continue; // only project while in play / awaiting confirmation
+    // Full time, bonus not yet confirmed — and nothing else. See the header.
+    if (!f.finished_provisional || f.finished) continue;
     const inThis = perFixture.get(f.id);
 
     /*
