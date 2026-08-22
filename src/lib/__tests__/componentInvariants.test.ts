@@ -242,8 +242,12 @@ describe("gameweek scores are net of transfer hits wherever they are shown", () 
 
   it("the gameweek sparkline is net", () => {
     const src = read("Dashboard.tsx");
-    expect(src).not.toMatch(/pointsTrend\s*=\s*rows\.slice\(-8\)\.map\(\(r\) => r\.points\)/);
-    expect(src).toMatch(/pointsTrend\s*=\s*rows\.slice\(-8\)\.map\(\(r\) => netGwPoints\(r\)\)/);
+    expect(src).not.toMatch(/pointsTrend[\s\S]{0,200}=> r\.points\)/);
+    // Net on every point, and the LAST one — the gameweek in play — read from
+    // the live score rather than from history, which would put a stale trough
+    // on the end of a line whose headline is live.
+    expect(src).toMatch(/pointsTrend\s*=\s*rows[\s\S]{0,300}netGwPoints\(r\)/);
+    expect(src).toMatch(/r\.event === currentEvent \? liveNet : netGwPoints\(r\)/);
   });
 
   it("the KPI history modal is net in all three of its point sites", () => {
@@ -255,9 +259,13 @@ describe("gameweek scores are net of transfer hits wherever they are shown", () 
     // go back to gross — which is exactly what happened: the sweep pinned two
     // columns by hand, and the third, in the Chips panel, kept printing the
     // gross figure for months because its variable is `row` rather than `r`.
-    expect(src).toContain('font-mono">{netGwPoints(r)}<'); // the "Pts" column
-    expect(src).toMatch(/const mine = netGwPoints\(r\);/); // the "± Avg" column
+    // The "Pts" column, and the "± Avg" one. Both now fall back to
+    // `netGwPoints` for settled gameweeks and take the live figure for the one
+    // in play; what is pinned is that the FALLBACK is still net.
+    expect(src).toContain("isLive ? live.net : netGwPoints(r)"); // the "Pts" column
+    expect(src).toMatch(/const mine = isLive \? live\.net : netGwPoints\(r\);/); // "± Avg"
     expect(src).not.toMatch(/const mine = r\.points;/);
+    expect(src).not.toMatch(/: r\.points;/);
     expect(src).toContain("{netGwPoints(row)} pts"); // the Chips panel
     expect(src).not.toMatch(/\{row\.points\}\s*pts/);
   });
@@ -2007,5 +2015,39 @@ describe("gameweek rank comes from the endpoint that is fresh", () => {
     // A hit cannot change once the gameweek starts, so a stale document is a
     // perfectly good source for it. Only the moving fields were the problem.
     expect(code).toContain("data.picks?.entry_history.event_transfers_cost");
+  });
+});
+
+describe("the KPI modal cannot contradict the card that opens it", () => {
+  /*
+   * Reported: the header read "Total points 14" and tapping it opened "Total
+   * points by gameweek" showing GW1 with 1 point and a total of 1. Every row
+   * in that modal comes from `history.current`, which for a gameweek in play
+   * holds FPL's own partial figure, while the header is derived from the live
+   * feed. Tapping the number replaced it with a stale one.
+   */
+  const modal = read("KpiHistoryModal.tsx");
+  const dash = read("Dashboard.tsx");
+  const strip = (t: string) =>
+    t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  it("overrides ONLY the gameweek in play", () => {
+    expect(strip(modal)).toContain("const isLive = live != null && live.event === r.event;");
+    // Settled gameweeks keep FPL's own figures — the fallback must survive.
+    expect(strip(modal)).toContain("isLive ? live.net : netGwPoints(r)");
+    expect(strip(modal)).toContain("num(isLive ? live.total : r.total_points)");
+  });
+
+  it("is handed the same live figures the header prints", () => {
+    // Not a second derivation: `liveNet` and `liveOverallPoints` are exactly
+    // what the Total points and Latest GW cards are rendered from.
+    expect(strip(dash)).toMatch(/total: liveOverallPoints\(rows, currentEvent, liveNet\)/);
+    expect(strip(dash)).toMatch(/net: liveNet/);
+  });
+
+  it("does not end the sparkline on a stale trough", () => {
+    expect(strip(dash)).toMatch(
+      /liveNet != null && r\.event === currentEvent \? liveNet : netGwPoints\(r\)/
+    );
   });
 });

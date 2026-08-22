@@ -813,7 +813,11 @@ export default function Dashboard({
 
   // Net, like every other gameweek figure in the app: a sparkline of gross
   // scores puts a spike on the very week a hit turned into a loss.
-  const pointsTrend = rows.slice(-8).map((r) => netGwPoints(r));
+  const pointsTrend = rows
+    .slice(-8)
+    // The last point is the gameweek in play, and reading it from history puts
+    // a stale trough on the end of a line whose headline is live.
+    .map((r) => (liveNet != null && r.event === currentEvent ? liveNet : netGwPoints(r)));
 
   /*
    * "Chips left" shows everything still available this season; the subtitle
@@ -1368,7 +1372,28 @@ export default function Dashboard({
       </div>
 
       {kpiModal && (
-        <KpiHistoryModal metric={kpiModal} data={data} onClose={() => setKpiModal(null)} />
+        <KpiHistoryModal
+          metric={kpiModal}
+          data={data}
+          /*
+            The modal reads `history.current`, which for a gameweek in play
+            holds FPL's own partial figure — it showed 1 under a header reading
+            14. Only the live row is overridden; earlier rows are settled
+            history and FPL is the authority for them. `summary_overall_rank`
+            is measured fresh (age never over 61s) where the history row is not.
+          */
+          live={
+            liveNet != null && currentEvent != null
+              ? {
+                  event: currentEvent,
+                  net: liveNet,
+                  total: liveOverallPoints(rows, currentEvent, liveNet),
+                  overallRank: entry.summary_overall_rank ?? null,
+                }
+              : null
+          }
+          onClose={() => setKpiModal(null)}
+        />
       )}
 
       {selected && (

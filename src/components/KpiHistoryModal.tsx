@@ -16,13 +16,36 @@ const TITLES: Record<KpiMetric, string> = {
   chips: "Chips — used & remaining",
 };
 
+/**
+ * The live gameweek's figures, when one is in play.
+ *
+ * WITHOUT THIS THE MODAL CONTRADICTS THE CARD THAT OPENS IT. Every row here
+ * comes from `history.current`, which for a gameweek in play holds FPL's own
+ * partial figure — reported at 1 while the header above it read 14. The header
+ * is derived from the live feed and this was not, so tapping "Total points"
+ * replaced a correct number with a stale one.
+ *
+ * Only the row for the gameweek actually in play is overridden. Every earlier
+ * row is settled history and FPL's own figures are the authority for it.
+ */
+export interface LiveGameweek {
+  event: number;
+  /** Net of the week's hit, the same convention `netGwPoints` returns. */
+  net: number;
+  /** Cumulative net including this week. */
+  total: number;
+  overallRank: number | null;
+}
+
 export default function KpiHistoryModal({
   metric,
   data,
+  live = null,
   onClose,
 }: {
   metric: KpiMetric;
   data: TeamData;
+  live?: LiveGameweek | null;
   onClose: () => void;
 }) {
   const rows = [...data.history.current].sort((a, b) => b.event - a.event);
@@ -241,6 +264,7 @@ export default function KpiHistoryModal({
             <tbody className="divide-y divide-border-c/60">
               {rows.map((r, i) => {
                 const prev = rows[i + 1] ?? null; // previous gameweek (rows are desc)
+                const isLive = live != null && live.event === r.event;
                 const chip = chipAt(r.event);
                 const chipShort: Record<string, string> = {
                   wildcard: "WC",
@@ -266,23 +290,26 @@ export default function KpiHistoryModal({
                       <>
                         {/* Net, so the column actually reconciles with the
                             cumulative Total beside it. */}
-                        <td className="px-1.5 py-1.5 text-right font-mono">{netGwPoints(r)}</td>
+                        <td className="px-1.5 py-1.5 text-right font-mono">
+                          {isLive ? live.net : netGwPoints(r)}
+                        </td>
                         <td className="px-1.5 py-1.5 text-right font-mono font-bold">
-                          {num(r.total_points)}
+                          {num(isLive ? live.total : r.total_points)}
                         </td>
                       </>
                     )}
 
                     {metric === "rank" &&
                       (() => {
+                        const mineRank = isLive ? live.overallRank : r.overall_rank;
                         const diff =
-                          prev?.overall_rank != null && r.overall_rank != null
-                            ? prev.overall_rank - r.overall_rank // positive = climbed
+                          prev?.overall_rank != null && mineRank != null
+                            ? prev.overall_rank - mineRank // positive = climbed
                             : null;
                         return (
                           <>
                             <td className="px-1.5 py-1.5 text-right font-mono">
-                              {r.overall_rank != null ? num(r.overall_rank) : "–"}
+                              {mineRank != null ? num(mineRank) : "–"}
                             </td>
                             <td
                               className={`px-1.5 py-1.5 text-right font-mono text-xs ${
@@ -308,7 +335,7 @@ export default function KpiHistoryModal({
                         // FPL's `average_entry_score` is what the average
                         // manager actually scored. Comparing one to the other
                         // credited a −4 week with four points it never had.
-                        const mine = netGwPoints(r);
+                        const mine = isLive ? live.net : netGwPoints(r);
                         const diff = avg != null ? mine - avg : null;
                         return (
                           <>
