@@ -1,11 +1,13 @@
 import { beforeEach, describe, it, expect } from "vitest";
 import {
-  applyGwOutcome,
-  calibrationMultiplier,
   CAL_CONFIG,
   IDENTITY_FACTORS,
+  activeCalibration,
+  applyGwOutcome,
+  calibrationMultiplier,
   loadCalibration,
   reconcileFinishedGws,
+  setActiveCalibration,
   type CalibrationState,
   type GradedPlayer,
 } from "../calibration";
@@ -419,6 +421,77 @@ describe("persistence across a season boundary", () => {
     } finally {
       Object.defineProperty(globalThis, "localStorage", real);
     }
+  });
+
+  it("asks for a re-projection when the stored factors are not the active ones", async () => {
+    /*
+     * The baseline is what a re-projection would READ, not what this call
+     * happened to load. On a first load the module is running on identity while
+     * the store holds real factors, so comparing against the loaded state
+     * returned false while `setActiveCalibration` moved every projection in the
+     * app — the caller had already rendered with identity and was told there
+     * was nothing to do.
+     */
+    setActiveCalibration(IDENTITY_FACTORS);
+    store.set(
+      "fpl-calibration",
+      JSON.stringify({
+        factors: { global: 0.9, byPos: { 1: 1, 2: 1.1, 3: 1, 4: 0.8 } },
+        log: [],
+        reconciled: [],
+        season: "2026/27",
+      })
+    );
+    // Nothing to grade: no snapshot, and the season already matches.
+    expect(await reconcileFinishedGws(false, boot(2026, 1), async () => new Map())).toBe(true);
+    expect(activeCalibration().global).toBe(0.9);
+    // Second load, same store, same active factors — now genuinely nothing.
+    expect(await reconcileFinishedGws(false, boot(2026, 1), async () => new Map())).toBe(false);
+  });
+
+  it("survives a stored field of the wrong type instead of dying on it forever", () => {
+    /*
+     * `reconciled` and `log` are read OUTSIDE any try/catch that could absorb
+     * it, so a null threw out of the caller's effect: no gameweek could ever be
+     * graded again, and because the throw preceded the save, the bad value was
+     * never overwritten. Dead on every later load, silently.
+     */
+    for (const bad of [
+      { reconciled: null },
+      { log: null },
+      { reconciled: "3", log: 7 },
+      { reconciled: [1, "2", null, 3], log: [{ gw: 1 }, null, "x"] },
+    ]) {
+      store.clear();
+      store.set(
+        "fpl-calibration",
+        JSON.stringify({
+          factors: { global: 1, byPos: { 1: 1, 2: 1, 3: 1, 4: 1 } },
+          season: "2026/27",
+          ...bad,
+        })
+      );
+      const s = loadCalibration(false, "2026/27");
+      expect(Array.isArray(s.reconciled), JSON.stringify(bad)).toBe(true);
+      expect(Array.isArray(s.log), JSON.stringify(bad)).toBe(true);
+      expect(s.reconciled.every((g) => typeof g === "number")).toBe(true);
+      // And the thing that actually broke: grading runs rather than throwing.
+      expect(() => s.reconciled.includes(1)).not.toThrow();
+    }
+  });
+
+  it("treats a missing season stamp as last season's, not as this one", () => {
+    // Every install written before the field existed carries no season. Reading
+    // that as "this season" is how the rollover came to never fire for anyone.
+    store.set(
+      "fpl-calibration",
+      JSON.stringify({
+        factors: { global: 1, byPos: { 1: 1, 2: 1, 3: 1, 4: 1 } },
+        log: [],
+        reconciled: [3, 4, 5],
+      })
+    );
+    expect(loadCalibration(false, "2026/27").reconciled).toEqual([]);
   });
 
   it("refuses to load a factor that is not a finite number", () => {

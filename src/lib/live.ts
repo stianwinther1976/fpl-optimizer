@@ -68,8 +68,8 @@ export function provisionalBonus(
    *    projection entirely and the points vanished from the live total.
    *
    * `explain` carries a `fixture` id, so participation and awarded bonus are
-   * both answerable per leg. BPS is not in `explain` and FPL publishes it only
-   * as a gameweek total — see the abstention below.
+   * both answerable per leg. BPS is not in `explain` — but it IS on the fixture
+   * itself, which is the correction below.
    */
   const perFixture = new Map<number, Map<number, { minutes: number; bonus: number }>>();
   const legsPlayed = new Map<number, number>();
@@ -106,33 +106,66 @@ export function provisionalBonus(
     if (f.event !== event) continue;
     if (!f.started || f.finished) continue; // only project while in play / awaiting confirmation
     const inThis = perFixture.get(f.id);
-    const players = live.elements
-      .filter((e) => {
-        const t = teamOf.get(e.id);
-        if (t !== f.team_h && t !== f.team_a) return false;
-        // Per-fixture minutes when the feed itemises them; the gameweek total
-        // is the fallback for a single-fixture week, where the two agree.
-        const mins = itemised ? (inThis?.get(e.id)?.minutes ?? 0) : e.stats.minutes;
-        return (mins ?? 0) > 0;
-      })
-      .map((e) => ({ id: e.id, bps: e.stats.bps }))
-      .sort((a, b) => b.bps - a.bps);
+
+    /*
+     * THE FIXTURE'S OWN BPS LADDER, WHEN IT HAS ONE.
+     *
+     * `fixture.stats` carries a `bps` row per player who appeared IN THIS
+     * MATCH, split home and away. That is the exact quantity the ranking below
+     * wants, and its absence from the type is the only reason the gameweek
+     * total was ever used for it. Read off the real snapshot (2026-08-21, GW1
+     * fixture 1): 30 rows for the 30 players who appeared, −8 to 41, and the
+     * top three are precisely the three the fixture's `bonus` rows pay 3/2/1.
+     *
+     * It also answers PARTICIPATION on its own — a player with no row did not
+     * appear — which matters because `explain` for a fresh second leg is
+     * absent in the window between kickoff and FPL's first stats update, and
+     * that gap is what the `itemised` guard below exists to survive.
+     *
+     * Not assumed to be there. FPL may only populate it from the final whistle
+     * — the sandbox this was written in has no live fixture to check against —
+     * so when the row is missing this falls through to exactly the behaviour it
+     * replaces, gameweek totals and the abstention.
+     */
+    const fixtureBps = f.stats?.find((s) => s.identifier === "bps");
+    const perFixtureBps = fixtureBps
+      ? new Map<number, number>([...fixtureBps.h, ...fixtureBps.a].map((r) => [r.element, r.value]))
+      : null;
+
+    const players =
+      perFixtureBps && perFixtureBps.size > 0
+        ? [...perFixtureBps]
+            .map(([id, bps]) => ({ id, bps }))
+            .sort((a, b) => b.bps - a.bps)
+        : live.elements
+            .filter((e) => {
+              const t = teamOf.get(e.id);
+              if (t !== f.team_h && t !== f.team_a) return false;
+              // Per-fixture minutes when the feed itemises them; the gameweek
+              // total is the fallback for a single-fixture week, where the two
+              // agree.
+              const mins = itemised ? (inThis?.get(e.id)?.minutes ?? 0) : e.stats.minutes;
+              return (mins ?? 0) > 0;
+            })
+            .map((e) => ({ id: e.id, bps: e.stats.bps }))
+            .sort((a, b) => b.bps - a.bps);
     if (players.length === 0) continue;
 
     /*
-     * ABSTAIN WHEN THE RANKING CANNOT BE TRUSTED.
+     * ABSTAIN WHEN THE RANKING CANNOT BE TRUSTED — WHICH IS NOW ONLY WHEN THE
+     * FIXTURE DID NOT PUBLISH ITS OWN BPS.
      *
-     * FPL publishes BPS only as a gameweek total. If anyone on this pitch has
-     * also played another fixture this gameweek, his figure includes points
-     * banked elsewhere and the 3/2/1 order here is not a reading of this match.
-     * Projecting a confident wrong ladder is worse than projecting nothing: the
-     * reader sees provisional bonus on the wrong three players and the numbers
-     * do not settle until FPL confirms.
+     * Without the fixture's row the only BPS available is the gameweek total,
+     * so if anyone on this pitch has also played another fixture this gameweek
+     * his figure includes points banked elsewhere and the 3/2/1 order here is
+     * not a reading of this match. Projecting a confident wrong ladder is worse
+     * than projecting nothing: the reader sees provisional bonus on the wrong
+     * three players and the numbers do not settle until FPL confirms.
      *
-     * Single gameweeks — every gameweek most seasons — are unaffected, because
-     * there the gameweek total IS this fixture's total.
+     * Single gameweeks — every gameweek most seasons — never reached this
+     * either way, because there the gameweek total IS this fixture's total.
      */
-    if (players.some((p) => (legsPlayed.get(p.id) ?? 0) > 1)) continue;
+    if (!perFixtureBps && players.some((p) => (legsPlayed.get(p.id) ?? 0) > 1)) continue;
 
     // Group by bps value, award 3/2/1 with tie-sharing.
     let bonus = 3;
@@ -141,13 +174,12 @@ export function provisionalBonus(
       const tied = players.filter((p) => p.bps === players[i].bps);
       for (const p of tied) {
         /*
-         * Accumulate rather than `Math.max`, because FPL pays each leg — and
-         * note this cannot currently fire. Being credited from two legs means
-         * playing two, which makes BOTH of those fixtures abstain above. The
-         * `+` is here so that relaxing the abstention (if FPL ever publishes
-         * per-fixture BPS) does not silently reintroduce the old bug, and this
-         * comment is here so nobody writes a test for a branch that has no
-         * reachable input.
+         * Accumulate rather than `Math.max`, because FPL pays each leg. This
+         * used to be unreachable — being credited from two legs meant playing
+         * two, which made both fixtures abstain — and the note here said the
+         * `+` was insurance against the day per-fixture BPS turned up. It has:
+         * with `f.stats` a player top of both legs is now ranked in both, and
+         * `Math.max` would credit 3 where FPL pays 6.
          */
         const net = bonus - (inThis?.get(p.id)?.bonus ?? 0);
         if (net > 0) byElement.set(p.id, (byElement.get(p.id) ?? 0) + net);
@@ -193,14 +225,32 @@ export function projectAutoSubs(
       else fxByTeam.set(t, [f]);
     }
   }
-  // A player is "done on 0" when they have fixtures this GW, every one has
-  // finished, and they played 0 minutes. (No fixture at all = blank GW = done.)
+  /*
+   * A player is "done on 0" when they have fixtures this GW, every one has
+   * REACHED FULL TIME, and they played 0 minutes. (No fixture at all = blank
+   * GW = done.)
+   *
+   * FULL TIME IS `finished_provisional`, NOT `finished`. A substitution turns
+   * entirely on MINUTES, which is a fact about the match and is settled at the
+   * whistle; `finished` waits for BONUS, which no auto-substitution depends on.
+   * CLAUDE.md states that split, and `isInPlay` and `matchMinute` were both
+   * corrected to it — this was not, so for the whole provisional window (the
+   * snapshot shows a fixture still provisional after full time, and a Saturday
+   * slate routinely takes hours) the app rendered "FT", stopped the pulsing
+   * live styling, and went on counting a starter who never came on while
+   * ignoring the bench player who replaces him.
+   *
+   * The risk in the other direction is a stat correction after the whistle,
+   * which would move a player off zero minutes. That does not favour waiting:
+   * FPL processes the substitution on the same data, so following it is being
+   * wrong exactly when FPL is, instead of being wrong for hours on purpose.
+   */
   const doneOnZero = (elId: number): boolean => {
     const el = elements.get(elId);
     if (!el) return false;
     const fx = fxByTeam.get(el.team) ?? [];
     if (fx.length === 0) return true; // blank GW: cannot score
-    if (!fx.every((f) => f.finished)) return false;
+    if (!fx.every((f) => f.finished || f.finished_provisional)) return false;
     return (liveById.get(elId)?.stats.minutes ?? 0) === 0;
   };
 

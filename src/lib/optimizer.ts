@@ -20,7 +20,7 @@ import {
   type CaptainRead,
   type FieldSplit,
 } from "./field";
-import { chipTiming, type ChipScoring, type ChipTiming } from "./chips";
+import { chipTiming, chipWindow, type ChipScoring, type ChipTiming } from "./chips";
 
 export interface XiSlot {
   element: Element;
@@ -449,31 +449,86 @@ export function optimize(input: OptimizerInput): OptimizerResult {
   const xiAt = (squad: Element[], gw: number) =>
     pickBestXi(squad, (id) => xp.get(id)?.perGw.get(gw) ?? 0);
 
+  /*
+   * EVERY ARGMAX BELOW RUNS OVER THE CHIP'S OWN WINDOW, NOT OVER THE HORIZON.
+   *
+   * `chipTiming` clips correctly, and that made this look handled: it does the
+   * clipping for the TIMING NOTE. The headline the reader sees first was an
+   * argmax over `gws` — `nextEvent … nextEvent + horizon - 1` — with no
+   * reference to `bootstrap.chips` at all. Since 2025/26 each chip has two
+   * windows and each expires, so any horizon that crosses an expiry produced a
+   * card naming a gameweek the chip cannot be played in.
+   *
+   * Reproduced on the demo with the windows closing at GW22, read at
+   * `nextEvent = 21` with `horizon = 5` (an offered setting; the selector has
+   * 1/2/3/5/8):
+   *
+   *     Bench Boost   Best in GW25: your bench projects 14.6 pts that week.
+   *                   The projection already covers the rest of this chip's
+   *                   window (to GW22).
+   *
+   * Two lines, contradicting each other, with the wrong one on top. CLAUDE.md's
+   * rule for chips is that suggesting a gameweek outside the window is worse
+   * than silence — this was that, in the register read first.
+   *
+   * A null `gw` means the window and the horizon do not overlap at all: the
+   * chip has expired, or it does not open until after the horizon ends. Naming
+   * no gameweek is the honest answer to both, and `timing` says which.
+   *
+   * The Wildcard is deliberately not clipped. It is not a one-week chip: it
+   * rebuilds the squad for the rest of the season, so the horizon it is judged
+   * over is not the window it must be played in. `wcGain` names no gameweek,
+   * so there is nothing here for it to get wrong.
+   */
+  const inChipWindow = (chip: string): ((gw: number) => boolean) => {
+    const w = chipWindow(chip, bootstrap.chips, nextEvent);
+    // No published window is not "every gameweek is fine", but it is the only
+    // honest reading left: `chipWindow` returns null precisely when the game
+    // has said nothing, and every caller then declines to constrain.
+    return w ? (gw: number) => gw >= w.start && gw <= w.stop : () => true;
+  };
+  const bbIn = inChipWindow("bboost");
+  const tcIn = inChipWindow("3xc");
+  const fhIn = inChipWindow("freehit");
+
   // Bench Boost: GW where the bench of the best XI scores the most.
-  let bbBest = { gw: nextEvent, gain: 0 };
+  let bbBest: { gw: number | null; gain: number } = { gw: null, gain: 0 };
   // Triple Captain: GW + player with the highest single-GW xP (the chip adds 1x).
-  let tcBest = { gw: nextEvent, gain: 0, name: keepXi.captain?.element.web_name ?? "Your captain" };
+  let tcBest: { gw: number | null; gain: number; name: string } = {
+    gw: null,
+    gain: 0,
+    name: keepXi.captain?.element.web_name ?? "Your captain",
+  };
   // Free Hit: GW where a one-week optimal squad beats your own XI the most.
   const fhBudget = totalValue(owned, bank);
-  let fhBest = { gw: nextEvent, gain: 0 };
+  let fhBest: { gw: number | null; gain: number } = { gw: null, gain: 0 };
   for (const gw of gws) {
-    const ownXi = xiAt(squadEls, gw);
-    const benchXp = ownXi.bench.reduce((s, p) => s + p.xp, 0);
-    if (benchXp > bbBest.gain) bbBest = { gw, gain: benchXp };
-    for (const e of squadEls) {
-      const v = xp.get(e.id)?.perGw.get(gw) ?? 0;
-      if (v > tcBest.gain) tcBest = { gw, gain: v, name: e.web_name };
+    const bb = bbIn(gw);
+    const fh = fhIn(gw);
+    if (!bb && !fh && !tcIn(gw)) continue;
+    const ownXi = bb || fh ? xiAt(squadEls, gw) : null;
+    if (bb && ownXi) {
+      const benchXp = ownXi.bench.reduce((s, p) => s + p.xp, 0);
+      if (bbBest.gw == null || benchXp > bbBest.gain) bbBest = { gw, gain: benchXp };
     }
-    // Free Hit is a one-week chip — build the squad optimal for THIS gw (so a
-    // double gameweek picks the players with two fixtures), not a horizon squad.
-    const fhSquad = buildSquadWithinBudget(
-      bootstrap.elements,
-      xp,
-      fhBudget,
-      (id) => xp.get(id)?.perGw.get(gw) ?? 0
-    ).squad;
-    const fhGwGain = xiAt(fhSquad, gw).totalXp - ownXi.totalXp;
-    if (fhGwGain > fhBest.gain) fhBest = { gw, gain: fhGwGain };
+    if (tcIn(gw)) {
+      for (const e of squadEls) {
+        const v = xp.get(e.id)?.perGw.get(gw) ?? 0;
+        if (tcBest.gw == null || v > tcBest.gain) tcBest = { gw, gain: v, name: e.web_name };
+      }
+    }
+    if (fh && ownXi) {
+      // Free Hit is a one-week chip — build the squad optimal for THIS gw (so a
+      // double gameweek picks the players with two fixtures), not a horizon squad.
+      const fhSquad = buildSquadWithinBudget(
+        bootstrap.elements,
+        xp,
+        fhBudget,
+        (id) => xp.get(id)?.perGw.get(gw) ?? 0
+      ).squad;
+      const fhGwGain = xiAt(fhSquad, gw).totalXp - ownXi.totalXp;
+      if (fhBest.gw == null || fhGwGain > fhBest.gain) fhBest = { gw, gain: fhGwGain };
+    }
   }
   const horizonEnd = gws.length > 0 ? gws[gws.length - 1] : nextEvent;
   const leagueTeamIds = bootstrap.teams.map((t) => t.id);
@@ -563,14 +618,20 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     chip: "bboost",
     label: "Bench Boost",
     projectedGain: bbBest.gain,
-    detail: `Best in GW${bbBest.gw}${gwNote(bbBest.gw)}: your bench projects ${bbBest.gain.toFixed(1)} pts that week.`,
+    detail:
+      bbBest.gw == null
+        ? `No gameweek in the next ${gws.length} is inside this chip's window.`
+        : `Best in GW${bbBest.gw}${gwNote(bbBest.gw)}: your bench projects ${bbBest.gain.toFixed(1)} pts that week.`,
     timing: timingFor("bboost"),
   });
   chipAdvice.push({
     chip: "3xc",
     label: "Triple Captain",
     projectedGain: tcBest.gain,
-    detail: `Best in GW${tcBest.gw}${gwNote(tcBest.gw)}: ${tcBest.name} would add ~${tcBest.gain.toFixed(1)} extra points (3x instead of 2x).`,
+    detail:
+      tcBest.gw == null
+        ? `No gameweek in the next ${gws.length} is inside this chip's window.`
+        : `Best in GW${tcBest.gw}${gwNote(tcBest.gw)}: ${tcBest.name} would add ~${tcBest.gain.toFixed(1)} extra points (3x instead of 2x).`,
     timing: timingFor("3xc"),
   });
   const wcGain = Math.max(
@@ -601,7 +662,10 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     chip: "freehit",
     label: "Free Hit",
     projectedGain: Math.max(0, fhBest.gain),
-    detail: `Best in GW${fhBest.gw}${gwNote(fhBest.gw)}: an optimal one-week squad projects ~${Math.max(0, fhBest.gain).toFixed(1)} pts more than your team that week.`,
+    detail:
+      fhBest.gw == null
+        ? `No gameweek in the next ${gws.length} is inside this chip's window.`
+        : `Best in GW${fhBest.gw}${gwNote(fhBest.gw)}: an optimal one-week squad projects ~${Math.max(0, fhBest.gain).toFixed(1)} pts more than your team that week.`,
     timing: timingFor("freehit"),
   });
   chipAdvice.sort((a, b) => b.projectedGain - a.projectedGain);

@@ -166,6 +166,31 @@ export interface Fixture {
    * published 54. Zero before kickoff, and it stops moving over half time.
    */
   minutes?: number;
+  /**
+   * PER-FIXTURE MATCH STATS, INCLUDING BPS — the third field FPL has been
+   * sending all along that this type did not model.
+   *
+   * `provisionalBonus` was written on the belief that "BPS is not in `explain`
+   * and FPL publishes it only as a gameweek total", and abstains from any
+   * double gameweek on that basis. It is here, per fixture, split home and
+   * away, on the very objects that function is already handed. Read off the
+   * real snapshot (2026-08-21, GW1 fixture 1, `finished:false`,
+   * `finished_provisional:true`): 30 `bps` rows for the 30 players who
+   * appeared, ranging −8 to 41, and the top three — 41, 37, 36 — are exactly
+   * the three the `bonus` rows credit 3, 2 and 1.
+   *
+   * WHAT IS STILL UNVERIFIED: whether `bps` is populated DURING a match or
+   * only from the final whistle. The only started fixture in any snapshot here
+   * is already at 90', and this sandbox cannot reach the live API. So nothing
+   * is allowed to depend on it being there — `provisionalBonus` uses it when a
+   * fixture carries it and falls back to exactly its previous behaviour when
+   * it does not.
+   *
+   * `identifier` is an open set (`goals_scored`, `assists`, `saves`, `bonus`,
+   * `bps`, `defensive_contribution`, …); only the rows that are read are typed
+   * here, and the shape is the same for all of them.
+   */
+  stats?: { identifier: string; h: { value: number; element: number }[]; a: { value: number; element: number }[] }[];
 }
 
 /**
@@ -420,7 +445,25 @@ export interface OwnedPlayer {
 }
 
 export interface SquadState {
+  /**
+   * The squad to OPTIMIZE FROM: current picks plus any transfers already made
+   * for the upcoming gameweek, and in a Free Hit week the pre-Free-Hit fifteen
+   * that returns at the next deadline.
+   *
+   * NOT what is on the pitch this gameweek. Use `currentPlayers` for anything
+   * rendered against this gameweek's live scores.
+   */
   players: OwnedPlayer[];
+  /**
+   * The fifteen actually fielded THIS gameweek — no pending transfers applied,
+   * and the real Free Hit team rather than the squad it replaced.
+   *
+   * The two lists are the same in the ordinary case and differ exactly when the
+   * app was drawing the wrong team: a transfer made for next week before this
+   * week's matches finished (FPL publishes GW n `is_current` alongside GW n+1
+   * `is_next`, so this is routine, not a corner), and a Free Hit week.
+   */
+  currentPlayers: OwnedPlayer[];
   bank: number; // tenths
   freeTransfers: number;
   usedChips: string[]; // chip names from history

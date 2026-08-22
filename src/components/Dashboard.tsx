@@ -448,14 +448,20 @@ export default function Dashboard({
     return m;
   }, [liveData]);
 
-  // Effective captain: Triple Captain aware; once the GW is final, the vice
-  // takes over if the captain played 0 minutes (official rule).
+  /*
+   * Effective captain: Triple Captain aware; once the GW is final, the vice
+   * takes over if the captain played 0 minutes (official rule).
+   *
+   * `currentPlayers`, not `players` — this is a statement about THIS
+   * gameweek's armband, and `players` carries next gameweek's transfers (and,
+   * in a Free Hit week, an entirely different fifteen).
+   */
   const capMult = data?.squad?.activeChip === "3xc" ? 3 : 2;
   const effCaptainId = useMemo(() => {
     const squad = data?.squad;
     if (!squad) return null;
-    const cap = squad.players.find((p) => p.isCaptain);
-    const vice = squad.players.find((p) => p.isViceCaptain);
+    const cap = squad.currentPlayers.find((p) => p.isCaptain);
+    const vice = squad.currentPlayers.find((p) => p.isViceCaptain);
     if (
       gwFinished &&
       cap &&
@@ -483,7 +489,10 @@ export default function Dashboard({
      *    that matters for transfers. Intersecting the base squad with the Free
      *    Hit XI leaves whoever happens to be in both — probed at 2 cards on the
      *    pitch and 13 on the bench, in an impossible formation, possibly with
-     *    no keeper.
+     *    no keeper. The pitch now draws `squad.currentPlayers`, which IS the
+     *    Free Hit fifteen, so the sets agree again — but the bail stays,
+     *    because it is also what stops a Free Hit week being rendered from a
+     *    squad the reader is not fielding if a caller ever passes `players`.
      *  - BENCH BOOST. All fifteen score and FPL makes no substitution at all,
      *    so the "effective XI" is the picked eleven. `display.ts`'s
      *    `autoSubView` exists for this seam and `componentInvariants` has a
@@ -956,7 +965,7 @@ export default function Dashboard({
                   Falls back to the picked eleven before any live data exists.
               */}
               <Pitch
-                starters={squad.players
+                starters={squad.currentPlayers
                   .filter((p) =>
                     effectiveXiIds ? effectiveXiIds.has(p.element.id) : p.pickPosition <= 11
                   )
@@ -974,7 +983,7 @@ export default function Dashboard({
                         }
                       : undefined,
                   }))}
-                bench={squad.players
+                bench={squad.currentPlayers
                   .filter((p) =>
                     effectiveXiIds ? !effectiveXiIds.has(p.element.id) : p.pickPosition > 11
                   )
@@ -996,7 +1005,7 @@ export default function Dashboard({
                     ? {
                         title: `GW${currentEvent}`,
                         points:
-                          squad.players
+                          squad.currentPlayers
                             .filter((p) =>
                               squad.activeChip === "bboost"
                                 ? true

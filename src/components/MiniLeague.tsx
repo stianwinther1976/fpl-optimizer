@@ -429,11 +429,30 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
           const myIds = new Set(
             data.squad.players.filter(inMyXi).map((p) => p.element.id)
           );
+          /*
+           * OWNING HIM AND FIELDING HIM ARE DIFFERENT FACTS, AND THERE ARE
+           * THREE STATES, NOT TWO.
+           *
+           * Narrowing `myIds` to the XI above fixed the shield inversion and
+           * then handed the benched player the OTHER wrong label: he is not in
+           * `myIds`, so he satisfied `!myIds.has(id)` and was printed under a
+           * heading asserting you do not own him — which also made the empty
+           * state ("No high-ownership player is missing from your team") false
+           * in the same case, and, because the column is `slice(0, 5)`, pushed
+           * out players the reader can actually go and buy.
+           *
+           * So the column is what it always meant: the field is scoring these
+           * players and you are not. For most of them the move is a transfer;
+           * for one already in your fifteen it is to start him. Saying which is
+           * the difference between advice and a list.
+           */
+          const mySquadIds = new Set(data.squad.players.map((p) => p.element.id));
           const pct = (v: number) => `${Math.round(v * 100)}%`;
           const ranked = [...ownership.eo.entries()].sort((a, b) => b[1] - a[1]);
           const threats = ranked
             .filter(([id, v]) => !myIds.has(id) && v >= 0.4)
-            .slice(0, 5);
+            .slice(0, 5)
+            .map(([id, v]) => ({ id, v, benched: mySquadIds.has(id) }));
           /*
            * A SHIELD AND A DIFFERENTIAL CANNOT BE THE SAME PLAYER.
            * Threats need `>= 0.4` and differentials `<= 0.2`, but shields were
@@ -450,9 +469,12 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
           const diffs = data.squad.players
             .filter((p) => inMyXi(p) && (ownership.eo.get(p.element.id) ?? 0) <= 0.2)
             .slice(0, 5);
-          const Item = ({ id, v }: { id: number; v: number }) => (
+          const Item = ({ id, v, note }: { id: number; v: number; note?: string }) => (
             <li className="flex items-center justify-between gap-2">
-              <span className="truncate">{elementName.get(id) ?? `#${id}`}</span>
+              <span className="truncate">
+                {elementName.get(id) ?? `#${id}`}
+                {note && <span className="ml-1 text-xs text-muted">{note}</span>}
+              </span>
               <span className="shrink-0 font-mono text-xs text-muted">{pct(v)} EO</span>
             </li>
           );
@@ -463,11 +485,22 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               </div>
               <div className="mt-3 grid gap-4 text-sm sm:grid-cols-3">
                 <div>
-                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-danger">⚔️ Threats — they own, you don&apos;t</div>
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-danger">⚔️ Threats — scoring the league, not you</div>
                   {threats.length > 0 ? (
-                    <ul className="space-y-1">{threats.map(([id, v]) => <Item key={id} id={id} v={v} />)}</ul>
+                    <ul className="space-y-1">
+                      {threats.map((t) => (
+                        <Item
+                          key={t.id}
+                          id={t.id}
+                          v={t.v}
+                          note={t.benched ? "(on your bench)" : undefined}
+                        />
+                      ))}
+                    </ul>
                   ) : (
-                    <div className="text-xs text-muted">No high-ownership player is missing from your team. 💪</div>
+                    <div className="text-xs text-muted">
+                      Every widely-owned player here is in your starting XI. 💪
+                    </div>
                   )}
                 </div>
                 <div>

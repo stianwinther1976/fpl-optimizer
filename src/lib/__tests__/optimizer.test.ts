@@ -1226,6 +1226,62 @@ describe("chip advice carries season-long timing", () => {
     }
   });
 
+  it("never names a gameweek outside the chip's own window", () => {
+    /*
+     * THE CLIP THE TEST ABOVE CHECKS IS ON `timing.windows` — the STRUCTURAL
+     * register. The headline `detail`, which is what the reader sees first, was
+     * an argmax over `nextEvent … nextEvent + horizon - 1` with no reference to
+     * `bootstrap.chips` at all. Any horizon crossing an expiry therefore named
+     * a gameweek the chip cannot be played in, three lines above a timing note
+     * saying when the window closed.
+     */
+    const withWindows = (start: number, stop: number) =>
+      optimize({
+        bootstrap: {
+          ...bootstrap,
+          chips: ["bboost", "3xc", "freehit", "wildcard"].map((name) => ({
+            name,
+            start_event: start,
+            stop_event: stop,
+          })),
+        },
+        fixtures,
+        owned,
+        bank: 20,
+        freeTransfers: 2,
+        nextEvent: 11,
+        horizon: 5, // GW11..15
+      });
+
+    // Window closes mid-horizon: every named gameweek is inside it.
+    for (const a of withWindows(2, 13).chipAdvice) {
+      const gw = a.detail.match(/Best in GW(\d+)/);
+      if (a.chip === "wildcard") {
+        // Not a one-week chip: it names no gameweek at all, so it cannot name
+        // a wrong one. Pinned so a future edit does not quietly give it one.
+        expect(gw, "the Wildcard card must not name a gameweek").toBeNull();
+        continue;
+      }
+      expect(gw, `${a.chip} names no gameweek inside a window it overlaps`).not.toBeNull();
+      expect(Number(gw![1]), `${a.chip} named a gameweek past its window`).toBeLessThanOrEqual(13);
+      expect(Number(gw![1])).toBeGreaterThanOrEqual(11);
+    }
+
+    // Window already closed, and window not yet open: no gameweek is named and
+    // no gain is claimed. Both are cases the timing note explains.
+    for (const [start, stop] of [
+      [2, 9],
+      [30, 38],
+    ]) {
+      for (const a of withWindows(start, stop).chipAdvice) {
+        if (a.chip === "wildcard") continue;
+        expect(a.detail, `${a.chip} named a gameweek with no overlap`).not.toMatch(/Best in GW/);
+        expect(a.detail).toMatch(/inside this chip's window/);
+        expect(a.projectedGain).toBe(0);
+      }
+    }
+  });
+
   it("stops the Wildcard card from reading as 'play it this week'", () => {
     // `wcGain` is bounded below by zero and a freshly optimised squad beats a
     // held one over any window, so the figure is almost always positive and

@@ -70,6 +70,25 @@ export default function Sheet({
         onClose();
         return;
       }
+      /*
+       * A SHEET THAT IS NOT ON SCREEN MUST NOT TRAP ANYTHING.
+       *
+       * These render inside a tab panel, and a slow one can land after the
+       * reader has moved tabs: tap a chip badge on Optimize, switch tab while
+       * `showChip` is still working, and `setChipView` mounts the sheet into a
+       * `hidden` panel. It is 0×0 and invisible — but it is the only
+       * `[role="dialog"]` in the document, so the trap below is live, every
+       * focusable inside it has `offsetParent === null`, and the "nothing
+       * focusable" branch then calls `panel.focus()` on a `display:none`
+       * element. Focus lands on `<body>` and stays there.
+       *
+       * Measured in Chromium: six Tab presses, every one leaving
+       * `document.activeElement` as `BODY`, with nothing visible to explain it.
+       * Escape is the only way out and the reader has no reason to press it —
+       * the keyboard is simply dead. That is strictly worse than the untrapped
+       * page this exists to fix, so an unrendered panel gets out of the way.
+       */
+      if (panel.offsetParent === null) return;
       const items = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
         (el) => el.offsetParent !== null || el === document.activeElement
       );

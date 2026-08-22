@@ -169,7 +169,18 @@ export default function LiveTab({
   // minutes, the bench steps in (like FPL will do when the GW is processed).
   const autoSubs = useMemo(() => {
     if (!live || !data.squad || currentEvent == null) return null;
-    const picks: Pick[] = data.squad.players.map((p) => ({
+    /*
+   * `currentPlayers` THROUGHOUT THIS FILE, and it is the whole file's subject.
+   *
+   * `squad.players` is the squad to optimize from: it has next gameweek's
+   * transfers already applied and, in a Free Hit week, is the fifteen the Free
+   * Hit replaced. Every number on this tab is about THIS gameweek's scores, so
+   * rendering that list meant a player who actually played vanishing from the
+   * table and an incoming player appearing with points he scored for someone
+   * else — and, because the auto-sub projection reads the real picks, the two
+   * disagreeing about who is even in the team.
+   */
+  const picks: Pick[] = data.squad.currentPlayers.map((p) => ({
       element: p.element.id,
       position: p.pickPosition,
       multiplier: 0,
@@ -216,7 +227,7 @@ export default function LiveTab({
   const anyLive = gwFixtures.some(isInPlay);
   const statById = new Map(live.elements.map((e) => [e.id, e.stats]));
   /** Projected bonus on the rows this screen actually draws — see the legend. */
-  const myStarBonus = data.squad.players.reduce(
+  const myStarBonus = data.squad.currentPlayers.reduce(
     (n, p) => n + (bonus?.byElement.get(p.element.id) ?? 0),
     0
   );
@@ -225,7 +236,7 @@ export default function LiveTab({
   // Chip-aware: a Bench Boost week has no substitutions to project, so the
   // effective eleven is simply the eleven that were picked. See `autoSubView`.
   const { xi: effXi, subbedIn, subbedOut } = autoSubView(
-    data.squad.players.filter((p) => p.pickPosition <= 11).map((p) => p.element.id),
+    data.squad.currentPlayers.filter((p) => p.pickPosition <= 11).map((p) => p.element.id),
     autoSubs,
     bboost
   );
@@ -245,8 +256,8 @@ export default function LiveTab({
   // Effective captain: vice takes over once the captain can no longer play
   // (GW final, or all of the captain's matches finished on 0 minutes).
   const capMult = data.squad.activeChip === "3xc" ? 3 : 2;
-  const cap = data.squad.players.find((p) => p.isCaptain);
-  const vice = data.squad.players.find((p) => p.isViceCaptain);
+  const cap = data.squad.currentPlayers.find((p) => p.isCaptain);
+  const vice = data.squad.currentPlayers.find((p) => p.isViceCaptain);
   const capGone = cap != null && (gwDone || blankedStarters.has(cap.element.id));
   const effCapId =
     capGone &&
@@ -256,7 +267,7 @@ export default function LiveTab({
       ? vice.element.id
       : cap?.element.id;
 
-  const rows = data.squad.players
+  const rows = data.squad.currentPlayers
     .map((p) => {
       const s = statById.get(p.element.id);
       const counts = bboost || effXi.has(p.element.id);
@@ -433,7 +444,7 @@ export default function LiveTab({
           fixture={fixtures.find((f) => f.id === matchOpen.id) ?? matchOpen}
           teams={teams}
           live={live}
-          squadIds={new Set(data.squad.players.map((p) => p.element.id))}
+          squadIds={new Set(data.squad.currentPlayers.map((p) => p.element.id))}
           elements={data.bootstrap.elements}
           onPlayerSelect={(el) => {
             setMatchOpen(null);

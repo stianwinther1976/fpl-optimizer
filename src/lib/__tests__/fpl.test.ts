@@ -1,5 +1,20 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { fetchPastSeason, fetchRecentForm, rankPercentile, resetSummaryCache, setDemoMode } from "../fpl";
+import {
+  buildSquadState,
+  fetchPastSeason,
+  fetchRecentForm,
+  rankPercentile,
+  resetSummaryCache,
+  setDemoMode,
+} from "../fpl";
+import type {
+  Bootstrap,
+  Element,
+  Entry,
+  EntryEventPicks,
+  EntryHistory,
+  Transfer,
+} from "../types";
 
 describe("rankPercentile", () => {
   it("uses more decimals the closer to the top you are", () => {
@@ -263,5 +278,116 @@ describe("the element-summary layer", () => {
     } finally {
       restore();
     }
+  });
+});
+
+describe("the squad on the pitch versus the squad to optimize from", () => {
+  /*
+   * `buildSquadState` deliberately moves `players` away from what is fielded
+   * this gameweek: it applies transfers already made for `nextEvent`, and
+   * `loadTeamData` hands it the PREVIOUS gameweek's picks during a Free Hit.
+   * Both are right for the optimizer and wrong for anything rendering this
+   * gameweek's live scores, which the live pitch and the Live tab were doing.
+   */
+  const el = (id: number): Element =>
+    ({
+      id,
+      element_type: ((id % 4) + 1) as 1 | 2 | 3 | 4,
+      team: (id % 20) + 1,
+      now_cost: 50,
+      web_name: `P${id}`,
+    }) as Element;
+
+  const bootstrap = {
+    elements: Array.from({ length: 40 }, (_, i) => el(i + 1)),
+    events: Array.from({ length: 38 }, (_, i) => ({
+      id: i + 1,
+      is_current: i + 1 === 20,
+      is_next: i + 1 === 21,
+      finished: i + 1 < 20,
+    })),
+    teams: [],
+  } as unknown as Bootstrap;
+
+  const picksFor = (ids: number[], capAt = 3, viceAt = 4): EntryEventPicks =>
+    ({
+      active_chip: null,
+      entry_history: { event: 20, bank: 5, value: 1000, event_transfers: 0, event_transfers_cost: 0 },
+      picks: ids.map((element, i) => ({
+        element,
+        position: i + 1,
+        multiplier: i + 1 === capAt ? 2 : i < 11 ? 1 : 0,
+        is_captain: i + 1 === capAt,
+        is_vice_captain: i + 1 === viceAt,
+      })),
+    }) as unknown as EntryEventPicks;
+
+  const history = { current: [], chips: [] } as unknown as EntryHistory;
+  const base = Array.from({ length: 15 }, (_, i) => i + 1);
+  const build = (transfers: Transfer[], opts?: Parameters<typeof buildSquadState>[5]) =>
+    buildSquadState(bootstrap, {} as Entry, picksFor(base), history, transfers, opts);
+
+  const transferAt = (event: number, out: number, inn: number): Transfer =>
+    ({
+      event,
+      element_in: inn,
+      element_out: out,
+      element_in_cost: 50,
+      element_out_cost: 50,
+      time: "2026-01-01T00:00:00Z",
+    }) as unknown as Transfer;
+
+  it("keeps this gameweek's fifteen when a transfer is already made for next", () => {
+    /*
+     * FPL publishes GW n `is_current` alongside GW n+1 `is_next` while GW n's
+     * matches are still being played, so this is routine. The outgoing player
+     * played this week and vanished from the pitch; the incoming player was
+     * drawn with points he scored for somebody else.
+     */
+    const s = build([transferAt(21, 5, 20)]);
+    expect(s.players.map((p) => p.element.id)).toContain(20);
+    expect(s.players.map((p) => p.element.id)).not.toContain(5);
+    expect(s.currentPlayers.map((p) => p.element.id)).toEqual(base);
+    // Fifteen either way — the pitch's ten-and-five split came from mixing them.
+    expect(s.currentPlayers).toHaveLength(15);
+  });
+
+  it("fields the Free Hit team, not the squad it replaced", () => {
+    const fh = Array.from({ length: 15 }, (_, i) => i + 21);
+    const s = buildSquadState(bootstrap, {} as Entry, picksFor(base), history, [], {
+      currentPicks: picksFor(fh),
+      activeChip: "freehit",
+    });
+    expect(s.players.map((p) => p.element.id)).toEqual(base);
+    expect(s.currentPlayers.map((p) => p.element.id)).toEqual(fh);
+  });
+
+  it("leaves exactly one captain and one vice when a transfer takes an armband", () => {
+    /*
+     * Probed before the fix: transferring the vice out left NO vice at all,
+     * and transferring the captain out left one man wearing both. With no vice
+     * the takeover path is dead for the week and no V badge is drawn; with one
+     * man wearing both it cannot fire either, because captain and vice resolve
+     * to the same element.
+     */
+    for (const [out, label] of [
+      [4, "the vice"],
+      [3, "the captain"],
+    ] as const) {
+      const s = build([transferAt(21, out, 20)]);
+      const caps = s.players.filter((p) => p.isCaptain);
+      const vices = s.players.filter((p) => p.isViceCaptain);
+      expect(caps, `${label}: captains`).toHaveLength(1);
+      expect(vices, `${label}: vices`).toHaveLength(1);
+      expect(caps[0].element.id, `${label}: same man wears both`).not.toBe(vices[0].element.id);
+    }
+  });
+
+  it("leaves an untouched squad's armbands exactly where they were", () => {
+    const s = build([]);
+    expect(s.players.find((p) => p.isCaptain)!.element.id).toBe(3);
+    expect(s.players.find((p) => p.isViceCaptain)!.element.id).toBe(4);
+    expect(s.players.filter((p) => p.isCaptain)).toHaveLength(1);
+    expect(s.players.filter((p) => p.isViceCaptain)).toHaveLength(1);
   });
 });

@@ -248,15 +248,59 @@ function sanitiseFactors(f: CalibrationFactors): CalibrationFactors {
   return { global: num(f?.global), byPos };
 }
 
+/**
+ * The same argument, applied to the REST of the stored state — which the first
+ * version of this left out, and that omission was worse than the one it fixed.
+ *
+ * `factors` at least fails softly: a NaN multiplier makes every projection NaN,
+ * which is visible. `reconciled` and `log` are dereferenced OUTSIDE any
+ * try/catch that could absorb it — `reconcileFinishedGws` calls
+ * `state.reconciled.includes(...)` before its per-gameweek `try`, and
+ * `seedDemoCalibration` reads `existing.log.length` — so a `null` there throws
+ * out of the async effect in `Dashboard`, `snapshotPredictions` never runs, and
+ * NO gameweek can ever be graded again. And because the throw happens before
+ * `saveCalibration`, the bad value is never overwritten: it is dead on every
+ * subsequent load, forever, with nothing on screen to say so.
+ *
+ * Verified in Chromium against the demo: with `reconciled: null` in the store,
+ * the page logs `Cannot read properties of null (reading 'includes')` and
+ * writes no `pred-*` key at all.
+ *
+ * `season` NORMALISES TO NULL RATHER THAN TO THE CURRENT SEASON, and the
+ * difference is the whole rollover. Absent is not "this season" — state written
+ * before the field existed carries none, which is exactly the state every
+ * install has — so defaulting it to the season being loaded would make every
+ * one of them match and the reset would never fire for anyone. That was a
+ * shipped bug once already. Null mismatches, which re-grades: the safe
+ * direction.
+ */
+function sanitiseState(s: CalibrationState): CalibrationState {
+  const log = Array.isArray(s?.log)
+    ? s.log.filter(
+        (e) => e != null && typeof e === "object" && typeof (e as { gw?: unknown }).gw === "number"
+      )
+    : [];
+  const reconciled = Array.isArray(s?.reconciled)
+    ? s.reconciled.filter((g): g is number => typeof g === "number" && Number.isFinite(g))
+    : [];
+  return {
+    factors: sanitiseFactors(s?.factors),
+    log,
+    reconciled,
+    season: typeof s?.season === "string" ? s.season : null,
+  };
+}
+
 export function loadCalibration(demo: boolean, season?: string | null): CalibrationState {
   try {
     const raw = localStorage.getItem(key(demo, "calibration"));
     if (raw) {
-      const s = JSON.parse(raw) as CalibrationState;
-      if (s?.factors?.byPos) {
-        // See `sanitiseFactors`: `byPos` being an object is the only thing
-        // checked above, and it is not enough to make the numbers numbers.
-        s.factors = sanitiseFactors(s.factors);
+      const parsed = JSON.parse(raw) as CalibrationState;
+      if (parsed?.factors?.byPos) {
+        // `byPos` being an object is the only thing checked above, and it says
+        // nothing about the numbers inside it or about any other field. See
+        // `sanitiseState`.
+        const s = sanitiseState(parsed);
         /*
          * A NEW SEASON CLEARS WHAT IS SEASON-SHAPED AND KEEPS WHAT IS NOT.
          *
@@ -324,6 +368,20 @@ export function snapshotPredictions(
 }
 
 /**
+ * Do two factor sets produce the same multiplier everywhere?
+ *
+ * Value equality rather than reference, because the baseline is now the ACTIVE
+ * factors and those can be a different object holding identical numbers — a
+ * reload that reads the same stored state back is the ordinary case, and
+ * reporting that as a change would re-project the whole app on every mount.
+ */
+function sameFactors(a: CalibrationFactors, b: CalibrationFactors): boolean {
+  if (a === b) return true;
+  if (a.global !== b.global) return false;
+  return [1, 2, 3, 4].every((pos) => (a.byPos[pos] ?? 1) === (b.byPos[pos] ?? 1));
+}
+
+/**
  * Grade every stored snapshot whose gameweek has finished. Returns true if
  * the calibration changed (callers should re-project).
  */
@@ -353,12 +411,22 @@ export async function reconcileFinishedGws(
    * true on the next load too, and on every load after that, to re-derive
    * factors that are still identity.
    *
-   * `factors` is replaced only by `applyGwOutcome`, so reference inequality is
-   * exactly "a gameweek was graded" — conservative in the safe direction: it
-   * can report a change when a graded week happened to move nothing, never the
-   * other way round.
+   * THE BASELINE IS WHAT IS CURRENTLY ACTIVE, NOT WHAT WAS JUST LOADED. The
+   * first version compared against the freshly loaded factors, which answers a
+   * question nobody asked: on a first load the stored factors are already
+   * different from the identity the module is running on, so this returned
+   * false while `setActiveCalibration` below moved every projection in the app.
+   * The caller had rendered with identity and was told there was nothing to
+   * re-project. (It was masked in practice — `loadPastSeason` notifies straight
+   * afterwards and the demo forces it — which is exactly how an invariant like
+   * this survives.) `activeCalibration()` is what a re-projection would read,
+   * so it is the only baseline that makes the answer mean anything.
+   *
+   * `factors` is otherwise replaced only by `applyGwOutcome`, so this stays
+   * conservative in the safe direction: it can report a change when a graded
+   * week happened to move nothing, never the other way round.
    */
-  const factorsBefore = state.factors;
+  const factorsBefore = activeCalibration();
   let dirty = state.season !== loadRawSeason(demo);
   const posOf = new Map(bootstrap.elements.map((e) => [e.id, e.element_type]));
   const drop = (gw: number) => {
@@ -424,7 +492,7 @@ export async function reconcileFinishedGws(
    */
   if (dirty) saveCalibration(demo, { ...state, season: season ?? state.season ?? null });
   setActiveCalibration(state.factors);
-  return state.factors !== factorsBefore;
+  return !sameFactors(state.factors, factorsBefore);
 }
 
 /** Demo mode: seed a plausible learning history so the feature is visible. */

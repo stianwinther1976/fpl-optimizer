@@ -10,6 +10,7 @@ import type {
   LeagueStandings,
   OwnedPlayer,
   PastSeasonStats,
+  Pick,
   RecentForm,
   SquadState,
   Transfer,
@@ -500,6 +501,9 @@ export async function loadTeamData(id: number): Promise<TeamData> {
     ? buildSquadState(bootstrap, entry, basePicks, history, transfers, {
         displayEvent: picks?.entry_history.event ?? basePicks.entry_history.event,
         activeChip: picks?.active_chip ?? null,
+        // The team ACTUALLY on the pitch this gameweek, which in a Free Hit
+        // week is `picks` and not `basePicks`. See `SquadState.currentPlayers`.
+        currentPicks: picks ?? undefined,
       })
     : null;
   return { bootstrap, fixtures, entry, picks, history, transfers, squad };
@@ -511,7 +515,7 @@ export function buildSquadState(
   picks: EntryEventPicks,
   history: EntryHistory,
   transfers: Transfer[],
-  opts?: { displayEvent?: number; activeChip?: string | null }
+  opts?: { displayEvent?: number; activeChip?: string | null; currentPicks?: EntryEventPicks }
 ): SquadState {
   const elementById = new Map(bootstrap.elements.map((e) => [e.id, e]));
   const chipEvents = new Map(history.chips.map((c) => [c.event, c.name]));
@@ -530,33 +534,88 @@ export function buildSquadState(
   for (const t of pending) {
     const slot = squadIds.find((p) => p.element === t.element_out);
     if (!slot) continue; // already replaced or data mismatch
-    const wasCaptain = slot.is_captain;
-    const wasVice = slot.is_vice_captain;
     slot.element = t.element_in;
     slot.is_captain = false;
     slot.is_vice_captain = false;
     bank += t.element_out_cost - t.element_in_cost;
-    if (wasCaptain || wasVice) {
-      // Reassign the armband to the first remaining original pick that has one.
-      const holder = squadIds.find((p) => (wasCaptain ? p.is_vice_captain : p.is_captain));
-      if (holder && wasCaptain) holder.is_captain = true;
+  }
+  /*
+   * EXACTLY ONE CAPTAIN AND EXACTLY ONE VICE, AND NOT THE SAME MAN.
+   *
+   * Transferring out an armband holder used to be handled inside the loop, and
+   * it got both cases wrong. Probed with captain = pick 3, vice = pick 4:
+   *
+   *   transfer out the vice     -> captains [3]  vices []    no vice at all
+   *   transfer out the captain  -> captains [4]  vices [4]   one man wears both
+   *
+   * Neither is a cosmetic mislabel. With no vice, the vice-takeover path in
+   * `Dashboard` and `LiveTab` is silently dead for the week and no V badge is
+   * drawn; with both armbands on one player, captain and vice resolve to the
+   * same element, so if he blanks the takeover cannot fire either.
+   *
+   * Restated after the loop rather than patched inside it, because two
+   * transfers in one gameweek can take both holders and only the final state is
+   * a fact. Which player inherits is a guess whatever happens — the reader
+   * re-picks the armband before the deadline and FPL publishes nothing until
+   * then — so the guess is the cheap, conventional one: the vice steps up, and
+   * the highest remaining pick takes the vice band.
+   */
+  if (squadIds.length > 0) {
+    let captain = squadIds.find((p) => p.is_captain);
+    if (!captain) {
+      captain = squadIds.find((p) => p.is_vice_captain) ?? squadIds[0];
+      captain.is_captain = true;
+    }
+    captain.is_vice_captain = false;
+    const vice = squadIds.find((p) => p.is_vice_captain && p !== captain);
+    if (!vice) {
+      const next = squadIds.find((p) => p !== captain);
+      if (next) next.is_vice_captain = true;
+    }
+    for (const p of squadIds) {
+      if (p !== captain) p.is_captain = false;
     }
   }
 
-  const players: OwnedPlayer[] = [];
-  for (const p of squadIds) {
-    const el = elementById.get(p.element);
-    if (!el) continue;
-    const purchase = purchasePriceFor(el, transfers, chipEvents);
-    players.push({
-      element: el,
-      purchasePrice: purchase,
-      sellPrice: sellingPrice(purchase, el.now_cost),
-      pickPosition: p.position,
-      isCaptain: p.is_captain,
-      isViceCaptain: p.is_vice_captain,
-    });
-  }
+  const toOwned = (list: Pick[]): OwnedPlayer[] => {
+    const out: OwnedPlayer[] = [];
+    for (const p of list) {
+      const el = elementById.get(p.element);
+      if (!el) continue;
+      const purchase = purchasePriceFor(el, transfers, chipEvents);
+      out.push({
+        element: el,
+        purchasePrice: purchase,
+        sellPrice: sellingPrice(purchase, el.now_cost),
+        pickPosition: p.position,
+        isCaptain: p.is_captain,
+        isViceCaptain: p.is_vice_captain,
+      });
+    }
+    return out;
+  };
+  const players = toOwned(squadIds);
+  /*
+   * THE FIFTEEN ACTUALLY FIELDED THIS GAMEWEEK, which `players` is not.
+   *
+   * `players` is the squad to OPTIMIZE FROM, and this function deliberately
+   * moves it away from what is on the pitch in two ways: it applies transfers
+   * already made for `nextEvent`, and `loadTeamData` hands it the PREVIOUS
+   * gameweek's picks during a Free Hit. Both are right for the optimizer and
+   * both are wrong for anything rendering this gameweek's live scores — and the
+   * live pitch and the Live tab were rendering exactly that list against
+   * current-gameweek points.
+   *
+   * The pending-transfer case is not a corner: FPL publishes GW n as
+   * `is_current` and GW n+1 as `is_next` while GW n's matches are still being
+   * played (confirmed on the 2026-08-21 snapshot, GW1 current and GW2 next), so
+   * any manager who does next week's transfer early hits it. A transferred-out
+   * player who played this week vanishes from the pitch and the incoming player
+   * is drawn with points he scored for somebody else. Worse, `effectiveXiIds`
+   * is computed from the real picks, so the two sets disagree and the pitch
+   * renders an illegal ten-and-five with a corner total over the wrong eleven.
+   */
+  const currentPlayers = toOwned(opts?.currentPicks?.picks ?? picks.picks);
 
   // FTs: banked from played GWs, minus any already spent on pending transfers
   // (unless a wildcard/free-hit is queued for the upcoming GW).
@@ -568,6 +627,7 @@ export function buildSquadState(
 
   return {
     players,
+    currentPlayers,
     bank,
     freeTransfers,
     usedChips: history.chips.map((c) => c.name),

@@ -1098,9 +1098,56 @@ describe("the mini-league ownership panel", () => {
     expect(src).toMatch(/const inMyXi = \(p: \{ pickPosition: number \}\) =>\s*p\.pickPosition <= 11 \|\| benchBoosted;/);
     expect(src).toContain('const benchBoosted = data.squad.activeChip === "bboost";');
     expect(src).toContain("p.position <= 11 || bboost");
-    // Every consumer goes through it — no squad-wide set, no second filter.
-    expect((src.match(/inMyXi\b/g) ?? []).length).toBe(3); // one definition, two uses
-    expect(src).not.toMatch(/new Set\(data\.squad\.players\.map\(\(p\) => p\.element\.id\)\)/);
+    // Every consumer goes through it — one definition, two uses, no second
+    // filter open-coded beside it.
+    expect((src.match(/inMyXi\b/g) ?? []).length).toBe(3);
     expect(src).not.toMatch(/p\.pickPosition <= 11 &&/);
+    // `myIds` — the XI — is what threats and shields split on.
+    expect(src).toMatch(/threats[\s\S]{0,120}!myIds\.has\(id\) && v >= 0\.4/);
+    expect(src).toMatch(/shields = ranked\.filter\(\(\[id, v\]\) => myIds\.has\(id\) && v >= 0\.4\)/);
+  });
+
+  it("says which threats are already in your squad, sitting on your bench", () => {
+    /*
+     * Narrowing `myIds` to the XI fixed the shield inversion and handed the
+     * benched player the other wrong label: not in `myIds`, so printed under a
+     * heading asserting you do not own him — and, because the column is
+     * `slice(0, 5)`, displacing players the reader could actually buy. There
+     * are three states, not two, and the third one's move is to start him.
+     */
+    const src = read("MiniLeague.tsx");
+    expect(src).toContain(
+      "const mySquadIds = new Set(data.squad.players.map((p) => p.element.id));"
+    );
+    expect(src).toMatch(/benched: mySquadIds\.has\(id\)/);
+    expect(src).toContain('note={t.benched ? "(on your bench)" : undefined}');
+    // The heading and the empty state must not claim you do not own them.
+    expect(src).not.toContain("they own, you don&apos;t");
+    expect(src).not.toMatch(
+      /<div className="text-xs text-muted">\s*No high-ownership player is missing/
+    );
+  });
+});
+
+describe("a sheet that is not on screen", () => {
+  it("gets out of the keyboard's way instead of trapping it", () => {
+    /*
+     * These mount inside a tab panel, so a slow one can land after the reader
+     * has changed tabs and end up `display:none`. It is then invisible but is
+     * still the only `[role="dialog"]` in the document, so the Tab trap is
+     * live, nothing inside it has an `offsetParent`, and the "nothing
+     * focusable" branch focuses a hidden element — measured in Chromium as six
+     * Tab presses that never move focus off `<body>`, with no visible dialog
+     * and no reason for the reader to press Escape.
+     */
+    const src = read("Sheet.tsx");
+    const guard = src.indexOf("panel.offsetParent === null");
+    expect(guard).toBeGreaterThan(0);
+    // Before any focus work — the trap's first act is to enumerate `items`.
+    const onKey = src.indexOf("const onKey = (e: KeyboardEvent)");
+    expect(guard).toBeGreaterThan(onKey);
+    expect(guard).toBeLessThan(src.indexOf("const items = ", onKey));
+    // But AFTER Escape: a sheet nobody can see must still be dismissible.
+    expect(src.indexOf('if (e.key === "Escape")', onKey)).toBeLessThan(guard);
   });
 });

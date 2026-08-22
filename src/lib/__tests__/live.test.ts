@@ -473,6 +473,84 @@ describe("provisionalBonus across a double gameweek", () => {
     })),
   });
 
+  it("reads the fixture's own BPS ladder when FPL publishes one", () => {
+    /*
+     * THE ABSTENTION EXISTED BECAUSE THE TYPE WAS MISSING A FIELD.
+     *
+     * `provisionalBonus` blanked out every double gameweek on the stated
+     * premise that "FPL publishes BPS only as a gameweek total". It does not:
+     * `fixtures/` carries a per-fixture `stats` array with a `bps` row per
+     * player who appeared, split home and away. Read off the real snapshot
+     * (2026-08-21, GW1 fixture 1): 30 rows for the 30 players who appeared,
+     * −8 to 41, and the top three are exactly the three the `bonus` rows pay
+     * 3, 2 and 1.
+     *
+     * Here element 1 banked 45 BPS in a finished leg 1 and did not appear in
+     * leg 2. On gameweek totals he outranks everyone and the fixture abstains.
+     * With leg 2's own ladder he is simply not in it, and the two men actually
+     * on the pitch get their bonus.
+     */
+    const withBps = (f: Fixture, rows: [number, number][]): Fixture => ({
+      ...f,
+      stats: [{ identifier: "bps", h: rows.map(([element, value]) => ({ element, value })), a: [] }],
+    });
+    const res = provisionalBonus(
+      bootstrap,
+      [fx(1, true), withBps(fx(2, false), [[2, 20], [3, 26]])],
+      feed({
+        1: { bps: 45, legs: [{ fixture: 1, minutes: 90 }] },
+        2: { bps: 65, legs: [{ fixture: 1, minutes: 90 }, { fixture: 2, minutes: 60 }] },
+        3: { bps: 26, legs: [{ fixture: 2, minutes: 60 }] },
+      }),
+      10
+    );
+    expect(res.byElement.get(1), "not on the pitch for leg 2").toBeUndefined();
+    expect(res.byElement.get(3), "leads leg 2's own ladder").toBe(3);
+    expect(res.byElement.get(2), "second in leg 2's own ladder").toBe(2);
+  });
+
+  it("still abstains on gameweek totals when the fixture publishes no ladder", () => {
+    // The fix must not depend on `stats` being there. FPL may only populate it
+    // from the final whistle — that could not be checked from where this was
+    // written — so a fixture without it falls through to exactly the previous
+    // behaviour, which for a two-leg participant is to say nothing.
+    const res = provisionalBonus(
+      bootstrap,
+      [fx(1, true), fx(2, false)],
+      feed({
+        1: { bps: 45, legs: [{ fixture: 1, minutes: 90 }] },
+        2: { bps: 65, legs: [{ fixture: 1, minutes: 90 }, { fixture: 2, minutes: 60 }] },
+        3: { bps: 26, legs: [{ fixture: 2, minutes: 60 }] },
+      }),
+      10
+    );
+    expect(res.byElement.size).toBe(0);
+  });
+
+  it("pays a player who leads both legs twice, as FPL does", () => {
+    /*
+     * Unreachable until now: being credited from two legs meant playing two,
+     * which made both fixtures abstain. With each fixture carrying its own
+     * ladder the branch has a reachable input, and `Math.max` would credit 3
+     * where FPL pays 3 + 3.
+     */
+    const withBps = (f: Fixture, rows: [number, number][]): Fixture => ({
+      ...f,
+      stats: [{ identifier: "bps", h: rows.map(([element, value]) => ({ element, value })), a: [] }],
+    });
+    const res = provisionalBonus(
+      bootstrap,
+      [withBps(fx(1, false), [[2, 40], [1, 10]]), withBps(fx(2, false), [[2, 33], [3, 12]])],
+      feed({
+        1: { bps: 10, legs: [{ fixture: 1, minutes: 90 }] },
+        2: { bps: 73, legs: [{ fixture: 1, minutes: 90 }, { fixture: 2, minutes: 60 }] },
+        3: { bps: 12, legs: [{ fixture: 2, minutes: 60 }] },
+      }),
+      10
+    );
+    expect(res.byElement.get(2)).toBe(6);
+  });
+
   it("does not award a live leg to someone who is not playing in it", () => {
     /*
      * Element 1 banked 45 BPS in a finished leg 1 and has not come on in leg 2.
