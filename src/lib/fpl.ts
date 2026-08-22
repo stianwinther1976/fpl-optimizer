@@ -91,7 +91,11 @@ export const isLiveFeed = (path: string) => path.startsWith("fixtures") || /^eve
  * changes nothing about which paths are allowed or what is forwarded upstream.
  */
 const feedUrl = (path: string) =>
-  `${demoMode ? "/api/demo" : "/api/fpl"}/${path.replace(/\/+$/, "")}`;
+  // The strip has to survive a QUERY STRING, and anchored at end-of-string it
+  // did not: `leagues-classic/{id}/standings/?page_standings=1` ends in a
+  // digit, so it kept its slash and kept its 308. Measured in Chromium — one
+  // redirect left on a dashboard load, and it was the mini-league's.
+  `${demoMode ? "/api/demo" : "/api/fpl"}/${path.replace(/\/+(?=\?|$)/, "")}`;
 
 /**
  * One round trip, no retention. Used directly by the element-summary layer
@@ -177,6 +181,17 @@ export interface ElementSummary {
     total_points: number;
     opponent_team: number;
     was_home: boolean;
+    /**
+     * Null until the match has a score — which is how a row for a fixture that
+     * has NOT BEEN PLAYED is told apart from one the player sat out.
+     *
+     * FPL emits a history row from the DEADLINE, with `minutes: 0` and
+     * `starts: 0`, for a match that has not kicked off. Counted on the
+     * 2026-08-21 snapshot: 538 of 600 players carry one. Without this field
+     * there is nothing on the row to distinguish "he was an unused substitute"
+     * from "the game is on Monday". See `fetchRecentForm`.
+     */
+    team_h_score?: number | null;
   }[];
   history_past?: {
     season_name: string;
@@ -253,6 +268,8 @@ interface SummaryRounds {
   round: number;
   minutes: number;
   starts?: number;
+  /** False for a fixture that has not been played — see `fetchRecentForm`. */
+  played: boolean;
 }
 
 interface ReducedSummary {
@@ -350,6 +367,16 @@ async function fetchSummaries(
             round: r.round,
             minutes: r.minutes,
             starts: r.starts,
+            /*
+             * A score is the only thing on the row that says the match
+             * happened. `!== null` rather than `!= null`: FPL sends the key
+             * with an explicit `null` before kickoff and a number after, so
+             * null is the signal — while a payload that omits the key
+             * altogether (a stub, an older reduced record) falls back to
+             * counting the row, which is the behaviour this replaces and the
+             * conservative direction for a shape nobody has seen.
+             */
+            played: r.team_h_score !== null,
           })),
         };
         summaryCache.set(keyFor(id), rec);
@@ -393,7 +420,28 @@ export async function fetchRecentForm(
     // `lastN` is applied HERE, not at fetch time. The rounds are cached whole
     // so that a caller asking for a different window does not have to re-fetch
     // a document the session already holds.
-    const rows = rec.rounds.slice(-lastN);
+    /*
+     * ROUNDS THAT HAVE ACTUALLY BEEN PLAYED, WHICH IS NOT ALL OF THEM.
+     *
+     * FPL emits a history row from the DEADLINE — `minutes: 0`, `starts: 0`,
+     * and no score — for a fixture that has not kicked off. Counted on the
+     * 2026-08-21 snapshot, with one of ten GW1 fixtures started: 538 of 600
+     * players carry such a row. Taking the last five rows unfiltered therefore
+     * charged every one of them a round they did not play in a match that had
+     * not happened.
+     *
+     * Mid-season that is a one-in-five dilution of BOTH `startShare` and
+     * `minsPerGame` for the whole window between the deadline and each kickoff
+     * — and it is biased ACROSS CLUBS within one gameweek, since the Saturday
+     * lunchtime club is clean while the Monday night club is diluted, and the
+     * optimizer compares them directly. Measured through `projectAll` at ten
+     * team games: a nailed ever-present goes from pStart 0.965 and 3.848 xP to
+     * 0.835 and 3.574, a 7.1% cut for the crime of playing later in the week.
+     *
+     * The filter is applied BEFORE the window, so a player still gets five real
+     * rounds rather than four and a hole.
+     */
+    const rows = rec.rounds.filter((r) => r.played).slice(-lastN);
     if (rows.length === 0 || !rows.some((r) => r.starts != null)) continue;
     const started = rows.filter((r) => (r.starts ?? 0) > 0);
     const startMins = started.reduce((a, r) => a + (r.minutes ?? 0), 0);

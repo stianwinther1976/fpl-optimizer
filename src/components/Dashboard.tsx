@@ -28,6 +28,11 @@ import {
   subscribePastSeason,
 } from "@/lib/pastSeasonStore";
 import {
+  cachedRecentForm,
+  recentFormVersion,
+  subscribeRecentForm,
+} from "@/lib/recentFormStore";
+import {
   reconcileFinishedGws,
   seedDemoCalibration,
   snapshotPredictions,
@@ -219,6 +224,11 @@ export default function Dashboard({
     * is the server snapshot: this is a client component under the App Router,
     * so it is still rendered once on the server.
     */
+  const recentReady = useSyncExternalStore(
+    subscribeRecentForm,
+    recentFormVersion,
+    recentFormVersion
+  );
   const pastReady = useSyncExternalStore(
     subscribePastSeason,
     pastSeasonVersion,
@@ -435,14 +445,24 @@ export default function Dashboard({
     void calVersion;
     void pastReady;
     void callsVersion;
+    void recentReady;
     const past = cachedPastSeason();
     return projectAll({
       bootstrap: data.bootstrap,
       fixtures: data.fixtures,
       nextEvent: nextEv,
       pastSeason: past ?? undefined,
+      /*
+       * THE SAME RECENT FORM THE OPTIMIZE PANEL USES, once it has fetched it.
+       * Without this the Stats table and the transfer plans quoted different
+       * five-gameweek xP for the same player in one page load — 13.8 against
+       * 14.5 on a player the plan was recommending selling, with nothing on
+       * either screen to say why. `StatsTable`'s header claims that defect was
+       * closed by handing it this projection; it was only moved here.
+       */
+      recentForm: cachedRecentForm() ?? undefined,
     });
-  }, [data, calVersion, pastReady, callsVersion]);
+  }, [data, calVersion, pastReady, callsVersion, recentReady]);
 
   const liveMinutesOf = useMemo(() => {
     const m = new Map<number, number>();
@@ -677,24 +697,34 @@ export default function Dashboard({
   // scores puts a spike on the very week a hit turned into a loss.
   const pointsTrend = rows.slice(-8).map((r) => netGwPoints(r));
 
-  // "Chips left" shows everything still available this season; the subtitle
-  // notes how many are usable right now (windows can open later).
-  const chipsLeft = squad
-    ? remainingChips(
-        history.chips.map((c) => ({ name: c.name, event: c.event })),
-        data.bootstrap.chips ?? null,
-        squad.nextEvent,
-        "season"
-      )
-    : [];
-  const chipsNow = squad
-    ? remainingChips(
-        history.chips.map((c) => ({ name: c.name, event: c.event })),
-        data.bootstrap.chips ?? null,
-        squad.nextEvent,
-        "now"
-      )
-    : [];
+  /*
+   * "Chips left" shows everything still available this season; the subtitle
+   * notes how many are usable right now (windows can open later).
+   *
+   * NOT GATED ON `squad`, WHICH MADE IT SAY ZERO. Before GW1 there are no picks
+   * to build a squad from, and the card read `Chips left / 0 / None` while the
+   * modal it opens — which has no such gate — listed all six. A manager who has
+   * played nothing holds every chip; zero is not "unknown", it is the opposite
+   * of the truth. The page's own copy two inches below says a missing squad is
+   * normal before GW1 and that only points and rank show a dash.
+   *
+   * `squad?.nextEvent ?? null` is what the modal passes, and `remainingChips`
+   * treats null as "no window filter", which is right when there is no
+   * gameweek to filter on.
+   */
+  const chipsUsed = history.chips.map((c) => ({ name: c.name, event: c.event }));
+  const chipsLeft = remainingChips(
+    chipsUsed,
+    data.bootstrap.chips ?? null,
+    squad?.nextEvent ?? null,
+    "season"
+  );
+  const chipsNow = remainingChips(
+    chipsUsed,
+    data.bootstrap.chips ?? null,
+    squad?.nextEvent ?? null,
+    "now"
+  );
 
   return (
     <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">

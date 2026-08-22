@@ -345,8 +345,9 @@ export default function PlayerModal({
           </div>
           {myCall && (
             <p className="mt-2 text-xs text-warn">
-              You set this, not the model — every projection for {element.web_name} now
-              follows it. Tap again to hand him back to the model.
+              You set this, not the model — {element.web_name}&apos;s NEXT gameweek follows
+              it, and the model takes the rest of the horizon back. Tap again to hand him
+              back entirely.
             </p>
           )}
         </div>

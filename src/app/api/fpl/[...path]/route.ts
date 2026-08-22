@@ -8,6 +8,42 @@ const FPL_BASE = process.env.FPL_API_BASE ?? "https://fantasy.premierleague.com/
 /** How long to wait on FPL before giving up. See the note at the fetch below. */
 const UPSTREAM_TIMEOUT_MS = 10_000;
 
+/**
+ * A deadline the fetch cannot opt out of.
+ *
+ * `AbortSignal.timeout` DOES NOT ALWAYS SURVIVE. Next patches `fetch` and, when
+ * it is REVALIDATING a stale Data Cache entry, strips the caller's signal —
+ * `next/dist/server/lib/patch-fetch.js`: "don't pass through signal when
+ * revalidating", `...isStale ? [] : ['signal']`. Every path here is cached
+ * after its first success, so the signal binds cold misses and nothing else.
+ *
+ * WHAT THAT DOES AND DOES NOT MEAN, measured against a stub that accepts the
+ * connection and never answers:
+ *
+ *   cold miss, hung upstream ......... 502 at 10.04 s (deadline fires)
+ *   entry stale, hung upstream ....... 200 at 0.04 s, the stale body
+ *
+ * So a reader is never made to wait: on a stale entry Next answers from the
+ * cache immediately and refreshes behind it, which is `stale-while-revalidate`
+ * doing its job. What is genuinely unbounded is that BACKGROUND refresh, which
+ * neither this nor the signal can reach — but nothing is awaiting it and the
+ * handler has already returned, so it cannot hold the response open.
+ *
+ * This function is therefore what makes the ten seconds a guarantee about the
+ * path the route actually awaits, whether or not the signal survives to it.
+ * The signal still earns its place: on a cold miss it closes the socket, which
+ * racing a timer cannot do.
+ */
+function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("upstream timeout")), ms);
+    }),
+  ]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
 // Only allow known endpoint shapes — never a blind open proxy.
 /*
  * `\d{1,10}` RATHER THAN `\d+`, so the key space is finite.
@@ -182,34 +218,39 @@ export async function GET(
   const ttl = cacheSeconds(joined);
 
   try {
-    const upstream = await fetch(url, {
-      headers: {
-        "User-Agent": "fpl-optimizer (personal, non-commercial)",
-        Accept: "application/json",
-      },
-      /*
-       * A HUNG UPSTREAM MUST NOT HOLD THE FUNCTION OPEN. There was no signal at
-       * all: against a stub that never answers, this route never answered
-       * either — measured at 45 seconds and still waiting — and it kept the
-       * upstream socket open after the client had given up at 3. On a serverless
-       * host that is the whole function duration burned per request, on every
-       * request, for as long as FPL is unwell. Ten seconds is generous against
-       * an API that normally answers in tens of milliseconds, and the `catch`
-       * below already maps an abort to "Could not reach the FPL API".
-       */
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-      /*
-       * NEVER FOLLOW A REDIRECT. The upstream is fixed at module load and every
-       * allowed path is literals and digits, so a visitor cannot point this
-       * anywhere — but if FPL itself 302s to a maintenance page or a captive
-       * portal, the default `follow` serves that body under OUR origin and
-       * labels it publicly cacheable at the edge. Verified against a stub: the
-       * off-host body came back 200 with `cdn-cache-control: public, s-maxage`.
-       * A proxy with one known upstream has no business following anything.
-       */
-      redirect: "error",
-      next: { revalidate: ttl },
-    });
+    /*
+     * A HUNG UPSTREAM MUST NOT HOLD THE FUNCTION OPEN. There was no bound at
+     * all: against a stub that never answers, this route never answered either
+     * — measured at 45 seconds and still waiting — and it kept the upstream
+     * socket open after the client had given up at 3. On a serverless host that
+     * is the whole function duration burned per request, on every request, for
+     * as long as FPL is unwell. Ten seconds is generous against an API that
+     * normally answers in tens of milliseconds, and the `catch` below already
+     * maps both the abort and the deadline to "Could not reach the FPL API".
+     *
+     * BOTH belts are needed — see `withDeadline` for why the signal alone
+     * binds only cold misses.
+     *
+     * NEVER FOLLOW A REDIRECT, either. The upstream is fixed at module load and
+     * every allowed path is literals and digits, so a visitor cannot point this
+     * anywhere — but if FPL itself 302s to a maintenance page or a captive
+     * portal, the default `follow` serves that body under OUR origin and labels
+     * it publicly cacheable at the edge. Verified against a stub: the off-host
+     * body came back 200 with `cdn-cache-control: public, s-maxage`. A proxy
+     * with one known upstream has no business following anything.
+     */
+    const upstream = await withDeadline(
+      fetch(url, {
+        headers: {
+          "User-Agent": "fpl-optimizer (personal, non-commercial)",
+          Accept: "application/json",
+        },
+        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+        redirect: "error",
+        next: { revalidate: ttl },
+      }),
+      UPSTREAM_TIMEOUT_MS
+    );
 
     if (!upstream.ok) {
       // FPL returns 503/maintenance pages while the game updates.

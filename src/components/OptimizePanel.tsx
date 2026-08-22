@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { currentFeed, fetchRecentForm, type TeamData } from "@/lib/fpl";
+import { setRecentForm as publishRecentForm } from "@/lib/recentFormStore";
 import type { RecentForm } from "@/lib/types";
 import { cachedPastSeason, loadPastSeason } from "@/lib/pastSeasonStore";
 import { launchPool } from "@/lib/pool";
@@ -445,6 +446,9 @@ export default function OptimizePanel({
       setPhase(`Checking recent line-ups… ${done}/${total}`)
     );
     setRecentForm(map);
+    // And publish it, so the Dashboard's own projection stops disagreeing with
+    // this one about the same player — see `recentFormStore`.
+    publishRecentForm(map);
     return map;
   }
 

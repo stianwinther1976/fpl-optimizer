@@ -4089,10 +4089,26 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
      * quoting a number back at them as though it had worked it out.
      */
     const call = startCalls.get(el.id);
-    if (call) mm = applyStartCall(mm, call);
+    /*
+     * THE CALL IS ABOUT ONE GAMEWEEK, AND IT WAS APPLIED TO ALL FIVE.
+     *
+     * `StartCall`'s own doc says "for the gameweek in front of them", and a
+     * press conference is about one match. Folding it into `mm` here put it on
+     * every offset in the horizon loop below: measured on the demo, "Not in the
+     * XI" took a striker from 19.1 over five gameweeks to 5.3 — a 13.8-point
+     * write-off from a claim worth at most one gameweek of it. That figure then
+     * feeds `totalDiscounted`, which is what `planHorizon` ranks transfers on,
+     * so one tap became a sell recommendation.
+     *
+     * So `mm` stays the model's own and the call is applied at offset 0 only,
+     * where the reader actually has information. `XP_DEBUG.minutes` shows the
+     * called version, because that is the gameweek the reader is looking at and
+     * it is what the tests read.
+     */
+    const mmCalled = call ? applyStartCall(mm, call) : mm;
     if (XP_DEBUG.minutes) {
       XP_DEBUG.minutes.set(el.id, {
-        ...mm,
+        ...mmCalled,
         preseason,
         hasEvidence: preseasonEvidence(el, past, seasonStartYear) != null,
       });
@@ -4223,7 +4239,9 @@ export function projectAll(ctx: XpContext): Map<number, PlayerXp> {
        * (`liftedPStart`) is folded in BEFORE the call rather than after.
        */
       const mmGwBase = gkMm(off) ?? mm;
-      const mmGw = call ? applyStartCall(mmGwBase, call) : mmGwBase;
+      // Offset 0 only — see the note on `mmCalled`. The reader has seen a team
+      // sheet for one match, not for the next five.
+      const mmGw = call && off === 0 ? applyStartCall(mmGwBase, call) : mmGwBase;
       // Kept per leg, not just summed, because the suspension term below has to
       // charge a ban against the specific match it is served in. `fx` is in
       // kickoff order (see `makeFixtureIndex`), so `legXp[0]` really is first.

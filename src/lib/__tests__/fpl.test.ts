@@ -70,6 +70,60 @@ describe("fetchRecentForm", () => {
     };
   }
 
+  it("does not count a fixture that has not been played", async () => {
+    /*
+     * FPL EMITS A HISTORY ROW FROM THE DEADLINE, with `minutes: 0`,
+     * `starts: 0` and `team_h_score: null`, for a match that has not kicked
+     * off. Counted on the 2026-08-21 snapshot with one of ten GW1 fixtures
+     * started: 538 of 600 players carry one. Unfiltered, every one of them was
+     * charged a round he did not play in a match that had not happened — a
+     * one-in-five dilution of `startShare` and `minsPerGame` for the whole
+     * window between the deadline and each kickoff, and BIASED ACROSS CLUBS
+     * within one gameweek, since the Saturday lunchtime club is clean and the
+     * Monday night club is not. The optimizer compares them directly.
+     */
+    const played = rows([90, 90, 90, 90, 90]).map((r) => ({ ...r, team_h_score: 1 }));
+    const pending = { ...rows([0])[0], round: 6, team_h_score: null };
+    const restore = mockApi({ 8100: { history: [...played, pending] } });
+    try {
+      const m = await fetchRecentForm([8100], 5);
+      expect(m.get(8100)).toEqual({ startShare: 1, minsPerGame: 90, minsPerStart: 90 });
+    } finally {
+      restore();
+      resetSummaryCache();
+    }
+  });
+
+  it("keeps counting rows whose payload omits the score at all", async () => {
+    // `!== null`, not `!= null`: an explicit null is FPL's pre-kickoff signal,
+    // while an absent key is a stub or an older reduced record and falls back
+    // to the behaviour this replaces.
+    const restore = mockApi({ 8101: { history: rows([90, 0]) } });
+    try {
+      const m = await fetchRecentForm([8101], 5);
+      expect(m.get(8101)!.startShare).toBe(0.5);
+    } finally {
+      restore();
+      resetSummaryCache();
+    }
+  });
+
+  it("still fills the window from real rounds when a pending one is dropped", async () => {
+    // The filter runs BEFORE the window, so a player gets five real rounds
+    // rather than four and a hole.
+    const played = rows([10, 20, 30, 40, 50, 60]).map((r) => ({ ...r, team_h_score: 0 }));
+    const pending = { ...rows([0])[0], round: 7, team_h_score: null };
+    const restore = mockApi({ 8102: { history: [...played, pending] } });
+    try {
+      const m = await fetchRecentForm([8102], 5);
+      // Rounds 2..6: 20+30+40+50+60 = 200 over five.
+      expect(m.get(8102)!.minsPerGame).toBeCloseTo(40, 9);
+    } finally {
+      restore();
+      resetSummaryCache();
+    }
+  });
+
   it("measures minutes per start over the starts, not over every appearance", async () => {
     // 90, 80, 30, 0, 45 => started two of five (the 90 and the 80), mean 49
     // minutes a game, and 85 minutes in the games he started. Three

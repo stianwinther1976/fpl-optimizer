@@ -25,6 +25,8 @@ export const metadata: Metadata = {
  *   /team/abc      -> "FPL API error (400)"   (three requests fired for NaN)
  *   /team/-5       -> "FPL API error (400)"
  *   /team/1e999    -> silently loaded TEAM 1  (parseInt stops at the `e`)
+ *   /team/0000001  -> silently loaded TEAM 1  (leading zeros, after the first
+ *                     version of this guard)
  *
  * The last one is the reason this is not just cosmetics: a typo quietly showed
  * somebody else's team. The allowlist in the proxy refuses all of them before
@@ -35,9 +37,13 @@ export const metadata: Metadata = {
  * Ten digits is past every real id and matches the proxy's own bound.
  */
 function entryId(raw: string): number | null {
-  if (!/^\d{1,10}$/.test(raw)) return null;
-  const n = Number(raw);
-  return n > 0 ? n : null;
+  // NO LEADING ZEROS. `/^\d{1,10}$/` admits `0000001`, and `Number` reads it as
+  // 1 — so `/team/0000001` quietly showed team 1, which is the same "a typo
+  // showed somebody else's team" this function exists to close. It also gave
+  // every id ten accepted spellings, and each one is a distinct upstream fetch
+  // and a distinct edge-cache key, which undercuts the proxy's own bound.
+  if (!/^[1-9]\d{0,9}$/.test(raw)) return null;
+  return Number(raw);
 }
 
 export default async function TeamPage({

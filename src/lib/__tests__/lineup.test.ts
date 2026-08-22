@@ -351,3 +351,42 @@ describe("the calibration snapshot is taken without overrides", () => {
     expect(before.slice(call)).toMatch(/startCalls:\s*new Map\(\)/);
   });
 });
+
+describe("a call is about the gameweek in front of the reader", () => {
+  const bootstrap = makeMockBootstrap();
+  const fixtures = makeMockFixtures();
+  const run = (calls: Map<number, "starts" | "benched">) =>
+    projectAll({ bootstrap, fixtures, nextEvent: 11, horizon: 5, pastSeason: undefined, startCalls: calls });
+  const target = bootstrap.elements.find((e) => e.element_type === 3)!;
+
+  it("moves the next gameweek and leaves the rest of the horizon alone", () => {
+    /*
+     * `StartCall`'s doc says "for the gameweek in front of them", and a press
+     * conference is about one match. Folding the call into the whole horizon
+     * took a striker on the demo from 19.1 over five gameweeks to 5.3 — a
+     * 13.8-point write-off from a claim worth at most one gameweek of it. That
+     * figure feeds `totalDiscounted`, which is what `planHorizon` ranks
+     * transfers on, so one tap became a sell recommendation.
+     */
+    const base = run(new Map()).get(target.id)!;
+    const benched = run(new Map([[target.id, "benched"]])).get(target.id)!;
+    expect(benched.next).toBeLessThan(base.next);
+    // The drop over the horizon is the drop in gameweek one, and no more.
+    const dropNext = base.next - benched.next;
+    const dropTotal = base.total - benched.total;
+    expect(dropTotal).toBeGreaterThan(0);
+    expect(dropTotal).toBeCloseTo(dropNext, 6);
+    // Every later gameweek is untouched.
+    for (const [gw, v] of base.perGw) {
+      if (gw === 11) continue;
+      expect(benched.perGw.get(gw), `GW${gw}`).toBeCloseTo(v, 9);
+    }
+  });
+
+  it("does the same in the raising direction", () => {
+    const base = run(new Map()).get(target.id)!;
+    const started = run(new Map([[target.id, "starts"]])).get(target.id)!;
+    const gainNext = started.next - base.next;
+    expect(started.total - base.total).toBeCloseTo(gainNext, 6);
+  });
+});
