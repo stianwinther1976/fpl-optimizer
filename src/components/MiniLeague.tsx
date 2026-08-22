@@ -228,7 +228,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                       setLeagueId(String(l.id));
                       load(String(l.id));
                     }}
-                    className={`rounded-full border px-3 py-1.5 text-sm ${
+                    className={`min-h-11 rounded-full border px-3 py-1.5 text-sm ${
                       String(l.id) === leagueId
                         ? "border-accent bg-accent/15 font-semibold text-accent"
                         : "border-border-c bg-panel-2 hover:border-accent"
@@ -255,7 +255,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                     load(e.target.value);
                   }
                 }}
-                className="mt-2 w-full rounded-lg border border-border-c bg-panel-2 px-3 py-2 text-sm sm:w-auto"
+                className="mt-2 min-h-11 w-full rounded-lg border border-border-c bg-panel-2 px-3 py-2 text-sm sm:w-auto"
               >
                 <option value="">Public leagues (Overall, country, club …)</option>
                 {myLeagues
@@ -275,7 +275,9 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
           </div>
         )}
         <details className="text-xs text-muted">
-          <summary className="cursor-pointer hover:text-accent">Enter a league ID manually</summary>
+          <summary className="flex min-h-11 cursor-pointer items-center hover:text-accent">
+            Enter a league ID manually
+          </summary>
           <div className="mt-2 flex gap-2">
             <input
               value={leagueId}
@@ -283,12 +285,12 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               onKeyDown={(e) => e.key === "Enter" && load()}
               placeholder="League ID (classic league)"
               aria-label="Classic league ID"
-              className="min-w-0 flex-1 rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
+              className="min-h-11 min-w-0 flex-1 rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
             />
             <button
               onClick={() => load()}
               disabled={loading}
-              className="btn-primary shrink-0 rounded-lg px-4 py-2 text-sm disabled:opacity-50"
+              className="btn-primary min-h-11 shrink-0 rounded-lg px-4 py-2 text-sm disabled:opacity-50"
             >
               {loading ? "Loading…" : "Load"}
             </button>

@@ -646,7 +646,7 @@ export default function OptimizePanel({
               setChipView(null);
               setFailure(null);
             }}
-            className="rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
+            className="min-h-11 rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
           >
             {[1, 2, 3, 5, 8].map((h) => (
               <option key={h} value={h}>
@@ -658,7 +658,7 @@ export default function OptimizePanel({
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
           <button
             type="button"
-            className="-m-1.5 p-1.5"
+            className="-m-1.5 flex min-h-11 items-center p-1.5"
             onClick={() =>
               setInfoOpen({
                 title: `${squad.freeTransfers} free transfer${squad.freeTransfers === 1 ? "" : "s"}`,
@@ -676,7 +676,7 @@ export default function OptimizePanel({
           </button>
           <button
             type="button"
-            className="-m-1.5 p-1.5"
+            className="-m-1.5 flex min-h-11 items-center p-1.5"
             onClick={() =>
               setInfoOpen({
                 title: `Bank £${fmtPrice(squad.bank)}m`,
@@ -693,7 +693,7 @@ export default function OptimizePanel({
             <button
               key={i}
               type="button"
-              className="-m-1.5 p-1.5"
+              className="-m-1.5 flex min-h-11 items-center p-1.5"
               disabled={chipLoading != null}
               onClick={() => showChip(c.name)}
             >
@@ -762,7 +762,7 @@ export default function OptimizePanel({
             type="button"
             onClick={runPlan}
             disabled={planning || running}
-            className="rounded-lg border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent hover:bg-accent/20 active:bg-accent/20 disabled:opacity-50"
+            className="min-h-11 rounded-lg border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent hover:bg-accent/20 active:bg-accent/20 disabled:opacity-50"
           >
             {planning ? "Planning…" : plan ? "Re-plan 6 GWs" : "Plan next 6 GWs"}
           </button>

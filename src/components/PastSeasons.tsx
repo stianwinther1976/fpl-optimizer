@@ -214,7 +214,7 @@ export default function PastSeasons({ data, entryId }: { data: TeamData; entryId
                 type="button"
                 aria-expanded={isOpen}
                 onClick={() => setOpen(isOpen ? null : p.season_name)}
-                className={`grid w-full grid-cols-[1fr_auto_auto_1.25rem] items-center gap-3 px-1 py-2 text-left text-sm hover:bg-panel-2/60 ${
+                className={`grid min-h-11 w-full grid-cols-[1fr_auto_auto_1.25rem] items-center gap-3 px-1 py-2 text-left text-sm hover:bg-panel-2/60 ${
                   p.rank === bestRank ? "text-accent" : ""
                 }`}
               >

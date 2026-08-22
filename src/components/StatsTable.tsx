@@ -102,7 +102,7 @@ export default function StatsTable({
       <button
         type="button"
         onClick={() => setSortKey(key)}
-        className={`-m-1 p-1 uppercase hover:text-accent active:text-accent ${sortKey === key ? "text-accent" : ""}`}
+        className={`-m-1 min-h-11 p-1 uppercase hover:text-accent active:text-accent ${sortKey === key ? "text-accent" : ""}`}
       >
         {label}
         {sortKey === key ? " ↓" : ""}
@@ -118,14 +118,19 @@ export default function StatsTable({
             <button
               key={t}
               onClick={() => setPosFilter(t)}
-              className={`rounded-md px-3 py-1.5 ${posFilter === t ? "btn-primary" : "text-muted"}`}
+              className={`min-h-11 rounded-md px-3 py-1.5 ${posFilter === t ? "btn-primary" : "text-muted"}`}
             >
               {t === 0 ? "All" : POSITION_NAMES[t]}
             </button>
           ))}
         </div>
-        <label className="flex items-center gap-2 text-muted">
+        <label className="flex min-h-11 items-center gap-2 text-muted">
           Max price: £{fmtPrice(effMaxPrice)}m
+          {/*
+            `h-11` on a range input gives the TRACK a 44px hit area — the thumb
+            is drawn centred in it, so the whole strip is draggable rather than
+            the 16px the control defaults to on a phone.
+          */}
           <input
             type="range"
             min={40}
@@ -133,7 +138,7 @@ export default function StatsTable({
             step={5}
             value={effMaxPrice}
             onChange={(e) => setMaxPrice(parseInt(e.target.value))}
-            className="accent-[var(--accent)]"
+            className="h-11 accent-[var(--accent)]"
           />
         </label>
         <input
@@ -141,7 +146,7 @@ export default function StatsTable({
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search player/club…"
           aria-label="Search players or clubs"
-          className="ml-auto rounded-lg bg-panel-2 border border-border-c px-3 py-2"
+          className="ml-auto min-h-11 rounded-lg bg-panel-2 border border-border-c px-3 py-2"
         />
       </div>
 

@@ -1,9 +1,12 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
+  api,
   buildSquadState,
+  fetchCacheSize,
   fetchPastSeason,
   fetchRecentForm,
   rankPercentile,
+  resetFetchCache,
   resetSummaryCache,
   setDemoMode,
 } from "../fpl";
@@ -389,5 +392,57 @@ describe("the squad on the pitch versus the squad to optimize from", () => {
     expect(s.players.find((p) => p.isViceCaptain)!.element.id).toBe(4);
     expect(s.players.filter((p) => p.isCaptain)).toHaveLength(1);
     expect(s.players.filter((p) => p.isViceCaptain)).toHaveLength(1);
+  });
+});
+
+describe("the in-memory memo does not grow for the life of the page", () => {
+  /*
+   * `fetchCache` never evicted. That was fine when the keys were a fixed
+   * handful per reader and is not any more: the gameweek time machine fetches
+   * `event/{gw}/live/` and a picks payload for every week it is pointed at — up
+   * to thirty-eight of each — and the mini-league fetches four payloads per
+   * rival card opened. A gameweek's live feed is around 100 KB for a
+   * three-hundred-player universe, so the ceiling was tens of megabytes of JSON
+   * nobody would look at twice.
+   */
+  beforeEach(() => {
+    resetFetchCache();
+    globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({}) })) as unknown as typeof fetch;
+  });
+
+  it("drops entries whose TTL has passed, on the next write", async () => {
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(1_000_000);
+      for (let gw = 1; gw <= 10; gw++) await api.live(gw);
+      expect(fetchCacheSize()).toBe(10);
+      // Still inside the 25s live TTL: nothing is dropped.
+      now.mockReturnValue(1_000_000 + 20_000);
+      await api.live(11);
+      expect(fetchCacheSize()).toBe(11);
+      // Past it: the write that triggers the sweep is the only one left.
+      now.mockReturnValue(1_000_000 + 60_000);
+      await api.live(12);
+      expect(fetchCacheSize()).toBe(1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("keeps entries that are still live, whatever their TTL", async () => {
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(2_000_000);
+      await api.live(1); // 25s
+      await api.bootstrap(); // 300s
+      await api.history(7); // 300s
+      expect(fetchCacheSize()).toBe(3);
+      // Past the live TTL and well inside the other two.
+      now.mockReturnValue(2_000_000 + 30_000);
+      await api.live(2);
+      expect(fetchCacheSize()).toBe(3); // bootstrap, history, and the new live
+    } finally {
+      now.mockRestore();
+    }
   });
 });

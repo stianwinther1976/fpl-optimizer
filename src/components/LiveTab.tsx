@@ -362,7 +362,7 @@ export default function LiveTab({
           <button
             type="button"
             onClick={() => refresh(true)}
-            className="mt-1 rounded-md border border-border-c bg-panel-2 px-3 py-1.5 hover:border-accent active:border-accent"
+            className="mt-1 min-h-11 rounded-md border border-border-c bg-panel-2 px-3 py-1.5 hover:border-accent active:border-accent"
           >
             Refresh now
           </button>
@@ -430,7 +430,7 @@ export default function LiveTab({
                 key={f.id}
                 type="button"
                 onClick={() => setMatchOpen(f)}
-                className={`card flex min-w-28 cursor-pointer flex-col items-center px-2 py-1.5 text-xs hover:border-accent active:border-accent sm:min-w-32 sm:text-sm ${liveNow ? "border-accent/50" : ""}`}
+                className={`card flex min-h-11 min-w-28 cursor-pointer flex-col items-center px-2 py-1.5 text-xs hover:border-accent active:border-accent sm:min-w-32 sm:text-sm ${liveNow ? "border-accent/50" : ""}`}
               >
                 <div className="flex items-center gap-1.5 font-semibold sm:gap-2">
                   <span className={hClass}>{teams.get(f.team_h)?.short_name}</span>
@@ -484,7 +484,7 @@ export default function LiveTab({
             <Row
               key={p.element.id}
               type={onSelect ? "button" : undefined}
-              className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm ${onSelect ? "cursor-pointer hover:bg-panel-2/60 active:bg-panel-2" : ""}`}
+              className={`flex min-h-11 w-full items-center gap-3 px-4 py-2.5 text-left text-sm ${onSelect ? "cursor-pointer hover:bg-panel-2/60 active:bg-panel-2" : ""}`}
               onClick={onSelect ? () => onSelect(p.element) : undefined}
             >
               <span className="w-6 text-xs text-muted">{p.pickPosition}</span>

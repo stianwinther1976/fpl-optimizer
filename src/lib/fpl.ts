@@ -97,6 +97,37 @@ async function fetchJson<T>(url: string, signal?: AbortSignal, noStore = false):
 }
 
 /**
+ * Drop entries whose TTL has passed.
+ *
+ * This map used to hold every payload for the life of the page, which was fine
+ * when the keys were a fixed handful per reader. They are not any more: the
+ * gameweek time machine fetches `event/{gw}/live/` and
+ * `entry/{id}/event/{gw}/picks/` for every week it is pointed at — up to
+ * thirty-eight of each — and the mini-league fetches an entry, a history, a
+ * transfer list and a picks payload per rival card opened, plus a standings
+ * page per page turned. A gameweek's live feed is around 100 KB for a
+ * three-hundred-player universe and more for a real one, so the ceiling was
+ * tens of megabytes of JSON nobody would look at twice.
+ *
+ * Expiry, not capacity: an entry past its TTL is already unusable — `get`
+ * bypasses it on read — so this deletes nothing a caller could still have had.
+ * That makes it strictly a memory fix and not a behaviour change, which is the
+ * only kind of eviction worth adding without a measurement behind it.
+ *
+ * Called on write rather than on a timer: the map only grows when something is
+ * written to it, so that is the only moment it can need trimming, and it keeps
+ * this off the polling path entirely.
+ */
+function evictExpired(): void {
+  const now = Date.now();
+  for (const [url, entry] of fetchCache) {
+    // The path is what `cacheTtl` keys on; strip the feed prefix back off.
+    const path = url.replace(/^\/api\/(?:demo|fpl)\//, "");
+    if (now - entry.at >= cacheTtl(path)) fetchCache.delete(url);
+  }
+}
+
+/**
  * @param force skip the in-memory memo below. For a control the reader pressed
  *   — "Refresh now" — which otherwise returns the same promise for up to 25
  *   seconds and looks like a button that does nothing.
@@ -109,6 +140,7 @@ async function get<T>(path: string, force = false): Promise<T> {
   }
   const promise = fetchJson<T>(url, undefined, isLiveFeed(path));
   fetchCache.set(url, { promise, at: Date.now() });
+  evictExpired();
   // Failed requests must not be cached, or a retry could never succeed.
   promise.catch(() => {
     if (fetchCache.get(url)?.promise === promise) fetchCache.delete(url);
@@ -143,6 +175,20 @@ export interface ElementSummary {
 }
 
 export type PastSeason = PastSeasonStats;
+
+/**
+ * How many payloads the in-memory memo is holding, and a way to empty it.
+ *
+ * Exported for tests only, like `resetSummaryCache` below. `evictExpired` is
+ * otherwise unobservable — it deletes entries that were already unusable — and
+ * an unobservable fix is one nobody can pin.
+ */
+export function fetchCacheSize(): number {
+  return fetchCache.size;
+}
+export function resetFetchCache(): void {
+  fetchCache.clear();
+}
 
 export const api = {
   bootstrap: () => get<Bootstrap>("bootstrap-static/"),

@@ -117,7 +117,7 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => setEditing((v) => !v)}
-                  className="rounded px-2 py-1 text-xs font-semibold text-muted hover:text-accent"
+                  className="min-h-11 rounded px-3 py-1 text-xs font-semibold text-muted hover:text-accent"
                 >
                   {editing ? "Done" : "Edit"}
                 </button>
@@ -157,7 +157,7 @@ export default function Home() {
                         type="button"
                         onClick={() => removeTeam(t.id)}
                         aria-label={`Remove ${t.name} from your teams`}
-                        className="ml-0.5 flex h-9 w-9 items-center justify-center rounded-full text-base text-muted hover:bg-warn/20 hover:text-warn active:bg-warn/20"
+                        className="ml-0.5 flex h-11 w-11 items-center justify-center rounded-full text-base text-muted hover:bg-warn/20 hover:text-warn active:bg-warn/20"
                       >
                         ✕
                       </button>

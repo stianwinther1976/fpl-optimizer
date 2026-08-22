@@ -104,7 +104,7 @@ export default function FixtureTicker({
               <td className="sticky left-0 z-10 bg-[var(--panel)] px-3 py-2 font-medium">
                 <button
                   onClick={() => setClubOpen(team)}
-                  className="hover:text-accent"
+                  className="min-h-11 text-left hover:text-accent"
                   title="Club details and top FPL assets"
                 >
                   {team.name} <span className="text-xs text-muted">›</span>

@@ -1532,6 +1532,33 @@ export function makeDemoUniverse(now: number) {
       // the clock keeps agreeing with the minutes the player cards credit.
       f.minutes = IN_PLAY_MINUTE;
     }
+
+    /*
+     * ONE MATCH AT FULL TIME WITH ITS BONUS STILL PENDING, because that state
+     * has produced three shipped defects and the demo could not reach it.
+     *
+     * `finished` means BONUS CONFIRMED; `finished_provisional` means the final
+     * whistle has gone. After a Saturday afternoon the two are hours apart, and
+     * every demo fixture was `finished: true/false` with the provisional flag
+     * simply absent — so the whole window in which the match is over and the
+     * points are not was untestable, and three separate bugs lived in it: a
+     * clock that sat on 90', a live badge that would not stop pulsing, and
+     * auto-substitutions that waited for bonus they do not depend on.
+     *
+     * Chosen from the fixtures the demo manager holds NOBODY in — all fifteen,
+     * not just the eleven, since a bench player's provisional bonus would move
+     * the bench total — so the state is exercised without shifting a single
+     * number on his own screens.
+     */
+    const squadTeams = new Set(squad.map((e) => e.team));
+    const settled = currentFixtures.find(
+      (f) => f.finished && !squadTeams.has(f.team_h) && !squadTeams.has(f.team_a)
+    );
+    if (settled) {
+      settled.finished = false;
+      settled.finished_provisional = true;
+      settled.minutes = 90;
+    }
   }
 
   const currentFixtureOf = new Map<number, any>();

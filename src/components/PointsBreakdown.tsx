@@ -171,7 +171,7 @@ export default function PointsBreakdown({
           onChange={(e) =>
             setGwFilter(e.target.value === "all" ? "all" : Number(e.target.value))
           }
-          className="rounded-lg border border-border-c bg-panel-2 px-3 py-2 text-sm"
+          className="min-h-11 rounded-lg border border-border-c bg-panel-2 px-3 py-2 text-sm"
         >
           <option value="all">
             {bd.gws.length > 0

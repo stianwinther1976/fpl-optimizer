@@ -1278,3 +1278,41 @@ describe("the chip advisor's copy", () => {
     expect(body).toContain("recentForm: recent");
   });
 });
+
+describe("tap targets on a phone", () => {
+  /*
+   * Measured in Chromium at 360x740 across every tab, before and after. The
+   * worst offenders were the fixtures table's club buttons at 71x20, the Stats
+   * sort headers at 34x24, "Refresh now" at 100x30, the Optimize chip badges at
+   * 34 tall, and the price slider's 16px track. The tab strip and the
+   * Pitch/List toggle already used `min-h-11`, so the 44px floor was known and
+   * applied to two controls out of thirty.
+   *
+   * `min-h-11` is 2.75rem = 44px. What is deliberately NOT enforced is WIDTH:
+   * seven tabs across 360px cannot each be 44 wide, and a table column header
+   * is as wide as its label. Height is the axis a thumb misses on.
+   */
+  const sites: [string, string][] = [
+    ["FixtureTicker.tsx", "min-h-11 text-left hover:text-accent"], // club buttons, were 20 tall
+    ["StatsTable.tsx", "-m-1 min-h-11 p-1 uppercase"], // sort headers, were 24
+    ["StatsTable.tsx", "min-h-11 rounded-md px-3 py-1.5"], // position pills, were 32
+    ["StatsTable.tsx", 'className="h-11 accent-[var(--accent)]"'], // price slider, 16px track
+    ["LiveTab.tsx", "mt-1 min-h-11 rounded-md border"], // Refresh now, was 30
+    ["LiveTab.tsx", "flex min-h-11 w-full items-center gap-3"], // player rows, were 41
+    ["OptimizePanel.tsx", "-m-1.5 flex min-h-11 items-center p-1.5"], // chip badges, were 34
+    ["MiniLeague.tsx", "flex min-h-11 cursor-pointer items-center"], // <summary>, was 16
+    ["PastSeasons.tsx", "grid min-h-11 w-full"], // season rows, were 36
+    ["PointsBreakdown.tsx", "min-h-11 rounded-lg border border-border-c"], // select, was 36
+  ];
+
+  it("keeps every control that was under 44px tall at the floor", () => {
+    const missing = sites.filter(([file, token]) => !read(file).includes(token));
+    expect(missing.map(([f, t]) => `${f}: ${t}`)).toEqual([]);
+  });
+
+  it("keeps the remove control on the landing page a full target", () => {
+    // It renders as a bare "✕" and was h-9 w-9.
+    const src = fs.readFileSync(path.resolve(__dirname, "../../app/page.tsx"), "utf8");
+    expect(src).toContain("flex h-11 w-11 items-center justify-center rounded-full");
+  });
+});
