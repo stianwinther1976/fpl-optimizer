@@ -40,10 +40,16 @@ jobs:
           FPL_LEAGUE_ID: ${{ vars.FPL_LEAGUE_ID || '314' }}
         run: node scripts/snapshot/standings-check.mjs
 
+      # OPT-IN, because a job's log cannot be read until the job ENDS. With
+      # these always on, the one-request check above was 22 minutes away from
+      # being readable — which is the whole reason it went unanswered twice.
+      # Set the PROBE_LONG repository variable to 'true' to run them.
       - name: Probe the match clock
+        if: vars.PROBE_LONG == 'true'
         run: node scripts/snapshot/clock-probe.mjs
 
       - name: Probe what a manager's score is reported as
+        if: vars.PROBE_LONG == 'true'
         env:
           # Overridable so a specific team can be measured; the default is a
           # handful of low ids, which are real long-standing entries.
