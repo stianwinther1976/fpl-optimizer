@@ -3241,13 +3241,50 @@ function minutesModel(
     //     started once    pStart 0.0175   share 0.0175   next xP 0.462
     //
     // A 44-fold understatement of playing time, and the sign is inverted: the
-    // man with MORE evidence of starting projects at half the points. The
-    // near-miss case — a regular substitute with one start behind him — is the
-    // population the floor was written for and it was the one case it missed.
-    // `minsPerGame` is minutes per RECORDED ROUND including unused benchings,
-    // which is the same axis as `share`, so it floors like for like.
-    const subFloor = recent.minsPerGame / 90;
-    const share = Math.max((pStart * minsPerStart) / 90, subFloor);
+    // man with MORE evidence of starting projects at half the points.
+    //
+    // UNGATING IT NEAT WAS ALSO WRONG, IN THE OTHER DIRECTION, and this is the
+    // fix for both. `minsPerGame` is minutes per RECORDED ROUND — starts,
+    // cameos and unused benchings together — so flooring `share` with it
+    // applies the last five games at weight 1.0, while `recentStartsWeight`
+    // deliberately shrinks those same five games toward the season figure at
+    // 0.65 for `pStart`. The two halves of the minutes model then disagree
+    // about how much to trust one piece of evidence, one-sidedly upward:
+    // probed at `pStart` 0.720 beside `share` 1.000 for a returning starter,
+    // which asserts he plays a full ninety in rounds the model says he has a
+    // 28% chance of not starting.
+    //
+    // So take the part the model actually drops, and no more. A round's
+    // minutes decompose into the ones he plays as a starter and the ones he
+    // plays as a substitute; `pStart * minsPerStart` is the first term and the
+    // second is what recent form has that the model does not:
+    //
+    //     subMinutes = minsPerGame - startShare * minsPerStart   (>= 0)
+    //
+    // No new constant, and it lands on the old rule at both ends of the
+    // population it was written for. For a man who never starts — `startShare`
+    // 0 and `pStart` at 0 with it — the sub term is the whole of `minsPerGame`
+    // and this IS `minsPerGame / 90`, the old floor exactly. For an ever-present
+    // with no cameos — `startShare` 1 and `minsPerGame` equal to his
+    // `minsPerStart` — the sub term is 0 and this is the model's own
+    // `pStart * minsPerStart / 90`. In between it adds the cameo minutes to the
+    // start minutes instead of choosing whichever is larger, which is what the
+    // two quantities actually mean. Measured across six profiles through
+    // `projectAll` at ten team games:
+    //
+    //     profile                            pStart  old share  new share
+    //     returning starter, last5 all 90     0.720     1.000      0.720
+    //     rotation 5/10 with cameos           0.435     0.722      0.760
+    //     nailed, hooked on the hour, 1 cameo 0.835     0.689      0.720
+    //     fringe, 1 start, plays every week   0.035     0.778      0.813
+    //     nailed, no cameos                   1.000     1.000      1.000
+    //     dropped starter, last5 zero         0.175     0.175      0.175
+    //
+    // The first row is the one that was wrong: `share` 1.000 asserts a full
+    // ninety in rounds the model gives him a 28% chance of not starting.
+    const recentMps = recent.minsPerStart != null ? clamp(recent.minsPerStart, 0, 90) : minsPerStart;
+    const subMinutes = Math.max(0, recent.minsPerGame - recent.startShare * recentMps);
+    const share = (pStart * minsPerStart + subMinutes) / 90;
     return { pStart, minsPerStart, share: clamp(share, 0, 1) };
   }
   return mm;

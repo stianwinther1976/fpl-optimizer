@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { cacheControl, cdnCacheControl, cacheSeconds, staleSeconds } from "./[...path]/route";
+import { ALLOWED, cacheControl, cdnCacheControl, cacheSeconds, staleSeconds } from "./[...path]/route";
 
 /*
  * THE CACHE POLICY IS PART OF THE MODEL, NOT JUST PLUMBING.
@@ -145,5 +145,78 @@ describe("cacheControl", () => {
       const m = /(?:^|,\s*)max-age=(\d+)/.exec(cacheControl(p));
       expect({ path: p, maxAge: m?.[1] ?? "absent" }).toEqual({ path: p, maxAge: "absent" });
     }
+  });
+});
+
+describe("the allowlist, which is the security-relevant half of this route", () => {
+  /*
+   * This file had 149 lines about cache headers and NOT ONE about the
+   * allowlist. Every case below was run against the live route before being
+   * written down; what this pins is that they stay refused.
+   */
+  const allowed = (joined: string) => ALLOWED.some((re) => re.test(joined));
+  /** What `GET` does to the raw segments before matching. */
+  const normalise = (path: string[]) => {
+    let joined = path.join("/");
+    if (!joined.endsWith("/")) joined += "/";
+    return joined;
+  };
+
+  it("accepts exactly the nine endpoint shapes the app uses", () => {
+    for (const p of [
+      "bootstrap-static/",
+      "fixtures/",
+      "entry/1/",
+      "entry/1234567/event/38/picks/",
+      "entry/1/history/",
+      "entry/1/transfers/",
+      "element-summary/999/",
+      "event/1/live/",
+      "leagues-classic/314/standings/",
+    ]) {
+      expect(allowed(p), p).toBe(true);
+    }
+  });
+
+  it("refuses everything else, including the ways people try", () => {
+    for (const p of [
+      "../secret/",
+      "entry/1/../../etc/passwd/",
+      "ENTRY/1/",
+      "entry/+1/",
+      "entry/1.0/",
+      "entry/0x1/",
+      "entry/-1/",
+      "entry//",
+      "entry/1/history/extra/",
+      "element-summary/1/history/",
+      "bootstrap-static/x/",
+      "fixtures/?a=1/",
+      "me/",
+      "",
+      "entry/1e5/",
+      // Fullwidth and Arabic-Indic digits are not `\d` under a non-unicode
+      // regex, and must not become one by accident.
+      "entry/１２３/",
+      "entry/١٢٣/",
+    ]) {
+      expect(allowed(normalise(p === "" ? [] : p.split("/").filter(Boolean))), p).toBe(false);
+    }
+  });
+
+  it("bounds the id, so the cache key space is finite", () => {
+    // Every distinct id is a distinct edge key and a distinct upstream fetch.
+    expect(allowed("entry/9999999999/")).toBe(true); // 10 digits
+    expect(allowed("entry/10000000000/")).toBe(false); // 11
+    expect(allowed(`entry/${"9".repeat(4000)}/`)).toBe(false);
+  });
+
+  it("cannot be made to end in a newline, which `$` would match", () => {
+    // JS `$` matches before a trailing \n. Unreachable here because the
+    // handler appends a slash whenever the string does not end in one, so a
+    // joined path can never end in a newline — pinned because it is the kind of
+    // thing a refactor of that one line would silently reintroduce.
+    expect(normalise(["fixtures\n"]).endsWith("/")).toBe(true);
+    expect(allowed(normalise(["fixtures\n"]))).toBe(false);
   });
 });

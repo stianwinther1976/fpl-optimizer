@@ -509,6 +509,61 @@ describe("provisionalBonus across a double gameweek", () => {
     expect(res.byElement.get(2), "second in leg 2's own ladder").toBe(2);
   });
 
+  it("treats an EMPTY bps row as no ladder at all", () => {
+    /*
+     * FPL emits identifiers with both arrays empty — `own_goals`, `red_cards`,
+     * `penalties_saved` and `penalties_missed` all are on the snapshot's own
+     * fixture 1 — so `bps` may arrive that way. A size-0 Map that reads as "we
+     * have a ladder" selected the gameweek-total ranking AND skipped the
+     * abstention, silently re-enabling the exact bug this block removes:
+     * element 2's 65 BPS is banked in leg 1 and he was handed 3 for leg 2.
+     */
+    const empty = (f: Fixture): Fixture => ({
+      ...f,
+      stats: [{ identifier: "bps", h: [], a: [] }],
+    });
+    const res = provisionalBonus(
+      bootstrap,
+      [fx(1, true), empty(fx(2, false))],
+      feed({
+        1: { bps: 45, legs: [{ fixture: 1, minutes: 90 }] },
+        2: { bps: 65, legs: [{ fixture: 1, minutes: 90 }, { fixture: 2, minutes: 60 }] },
+        3: { bps: 26, legs: [{ fixture: 2, minutes: 60 }] },
+      }),
+      10
+    );
+    expect(res.byElement.size).toBe(0);
+  });
+
+  it("keeps a zero-BPS player in the ladder, since FPL omits his row", () => {
+    /*
+     * Measured on the 2026-08-21 snapshot: 31 players appeared in fixture 1 and
+     * 30 have `bps` rows — FPL omits zero-valued entries, so a keeper who
+     * played 90 minutes for 1 point and 0 BPS is simply absent. "No row means
+     * he did not appear" was the stated justification for dropping the minutes
+     * cross-check, and it is false. Zero can take the third bonus point in a
+     * match where only two players score any BPS at all.
+     */
+    const withBps = (f: Fixture, rows: [number, number][]): Fixture => ({
+      ...f,
+      stats: [{ identifier: "bps", h: rows.map(([element, value]) => ({ element, value })), a: [] }],
+    });
+    const res = provisionalBonus(
+      bootstrap,
+      // Only elements 1 and 2 have rows; element 3 played and is on zero.
+      [withBps(fx(1, false), [[1, 30], [2, 20]])],
+      feed({
+        1: { bps: 30, legs: [{ fixture: 1, minutes: 90 }] },
+        2: { bps: 20, legs: [{ fixture: 1, minutes: 90 }] },
+        3: { bps: 0, legs: [{ fixture: 1, minutes: 90 }] },
+      }),
+      10
+    );
+    expect(res.byElement.get(1)).toBe(3);
+    expect(res.byElement.get(2)).toBe(2);
+    expect(res.byElement.get(3), "third place on zero BPS").toBe(1);
+  });
+
   it("still abstains on gameweek totals when the fixture publishes no ladder", () => {
     // The fix must not depend on `stats` being there. FPL may only populate it
     // from the final whistle — that could not be checked from where this was
@@ -750,8 +805,12 @@ describe("fixtureLines reads one match, not the gameweek", () => {
      */
     const lines = fixtureLines(fx(2), dgw);
     expect(lines.has(1)).toBe(false);
+    // Element 2 played BOTH legs, so his gameweek BPS is not this fixture's and
+    // there is no ladder to read it from: null, meaning "no data".
     expect(lines.get(2)).toEqual({ minutes: 60, points: 3, bps: null });
-    expect(lines.get(3)).toEqual({ minutes: 60, points: 5, bps: null });
+    // Element 3 played only this one, so the gameweek total IS this fixture's.
+    // Returning null there threw away a number that was always correct.
+    expect(lines.get(3)).toEqual({ minutes: 60, points: 5, bps: 26 });
   });
 
   it("does not add two legs' minutes together", () => {

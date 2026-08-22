@@ -33,7 +33,7 @@ export default function MatchModal({
    * this match" by two legs of BPS. Same family of defect as the one
    * `provisionalBonus` was rewritten to remove, still live one file over.
    */
-  const statOf = fixtureLines(fixture, live);
+  const statOf = fixtureLines(fixture, live, new Map(elements.map((e) => [e.id, e.team])));
 
   const inMatch = elements.filter(
     (e) => e.team === fixture.team_h || e.team === fixture.team_a

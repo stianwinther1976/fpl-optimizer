@@ -114,58 +114,69 @@ export function provisionalBonus(
      * MATCH, split home and away. That is the exact quantity the ranking below
      * wants, and its absence from the type is the only reason the gameweek
      * total was ever used for it. Read off the real snapshot (2026-08-21, GW1
-     * fixture 1): 30 rows for the 30 players who appeared, −8 to 41, and the
-     * top three are precisely the three the fixture's `bonus` rows pay 3/2/1.
+     * fixture 1): 30 rows running −8 to 41, and the top three are precisely the
+     * three the fixture's `bonus` rows pay 3, 2 and 1.
      *
-     * It also answers PARTICIPATION on its own — a player with no row did not
-     * appear — which matters because `explain` for a fresh second leg is
-     * absent in the window between kickoff and FPL's first stats update, and
-     * that gap is what the `itemised` guard below exists to survive.
+     * IT DOES NOT ANSWER PARTICIPATION, and an earlier version of this block
+     * said it did ("30 rows for the 30 players who appeared"). Thirty-ONE
+     * appeared: FPL omits zero-valued entries from a `stats` row, so Rushworth
+     * (element 110, 90 minutes, 1 point, 0 BPS) has no row at all. Counted
+     * against `element-summaries`, which carries a per-fixture history row per
+     * player. So participation stays with minutes and the ladder is used only
+     * for the ORDER — a man with no row is on 0, not absent, and 0 can win the
+     * third bonus point in a match where only two players score any BPS.
      *
-     * Not assumed to be there. FPL may only populate it from the final whistle
-     * — the sandbox this was written in has no live fixture to check against —
-     * so when the row is missing this falls through to exactly the behaviour it
-     * replaces, gameweek totals and the abstention.
+     * `ladder` IS NULL WHEN THE ROW IS EMPTY, not merely when it is missing.
+     * FPL emits identifiers with both arrays empty — `own_goals`, `red_cards`,
+     * `penalties_saved` and `penalties_missed` all are, on that same fixture —
+     * so `bps` may arrive that way too, and a size-0 Map that reads as "we have
+     * a ladder" while every lookup falls through to the gameweek total is the
+     * exact bug this block exists to remove, silently re-enabled.
+     *
+     * Not assumed to be there at all. FPL may only populate it from the final
+     * whistle — the sandbox this was written in has no live fixture to check
+     * against — so with no usable row this falls through to exactly the
+     * behaviour it replaces, gameweek totals and the abstention.
      */
-    const fixtureBps = f.stats?.find((s) => s.identifier === "bps");
-    const perFixtureBps = fixtureBps
-      ? new Map<number, number>([...fixtureBps.h, ...fixtureBps.a].map((r) => [r.element, r.value]))
-      : null;
+    const bpsRow = f.stats?.find((st) => st.identifier === "bps");
+    const rows = bpsRow ? [...bpsRow.h, ...bpsRow.a] : [];
+    const ladder = rows.length > 0 ? new Map(rows.map((r) => [r.element, r.value])) : null;
 
-    const players =
-      perFixtureBps && perFixtureBps.size > 0
-        ? [...perFixtureBps]
-            .map(([id, bps]) => ({ id, bps }))
-            .sort((a, b) => b.bps - a.bps)
-        : live.elements
-            .filter((e) => {
-              const t = teamOf.get(e.id);
-              if (t !== f.team_h && t !== f.team_a) return false;
-              // Per-fixture minutes when the feed itemises them; the gameweek
-              // total is the fallback for a single-fixture week, where the two
-              // agree.
-              const mins = itemised ? (inThis?.get(e.id)?.minutes ?? 0) : e.stats.minutes;
-              return (mins ?? 0) > 0;
-            })
-            .map((e) => ({ id: e.id, bps: e.stats.bps }))
-            .sort((a, b) => b.bps - a.bps);
+    const players = live.elements
+      .filter((e) => {
+        const t = teamOf.get(e.id);
+        if (t !== f.team_h && t !== f.team_a) return false;
+        // Per-fixture minutes when the feed itemises them; the gameweek total
+        // is the fallback for a single-fixture week, where the two agree. A
+        // player with a ladder entry played by definition, which covers the
+        // window before `explain` carries a fresh second leg.
+        if (ladder?.has(e.id)) return true;
+        const mins = itemised ? (inThis?.get(e.id)?.minutes ?? 0) : e.stats.minutes;
+        return (mins ?? 0) > 0;
+      })
+      .map((e) => ({ id: e.id, bps: ladder ? (ladder.get(e.id) ?? 0) : e.stats.bps }))
+      .sort((a, b) => b.bps - a.bps);
     if (players.length === 0) continue;
 
     /*
      * ABSTAIN WHEN THE RANKING CANNOT BE TRUSTED — WHICH IS NOW ONLY WHEN THE
-     * FIXTURE DID NOT PUBLISH ITS OWN BPS.
+     * FIXTURE PUBLISHED NO USABLE BPS LADDER.
      *
-     * Without the fixture's row the only BPS available is the gameweek total,
-     * so if anyone on this pitch has also played another fixture this gameweek
-     * his figure includes points banked elsewhere and the 3/2/1 order here is
-     * not a reading of this match. Projecting a confident wrong ladder is worse
-     * than projecting nothing: the reader sees provisional bonus on the wrong
-     * three players and the numbers do not settle until FPL confirms.
+     * Without it the only BPS available is the gameweek total, so if anyone on
+     * this pitch has also played another fixture this gameweek his figure
+     * includes points banked elsewhere and the 3/2/1 order here is not a
+     * reading of this match. Projecting a confident wrong ladder is worse than
+     * projecting nothing: the reader sees provisional bonus on the wrong three
+     * players and the numbers do not settle until FPL confirms.
+     *
+     * `!ladder` is the same predicate the ranking above switches on, and that
+     * matters: gating the two on different tests is how an empty row came to
+     * select the gameweek-total ranking AND skip the abstention at once.
      *
      * Single gameweeks — every gameweek most seasons — never reached this
      * either way, because there the gameweek total IS this fixture's total.
      */
-    if (!perFixtureBps && players.some((p) => (legsPlayed.get(p.id) ?? 0) > 1)) continue;
+    if (!ladder && players.some((p) => (legsPlayed.get(p.id) ?? 0) > 1)) continue;
 
     // Group by bps value, award 3/2/1 with tie-sharing.
     let bonus = 3;
@@ -214,13 +225,25 @@ export interface FixtureLine {
  * the feed itemises nothing at all — a stub, or a gameweek with a single
  * fixture — the gameweek total IS this fixture's total and is used as-is.
  */
-export function fixtureLines(fixture: Fixture, live: EventLive | null): Map<number, FixtureLine> {
+export function fixtureLines(
+  fixture: Fixture,
+  live: EventLive | null,
+  /**
+   * Which club each element plays for. Optional, and only used to keep players
+   * from other clubs out of the un-itemised fallback — `provisionalBonus` has
+   * always filtered on it there and this did not, so a stub feed could put a
+   * third club's player in a two-club match. Not reachable from the shipped
+   * feeds, which itemise; the asymmetry between two functions answering the
+   * same question is the reason to close it.
+   */
+  teamOf?: Map<number, number>
+): Map<number, FixtureLine> {
   const out = new Map<number, FixtureLine>();
   if (!live) return out;
   const bpsRow = fixture.stats?.find((st) => st.identifier === "bps");
-  const bpsOf = bpsRow
-    ? new Map<number, number>([...bpsRow.h, ...bpsRow.a].map((r) => [r.element, r.value]))
-    : null;
+  const rows = bpsRow ? [...bpsRow.h, ...bpsRow.a] : [];
+  // Empty is not "published" — see the same distinction in `provisionalBonus`.
+  const ladder = rows.length > 0 ? new Map(rows.map((r) => [r.element, r.value])) : null;
   const itemised = live.elements.some((e) => (e.explain ?? []).length > 0);
   for (const e of live.elements) {
     const legs = (e.explain ?? []).filter((ex) => ex.fixture === fixture.id);
@@ -235,14 +258,31 @@ export function fixtureLines(fixture: Fixture, live: EventLive | null): Map<numb
         }
       }
     } else {
+      const t = teamOf?.get(e.id);
+      if (teamOf && t !== fixture.team_h && t !== fixture.team_a) continue;
       minutes = e.stats.minutes;
       points = e.stats.total_points;
     }
     if (minutes <= 0 && points === 0) continue;
+    /*
+     * BPS, IN ORDER OF WHAT CAN BE PROVEN.
+     *
+     * The ladder is per-fixture and is the answer whenever it exists — and a
+     * player missing from it is on ZERO, not unknown, because FPL omits
+     * zero-valued entries from a `stats` row (measured: 31 players appeared in
+     * the snapshot's fixture 1 and 30 have rows; the missing one is a keeper on
+     * 0 BPS).
+     *
+     * With no ladder, the gameweek total is still exactly right for anyone with
+     * ONE leg this gameweek — which is every player in every ordinary gameweek.
+     * Returning null there threw away a correct number and emptied the BPS
+     * column of the match sheet in weeks where it had always been right.
+     */
+    const oneLeg = (e.explain ?? []).length <= 1;
     out.set(e.id, {
       minutes,
       points,
-      bps: bpsOf ? (bpsOf.get(e.id) ?? null) : itemised ? null : e.stats.bps,
+      bps: ladder ? (ladder.get(e.id) ?? 0) : !itemised || oneLeg ? e.stats.bps : null,
     });
   }
   return out;

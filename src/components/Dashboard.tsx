@@ -450,36 +450,11 @@ export default function Dashboard({
     return m;
   }, [liveData]);
 
-  /*
-   * Effective captain: Triple Captain aware; once the GW is final, the vice
-   * takes over if the captain played 0 minutes (official rule).
-   *
-   * `currentPlayers`, not `players` — this is a statement about THIS
-   * gameweek's armband, and `players` carries next gameweek's transfers (and,
-   * in a Free Hit week, an entirely different fifteen).
-   */
-  const capMult = data?.squad?.activeChip === "3xc" ? 3 : 2;
-  const effCaptainId = useMemo(() => {
-    const squad = data?.squad;
-    if (!squad) return null;
-    const cap = squad.currentPlayers.find((p) => p.isCaptain);
-    const vice = squad.currentPlayers.find((p) => p.isViceCaptain);
-    if (
-      gwFinished &&
-      cap &&
-      (liveMinutesOf.get(cap.element.id) ?? 0) === 0 &&
-      vice &&
-      (liveMinutesOf.get(vice.element.id) ?? 0) > 0
-    ) {
-      return vice.element.id;
-    }
-    return cap?.element.id ?? null;
-  }, [data, gwFinished, liveMinutesOf]);
 
   // Effective XI after projected auto-subs. FPL swaps in bench players once a
   // starter's fixtures finish with 0 minutes, so the "final" team total must
   // count those subs (matches the official score before FPL processes it).
-  const effectiveXiIds = useMemo(() => {
+  const autoSubs = useMemo(() => {
     if (!liveData || !data?.picks || currentEvent == null) return null;
     /*
      * THIS SET DESCRIBES `data.picks`, WHICH IS NOT ALWAYS `squad.players`.
@@ -508,15 +483,59 @@ export default function Dashboard({
     if (data.picks.active_chip === "bboost") return null;
     if (data.picks.active_chip === "freehit") return null;
     const elementById = new Map(data.bootstrap.elements.map((e) => [e.id, e]));
-    const { effectiveXi } = projectAutoSubs(
+    const { effectiveXi, out } = projectAutoSubs(
       data.picks.picks,
       elementById,
       liveData,
       data.fixtures,
       currentEvent
     );
-    return new Set(effectiveXi);
+    return { xi: new Set(effectiveXi), out: new Set(out) };
   }, [liveData, data, currentEvent]);
+  const effectiveXiIds = autoSubs?.xi ?? null;
+
+  /*
+   * Effective captain: Triple Captain aware; once the GW is final, the vice
+   * takes over if the captain played 0 minutes (official rule).
+   *
+   * `currentPlayers`, not `players` — this is a statement about THIS
+   * gameweek's armband, and `players` carries next gameweek's transfers (and,
+   * in a Free Hit week, an entirely different fifteen).
+   */
+  const capMult = data?.squad?.activeChip === "3xc" ? 3 : 2;
+  const effCaptainId = useMemo(() => {
+    const squad = data?.squad;
+    if (!squad) return null;
+    const cap = squad.currentPlayers.find((p) => p.isCaptain);
+    const vice = squad.currentPlayers.find((p) => p.isViceCaptain);
+    /*
+     * THE SAME TEST THE LIVE TAB USES, WHICH THIS ONE WAS NOT.
+     *
+     * `gwFinished` waits for `finished` on every fixture — bonus confirmed —
+     * while `LiveTab` asks `gwDone || the auto-sub projection dropped him`, and
+     * that projection was moved to full time (`finished_provisional`) earlier
+     * in this session. So for the hours FPL takes to settle a Saturday the Live
+     * tab swapped the armband and the Team pitch did not: probed at six points
+     * apart on identical data, 66 against 72.
+     *
+     * The Dashboard was the wrong one. A takeover turns on MINUTES, which are
+     * settled at the whistle — the same argument that moved `doneOnZero`.
+     * `autoSubs.out` is that judgement already made, so using it also means the
+     * two tabs cannot drift apart again.
+     */
+    const capBlanked =
+      cap != null && (gwFinished || (autoSubs?.out.has(cap.element.id) ?? false));
+    if (
+      capBlanked &&
+      cap &&
+      (liveMinutesOf.get(cap.element.id) ?? 0) === 0 &&
+      vice &&
+      (liveMinutesOf.get(vice.element.id) ?? 0) > 0
+    ) {
+      return vice.element.id;
+    }
+    return cap?.element.id ?? null;
+  }, [data, gwFinished, liveMinutesOf, autoSubs]);
 
   /*
    * The gross the eleven on the pitch have scored, and the hit that separates

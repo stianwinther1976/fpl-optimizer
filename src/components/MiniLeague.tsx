@@ -428,8 +428,21 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
            */
           const benchBoosted = data.squad.activeChip === "bboost";
           const inMyXi = (p: { pickPosition: number }) => p.pickPosition <= 11 || benchBoosted;
+          /*
+           * `currentPlayers`, BECAUSE THIS COMPARES AGAINST THIS GAMEWEEK.
+           *
+           * `eoCount` above is built from `api.picks(rival, currentEvent)` —
+           * the teams the rivals are actually fielding. `players` is the squad
+           * to optimize from: next gameweek's transfers applied, and in a Free
+           * Hit week the fifteen the Free Hit replaced. So a transfer made
+           * early listed the man still scoring for the reader as a Threat and
+           * counted the incoming player as his, and a Free Hit week compared
+           * the whole panel against a team he is not fielding. The chip flag
+           * two lines up was already this gameweek's, so the file was mixing
+           * one gameweek's chip with another's squad.
+           */
           const myIds = new Set(
-            data.squad.players.filter(inMyXi).map((p) => p.element.id)
+            data.squad.currentPlayers.filter(inMyXi).map((p) => p.element.id)
           );
           /*
            * OWNING HIM AND FIELDING HIM ARE DIFFERENT FACTS, AND THERE ARE
@@ -448,7 +461,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
            * for one already in your fifteen it is to start him. Saying which is
            * the difference between advice and a list.
            */
-          const mySquadIds = new Set(data.squad.players.map((p) => p.element.id));
+          const mySquadIds = new Set(data.squad.currentPlayers.map((p) => p.element.id));
           const pct = (v: number) => `${Math.round(v * 100)}%`;
           const ranked = [...ownership.eo.entries()].sort((a, b) => b[1] - a[1]);
           const threats = ranked
@@ -468,7 +481,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
            * you are protected by holding, and the same number decides both.
            */
           const shields = ranked.filter(([id, v]) => myIds.has(id) && v >= 0.4).slice(0, 5);
-          const diffs = data.squad.players
+          const diffs = data.squad.currentPlayers
             .filter((p) => inMyXi(p) && (ownership.eo.get(p.element.id) ?? 0) <= 0.2)
             .slice(0, 5);
           const Item = ({ id, v, note }: { id: number; v: number; note?: string }) => (

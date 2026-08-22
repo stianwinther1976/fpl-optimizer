@@ -1117,7 +1117,7 @@ describe("the mini-league ownership panel", () => {
      */
     const src = read("MiniLeague.tsx");
     expect(src).toContain(
-      "const mySquadIds = new Set(data.squad.players.map((p) => p.element.id));"
+      "const mySquadIds = new Set(data.squad.currentPlayers.map((p) => p.element.id));"
     );
     expect(src).toMatch(/benched: mySquadIds\.has\(id\)/);
     expect(src).toContain('note={t.benched ? "(on your bench)" : undefined}');
@@ -1226,7 +1226,7 @@ describe("the match sheet reads one match", () => {
      * still live one file over.
      */
     const src = read("MatchModal.tsx");
-    expect(src).toContain("fixtureLines(fixture, live)");
+    expect(src).toMatch(/fixtureLines\(fixture, live,/);
     expect(src).not.toMatch(/live\?\.elements\.map\(\(e\) => \[e\.id, e\.stats\]\)/);
     expect(src).not.toContain("total_points");
   });
@@ -1314,5 +1314,63 @@ describe("tap targets on a phone", () => {
     // It renders as a bare "✕" and was h-9 w-9.
     const src = fs.readFileSync(path.resolve(__dirname, "../../app/page.tsx"), "utf8");
     expect(src).toContain("flex h-11 w-11 items-center justify-center rounded-full");
+  });
+});
+
+describe("this gameweek's squad versus the squad to optimize from", () => {
+  /*
+   * `SquadState.players` carries next gameweek's transfers and, in a Free Hit
+   * week, is the fifteen the Free Hit replaced. `currentPlayers` is what is on
+   * the pitch. Anything rendered against THIS gameweek's live scores — or
+   * compared against rivals' teams for this gameweek — wants the second.
+   *
+   * A rule over the directory, because the first pass switched the Dashboard
+   * and the Live tab and missed the mini-league, which compares my side against
+   * `api.picks(rival, currentEvent)`.
+   */
+  it("uses currentPlayers everywhere a live score or a rival comparison is drawn", () => {
+    for (const f of ["Dashboard.tsx", "LiveTab.tsx", "MiniLeague.tsx"]) {
+      const src = read(f);
+      for (const m of src.matchAll(/(?:data\.)?squad!?\.players\b/g)) {
+        const at = m.index ?? 0;
+        const line = src.slice(src.lastIndexOf("\n", at) + 1, src.indexOf("\n", at));
+        // Team value is the one legitimate use: it pairs with `squad.bank`,
+        // which `buildSquadState` adjusts by the same pending transfers.
+        const isTeamValue = line.includes("sellPrice");
+        // A mention inside a comment is documentation, not a call site.
+        const isComment = /^\s*(\*|\/\/|\/\*)/.test(line);
+        expect(isTeamValue || isComment, `${f}: ${line.trim()}`).toBe(true);
+      }
+    }
+  });
+
+  it("keeps the optimizer on `players`, which is what it is for", () => {
+    // The mirror rule: the panel that plans NEXT gameweek must not be moved to
+    // `currentPlayers` by someone applying the rule above too broadly.
+    const src = read("OptimizePanel.tsx");
+    expect((src.match(/owned: squad!\.players/g) ?? []).length).toBe(3);
+    expect(src).not.toContain("owned: squad!.currentPlayers");
+  });
+});
+
+describe("the vice-captain takes over on the same signal in both tabs", () => {
+  it("asks the auto-sub projection, not just whether bonus is confirmed", () => {
+    /*
+     * `LiveTab` uses `gwDone || the projection dropped him`; the Dashboard used
+     * `gwFinished` alone, which waits for `finished` — bonus confirmed — on
+     * every fixture. Since the projection was moved to full time, the two
+     * disagreed for the hours FPL takes to settle a Saturday: probed at six
+     * points apart on identical data, 66 against 72. A takeover turns on
+     * MINUTES, which are settled at the whistle.
+     */
+    const dash = read("Dashboard.tsx");
+    expect(dash).toContain("autoSubs?.out.has(cap.element.id)");
+    const live = read("LiveTab.tsx");
+    expect(live).toContain("gwDone || blankedStarters.has(cap.element.id)");
+    // And both read the armband off the fifteen actually fielded.
+    for (const src of [dash, live]) {
+      expect(src).toMatch(/currentPlayers\.find\(\(p\) => p\.isCaptain\)/);
+      expect(src).toMatch(/currentPlayers\.find\(\(p\) => p\.isViceCaptain\)/);
+    }
   });
 });

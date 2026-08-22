@@ -5,17 +5,31 @@ import { NextRequest, NextResponse } from "next/server";
 
 const FPL_BASE = process.env.FPL_API_BASE ?? "https://fantasy.premierleague.com/api";
 
+/** How long to wait on FPL before giving up. See the note at the fetch below. */
+const UPSTREAM_TIMEOUT_MS = 10_000;
+
 // Only allow known endpoint shapes — never a blind open proxy.
-const ALLOWED: RegExp[] = [
+/*
+ * `\d{1,10}` RATHER THAN `\d+`, so the key space is finite.
+ *
+ * Every distinct id is a distinct cache key at the edge and a distinct upstream
+ * fetch, and unbounded digits make that space infinite: 200 concurrent
+ * `element-summary/{n}` requests produced 200 upstream fetches with nothing
+ * absorbing any of them. Ten digits is past every real FPL id (entries are in
+ * the tens of millions, elements in the hundreds) and it costs nothing.
+ */
+const ID = "\\d{1,10}";
+/** Exported so the allowlist can be asserted directly — see `route.test.ts`. */
+export const ALLOWED: RegExp[] = [
   /^bootstrap-static\/$/,
   /^fixtures\/$/,
-  /^entry\/\d+\/$/,
-  /^entry\/\d+\/event\/\d+\/picks\/$/,
-  /^entry\/\d+\/history\/$/,
-  /^entry\/\d+\/transfers\/$/,
-  /^element-summary\/\d+\/$/,
-  /^event\/\d+\/live\/$/,
-  /^leagues-classic\/\d+\/standings\/$/,
+  new RegExp(`^entry/${ID}/$`),
+  new RegExp(`^entry/${ID}/event/${ID}/picks/$`),
+  new RegExp(`^entry/${ID}/history/$`),
+  new RegExp(`^entry/${ID}/transfers/$`),
+  new RegExp(`^element-summary/${ID}/$`),
+  new RegExp(`^event/${ID}/live/$`),
+  new RegExp(`^leagues-classic/${ID}/standings/$`),
 ];
 
 // Cache lifetime (seconds) per endpoint type.
@@ -144,7 +158,7 @@ export async function GET(
   // Only league standings take a (validated) parameter; anything else would
   // let clients mint unlimited cache entries and bypass the TTL.
   let search = "";
-  if (/^leagues-classic\/\d+\/standings\/$/.test(joined)) {
+  if (new RegExp(`^leagues-classic/${ID}/standings/$`).test(joined)) {
     const page = req.nextUrl.searchParams.get("page_standings") ?? "1";
     search = `?page_standings=${/^\d{1,4}$/.test(page) ? page : "1"}`;
   }
@@ -157,6 +171,27 @@ export async function GET(
         "User-Agent": "fpl-optimizer (personal, non-commercial)",
         Accept: "application/json",
       },
+      /*
+       * A HUNG UPSTREAM MUST NOT HOLD THE FUNCTION OPEN. There was no signal at
+       * all: against a stub that never answers, this route never answered
+       * either — measured at 45 seconds and still waiting — and it kept the
+       * upstream socket open after the client had given up at 3. On a serverless
+       * host that is the whole function duration burned per request, on every
+       * request, for as long as FPL is unwell. Ten seconds is generous against
+       * an API that normally answers in tens of milliseconds, and the `catch`
+       * below already maps an abort to "Could not reach the FPL API".
+       */
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      /*
+       * NEVER FOLLOW A REDIRECT. The upstream is fixed at module load and every
+       * allowed path is literals and digits, so a visitor cannot point this
+       * anywhere — but if FPL itself 302s to a maintenance page or a captive
+       * portal, the default `follow` serves that body under OUR origin and
+       * labels it publicly cacheable at the edge. Verified against a stub: the
+       * off-host body came back 200 with `cdn-cache-control: public, s-maxage`.
+       * A proxy with one known upstream has no business following anything.
+       */
+      redirect: "error",
       next: { revalidate: ttl },
     });
 

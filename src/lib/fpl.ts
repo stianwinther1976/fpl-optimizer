@@ -71,7 +71,27 @@ const fetchCache = new Map<string, { promise: Promise<unknown>; at: number }>();
  */
 export const isLiveFeed = (path: string) => path.startsWith("fixtures") || /^event\/\d+\/live\//.test(path);
 
-const feedUrl = (path: string) => `${demoMode ? "/api/demo" : "/api/fpl"}/${path}`;
+/*
+ * NO TRAILING SLASH ON THE URL WE REQUEST, though every `path` here carries one.
+ *
+ * FPL's own endpoints all end in `/` and this file spells them that way, which
+ * is right — it is what the proxy forwards. But Next's default
+ * `trailingSlash: false` answers OUR route with a 308 to the slash-less form, so
+ * every single API call was paying a redirect. Measured on the dev server:
+ *
+ *     GET /api/fpl/fixtures/   308 -> /api/fpl/fixtures
+ *     GET /api/fpl/fixtures    200
+ *
+ * Seven of the fifteen requests on one dashboard load, and the browser does not
+ * cache a 308 here, so it is paid again on every load. The launch draft is
+ * around 420 `element-summary/{id}/` fetches — 420 extra round trips against
+ * the very API whose rate limit `staleSeconds` is written around.
+ *
+ * The handler appends a `/` before matching its allowlist, so stripping it here
+ * changes nothing about which paths are allowed or what is forwarded upstream.
+ */
+const feedUrl = (path: string) =>
+  `${demoMode ? "/api/demo" : "/api/fpl"}/${path.replace(/\/+$/, "")}`;
 
 /**
  * One round trip, no retention. Used directly by the element-summary layer

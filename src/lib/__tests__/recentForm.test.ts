@@ -242,9 +242,17 @@ describe("the substitute-minutes floor is not switched off by one start", () => 
     const once = minutesOf([regularSub(1, 1)], lastFive(1));
     const a = never.mm.get(1)!;
     const b = once.mm.get(1)!;
-    // Both are floored at the recent per-round minutes, 70/90.
+    /*
+     * Both carry the recent per-round minutes. The man who has never started
+     * gets exactly `minsPerGame / 90` — `pStart` is 0, so the start term
+     * vanishes and only the substitute term is left. The man with one start
+     * gets a shade more, because he has a small chance of starting on top of
+     * the same cameo minutes, which is the point: one start is a reason to
+     * project him slightly HIGHER, not 44 times lower.
+     */
     expect(a.share).toBeCloseTo(70 / 90, 6);
-    expect(b.share).toBeCloseTo(70 / 90, 6);
+    expect(b.share).toBeGreaterThan(70 / 90);
+    expect(b.share).toBeLessThan(70 / 90 + 0.05);
     /*
      * And the projections track rather than differing by a factor. They are not
      * identical — one start moves other terms too — but the gap is a few per
@@ -256,10 +264,30 @@ describe("the substitute-minutes floor is not switched off by one start", () => 
     expect(Math.abs(a2 - b2) / a2).toBeLessThan(0.1);
   });
 
-  it("never lowers a player who does start", () => {
-    // A floor can only raise. A regular starter's own share must survive it.
-    const starter = el({ id: 1, team: 1, element_type: 3, starts: 10, minutes: 890 });
-    const withForm = minutesOf([starter], new Map([[1, { startShare: 1, minsPerGame: 89, minsPerStart: 89 }]]));
-    expect(withForm.mm.get(1)!.share).toBeGreaterThan(0.95);
+  it("does not assert more of a starter than his own start probability", () => {
+    /*
+     * THE OLD VERSION OF THIS TEST COULD NOT FAIL ON THE THING AT ISSUE. It
+     * asserted `share > 0.95` for a player whose floor was 89/90 = 0.989, so
+     * the floor itself satisfied it — it pinned "a floor does not lower", which
+     * is trivially true of a `Math.max`, and said nothing about whether the
+     * floor raises correctly.
+     *
+     * The case that matters is a man whose RECENT five say ninety minutes every
+     * round while his SEASON says he starts two games in ten. Flooring on the
+     * recent figure gave `share` 1.000 against a blended `pStart` of 0.720 —
+     * asserting a full match in rounds the model says he has a 28% chance of
+     * not starting.
+     */
+    const returning = el({ id: 1, team: 1, element_type: 3, starts: 2, minutes: 180 });
+    const rf = new Map([[1, { startShare: 1, minsPerGame: 90, minsPerStart: 90 }]]);
+    const m = minutesOf([returning], rf).mm.get(1)!;
+    expect(m.pStart).toBeCloseTo(0.72, 2);
+    expect(m.share).toBeCloseTo(m.pStart, 6); // no cameo minutes to add
+    expect(m.share).toBeLessThan(1);
+
+    // And an ever-present with no cameos still comes out at a full ninety.
+    const nailed = el({ id: 1, team: 1, element_type: 3, starts: 10, minutes: 900 });
+    const n = minutesOf([nailed], new Map([[1, { startShare: 1, minsPerGame: 90, minsPerStart: 90 }]]));
+    expect(n.mm.get(1)!.share).toBeCloseTo(1, 6);
   });
 });

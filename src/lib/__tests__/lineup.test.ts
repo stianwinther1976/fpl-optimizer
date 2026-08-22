@@ -116,6 +116,52 @@ describe("an override moves the projection and is labelled", () => {
     expect(started).toBeGreaterThan(benched);
   });
 
+  it("never RAISES a player's projection for being told he is benched", () => {
+    /*
+     * `pStartFor("benched")` is the range FLOOR, 0.08. Taken neat it is not a
+     * ceiling on a benched man, it is a floor under him — so anyone the model
+     * already rated below 0.08 was PROMOTED by the reader saying he is out of
+     * the eleven. Measured on the 2026-08-19 snapshot, one "benched" call per
+     * player: 78 of 595 came out higher on the next gameweek, and the
+     * population is exactly the one a reader is most likely to mark — backup
+     * keepers. Arrizabalaga went 0.418 to 0.641, off a model `pStart` of
+     * 0.0021.
+     *
+     * The test above ("benched < base, started > benched") holds under both
+     * rules, which is why it could not catch this. This one asserts the
+     * asymmetry the file's header actually states.
+     */
+    const deep = bootstrap.elements.filter((e) => e.element_type === 1);
+    expect(deep.length).toBeGreaterThan(1);
+    for (const e of bootstrap.elements) {
+      const base = run(new Map()).get(e.id)!;
+      const benched = run(new Map([[e.id, "benched"]])).get(e.id)!;
+      expect(benched.next, `${e.web_name} next`).toBeLessThanOrEqual(base.next + 1e-9);
+      expect(benched.total, `${e.web_name} total`).toBeLessThanOrEqual(base.total + 1e-9);
+    }
+  });
+
+  it("applies each direction one-sidedly, at the level of the minutes model", () => {
+    // The unit-level statement of the same rule, over the whole grid: "starts"
+    // may only raise, "benched" may only lower, and neither touches how long a
+    // start lasts.
+    for (const pStart of [0, 0.001, 0.02, 0.08, 0.3, 0.75, 0.97, 1]) {
+      for (const mps of [0, 30, 60, 75, 90]) {
+        for (const share of [0, 0.01, 0.2, 0.6, 1]) {
+          const mm = { pStart, minsPerStart: mps, share };
+          const up = applyStartCall(mm, "starts");
+          const down = applyStartCall(mm, "benched");
+          expect(up.pStart).toBeGreaterThanOrEqual(pStart);
+          expect(up.share).toBeGreaterThanOrEqual(share);
+          expect(down.pStart).toBeLessThanOrEqual(pStart);
+          expect(down.share).toBeLessThanOrEqual(share);
+          expect(up.minsPerStart).toBe(mps);
+          expect(down.minsPerStart).toBe(mps);
+        }
+      }
+    }
+  });
+
   it("never lowers a nailed player's pStart for being told he starts", () => {
     /*
      * `pStartFor("starts")` is the PRE-SEASON ceiling, 0.97. In season the model

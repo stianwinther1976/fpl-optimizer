@@ -102,13 +102,39 @@ export function applyStartCall(mm: MinutesLike, call: StartCall): MinutesLike {
    * the demoted number as the reader's own decision. `share` was already
    * guarded this way; `pStart` was not, and it feeds `p60` and `pPlay` directly.
    */
+  /*
+   * AND "BENCHED" IS ONE-SIDED THE OTHER WAY, WHICH IT WAS NOT.
+   *
+   * `pStartFor("benched")` is the range FLOOR, 0.08. Taken neat it is not a
+   * ceiling on a benched player, it is a floor under him — so anyone the model
+   * already rates below 0.08 was PROMOTED by being told he is not in the
+   * eleven. Measured on the 2026-08-19 snapshot, one "benched" call per player:
+   * 78 of 595 came out higher on the next gameweek, 81 higher over three, and
+   * the population is exactly the one a reader is most likely to mark — backup
+   * keepers. Arrizabalaga went 0.418 to 0.641 for being benched, off a model
+   * `pStart` of 0.0021.
+   *
+   * That is the mirror image of the `pStart` defect above, and it breaks the
+   * asymmetry this file's header states: "benched" LETS a share fall, it does
+   * not assert a level. So each direction now takes the side it is entitled to
+   * — `max` for "starts", `min` for "benched" — and neither can move a player
+   * against the reader's own stated meaning.
+   *
+   * The existing test only asserted `started > benched`, which is true under
+   * both rules; that is the CLAUDE.md failure mode where the test and the code
+   * share a belief.
+   */
   const asserted = pStartFor(call);
-  const p = call === "starts" ? Math.max(asserted, mm.pStart) : asserted;
+  const p = call === "starts" ? Math.max(asserted, mm.pStart) : Math.min(asserted, mm.pStart);
   const derived = (p * mm.minsPerStart) / 90;
   return {
     pStart: p,
     minsPerStart: mm.minsPerStart,
-    share: clamp(call === "starts" ? Math.max(derived, mm.share) : derived, 0, 1),
+    share: clamp(
+      call === "starts" ? Math.max(derived, mm.share) : Math.min(derived, mm.share),
+      0,
+      1
+    ),
   };
 }
 
