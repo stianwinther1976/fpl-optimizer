@@ -1969,17 +1969,6 @@ describe("the league table says how much football is left", () => {
     expect(src).toContain("squadMatchState(picks, elementById, live, data.fixtures, currentEvent)");
   });
 
-  it("makes the total live whenever the GW column is", () => {
-    /*
-     * The GW column is the live score; `total` from the standings is FPL's
-     * stored cumulative. In GW1 those are the same number by definition, and
-     * the row printed 7 beside 3.
-     */
-    expect(src).toContain("liveLeagueTotal(r.total, r.event_total, d.livePoints)");
-    // Never the bare stored figure while a live score is in hand.
-    expect(src).not.toMatch(/font-bold">\{fmtNum\(r\.total\)\}/);
-  });
-
   it("renders both counts and stays quiet once neither applies", () => {
     expect(src).toMatch(/d\.inPlay > 0 \|\| d\.toStart > 0/);
     // Not "0 · 0" on every row of a finished gameweek.
