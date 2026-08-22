@@ -525,6 +525,22 @@ export default function OptimizePanel({
        * not acceptable; this call site was simply not obeying it.
        */
       const past = await ensurePastSeason();
+      /*
+       * AND RECENT FORM, FOR EXACTLY THE SAME REASON — which the note above
+       * fixed for last season's record and then left half-done.
+       *
+       * `loadRecentForm` is awaited by `run()` and `runPlan()` and by nothing
+       * else, so a chip tapped before Optimize scored with `recentForm`
+       * undefined while the advisor two inches away scored with it. The two
+       * disagreed on screen: measured on the demo, the Wildcard sheet said
+       * "+2.3 pts over 5 gameweeks" where the advisor said +0.0, and Bench
+       * Boost 13.6 against 13.4. The badges are live from first paint, so
+       * tapping one first is the ordinary path, not a corner.
+       *
+       * `loadRecentForm` memoises, so this is free once either button has been
+       * pressed, and `ensurePastSeason` above is already inside it.
+       */
+      const recent = await loadRecentForm();
       await new Promise((r) => setTimeout(r, 20));
       const scen = chipScenario(
         {
@@ -536,7 +552,7 @@ export default function OptimizePanel({
           nextEvent: squad!.nextEvent!,
           horizon,
           precomputedXp: result?.xp,
-          recentForm: recentForm ?? undefined,
+          recentForm: recent,
           pastSeason: past,
         },
         chip

@@ -149,9 +149,20 @@ export default function PointsBreakdown({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-base font-semibold">Points breakdown</h3>
+          {/*
+            SAY WHICH GAMEWEEKS, BECAUSE IT IS NOT ALL OF THEM. This reads off
+            gameweeks where `finished` is true — bonus confirmed, per the rule in
+            CLAUDE.md — so an in-flight gameweek is deliberately excluded. That
+            is right, and "Every point you've scored" said otherwise: the season
+            total read 918 under a header showing 966, with the chart directly
+            above it plotting the gameweek that makes up the difference.
+          */}
           <p className="text-xs text-muted">
-            Every point you&apos;ve scored, split by player and scoring rule. Captain,
-            Triple Captain, Bench Boost and auto-subs are all applied.
+            {bd.gws.length > 0
+              ? `Every point you've scored in GW${bd.gws[0]}–${bd.gws[bd.gws.length - 1]}, split by player and scoring rule.`
+              : "Split by player and scoring rule."}{" "}
+            Captain, Triple Captain, Bench Boost and auto-subs are all applied. A
+            gameweek joins this once its bonus is confirmed.
           </p>
         </div>
         <select
@@ -162,7 +173,11 @@ export default function PointsBreakdown({
           }
           className="rounded-lg border border-border-c bg-panel-2 px-3 py-2 text-sm"
         >
-          <option value="all">Season total</option>
+          <option value="all">
+            {bd.gws.length > 0
+              ? `Total, GW${bd.gws[0]}–${bd.gws[bd.gws.length - 1]}`
+              : "Season total"}
+          </option>
           {[...bd.gws].reverse().map((g) => (
             <option key={g} value={g}>
               Gameweek {g}
@@ -215,7 +230,12 @@ export default function PointsBreakdown({
       </div>
 
       {/* Main table */}
-      <div className="card overflow-x-auto p-0">
+      <div
+        className="card overflow-x-auto p-0"
+        tabIndex={0}
+        role="region"
+        aria-label="Points breakdown, scrollable"
+      >
         <table className="w-full min-w-[640px] text-sm">
           <thead className="border-b border-border-c text-xs uppercase text-muted">
             <tr>

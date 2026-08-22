@@ -60,7 +60,12 @@ function ArchivedDetail({ a }: { a: ArchivedSeason }) {
         </span>
       </div>
 
-      <div className="overflow-x-auto">
+      <div
+        className="overflow-x-auto"
+        tabIndex={0}
+        role="region"
+        aria-label="Past seasons, scrollable"
+      >
         <table className="w-full min-w-[560px] text-sm">
           <thead className="border-b border-border-c text-xs uppercase text-muted">
             <tr>

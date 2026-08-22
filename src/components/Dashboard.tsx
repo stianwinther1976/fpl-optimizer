@@ -11,6 +11,8 @@ import { projectAutoSubs, LIVE_REFRESH_MS } from "@/lib/live";
 import {
   benchBadgeFor,
   benchSortKey,
+  benchSummary,
+  liveCornerNote,
   netEventPoints,
   netGwDelta,
   netGwPoints,
@@ -516,6 +518,32 @@ export default function Dashboard({
     return new Set(effectiveXi);
   }, [liveData, data, currentEvent]);
 
+  /*
+   * The gross the eleven on the pitch have scored, and the hit that separates
+   * it from the corner total. Lifted out of the JSX so both can be printed:
+   * the corner is net and the cards are not, and nothing said so.
+   */
+  const liveHit = data?.picks?.entry_history.event_transfers_cost ?? 0;
+  const liveGross = useMemo(() => {
+    const squad = data?.squad;
+    if (!squad || !liveData) return 0;
+    return squad.currentPlayers
+      .filter((p) =>
+        squad.activeChip === "bboost"
+          ? true
+          : effectiveXiIds
+            ? effectiveXiIds.has(p.element.id)
+            : p.pickPosition <= 11
+      )
+      .reduce(
+        (s, p) =>
+          s + (livePointsOf.get(p.element.id) ?? 0) * (p.element.id === effCaptainId ? capMult : 1),
+        0
+      );
+  }, [data, liveData, effectiveXiIds, livePointsOf, effCaptainId, capMult]);
+  const liveHitNote = liveCornerNote(liveGross, liveHit);
+
+
   if (error) {
     return (
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-16">
@@ -799,6 +827,38 @@ export default function Dashboard({
             id={`tab-${key}`}
             aria-selected={tab === key}
             aria-controls={`panel-${key}`}
+            /*
+             * ROVING TABINDEX AND ARROW KEYS, because `role="tablist"` is a
+             * PROMISE about the keyboard and the strip was making it without
+             * keeping it: every tab had `tabindex` unset and the arrow keys did
+             * nothing, so a screen-reader user was told "tab, 1 of 7" and then
+             * found the only way through was Tab, seven stops, exactly as if
+             * the roles were not there. Announcing a pattern and not
+             * implementing it is worse than plain buttons, which at least do
+             * not lie about how they work.
+             */
+            tabIndex={tab === key ? 0 : -1}
+            onKeyDown={(e) => {
+              const order = TABS.map(([k]) => k);
+              const at = order.indexOf(tab);
+              const to =
+                e.key === "ArrowRight" || e.key === "ArrowDown"
+                  ? (at + 1) % order.length
+                  : e.key === "ArrowLeft" || e.key === "ArrowUp"
+                    ? (at - 1 + order.length) % order.length
+                    : e.key === "Home"
+                      ? 0
+                      : e.key === "End"
+                        ? order.length - 1
+                        : -1;
+              if (to < 0) return;
+              e.preventDefault();
+              selectTab(order[to]);
+              // Focus follows selection, which is the automatic-activation
+              // variant of the pattern — right here, because selecting a tab is
+              // cheap and every panel is already mounted.
+              document.getElementById(`tab-${order[to]}`)?.focus();
+            }}
             onClick={() => selectTab(key)}
             className={`min-h-11 flex-1 whitespace-nowrap border-b-2 px-1 py-3 text-xs sm:flex-none sm:px-3 sm:text-sm ${
               tab === key
@@ -935,7 +995,12 @@ export default function Dashboard({
                         <p className="text-xs text-muted">
                           GW{hist.gw}: {eh.points - eh.event_transfers_cost} pts
                           {eh.event_transfers_cost > 0 && ` (after −${eh.event_transfers_cost} hit)`}
-                          {" · "}bench {eh.points_on_bench} pts
+                          {" · "}
+                          {benchSummary(
+                            eh.points_on_bench,
+                            bench.map((c) => ({ points: c.live?.points ?? 0 })),
+                            hist.picks.active_chip === "bboost"
+                          )}
                           {eh.rank != null && ` · GW rank ${eh.rank.toLocaleString("en-GB")}`}
                           {" · "}
                           {eh.event_transfers} transfer{eh.event_transfers === 1 ? "" : "s"} made
@@ -1002,26 +1067,7 @@ export default function Dashboard({
                 onSelect={setSelected}
                 cornerTotal={
                   liveData && currentEvent != null
-                    ? {
-                        title: `GW${currentEvent}`,
-                        points:
-                          squad.currentPlayers
-                            .filter((p) =>
-                              squad.activeChip === "bboost"
-                                ? true
-                                : effectiveXiIds
-                                  ? effectiveXiIds.has(p.element.id)
-                                  : p.pickPosition <= 11
-                            )
-                            .reduce(
-                              (s, p) =>
-                                s +
-                                (livePointsOf.get(p.element.id) ?? 0) *
-                                  (p.element.id === effCaptainId ? capMult : 1),
-                              0
-                            ) - (data.picks?.entry_history.event_transfers_cost ?? 0),
-                        final: gwFinished,
-                      }
+                    ? { title: `GW${currentEvent}`, points: liveGross - liveHit, final: gwFinished }
                     : null
                 }
               />
@@ -1031,6 +1077,15 @@ export default function Dashboard({
                     ? `Final GW${currentEvent} points shown under each player — tap a player for the full breakdown.`
                     : `Live GW${currentEvent} points shown in green under each player (captain doubled) — tap a player for the breakdown.`
                   : "Tap a player for details."}{" "}
+                {/*
+                  SAY WHERE THE MISSING FOUR POINTS WENT. The corner is net of
+                  the gameweek's transfer cost and the cards above it are not,
+                  so a −4 week put 48 in the corner over eleven cards summing to
+                  52 with the word "hit" appearing nowhere on the tab. The
+                  historic view of this very pitch already discloses it, and so
+                  does the Live tab; only this one did not.
+                */}
+                {liveData && liveHitNote ? `${liveHitNote} ` : ""}
                 Selling prices follow the official 50%-of-profit rule.
               </p>
                 </>
@@ -1123,6 +1178,15 @@ export default function Dashboard({
           fixtures={data.fixtures}
           teams={teams}
           nextEvent={data.squad?.nextEvent ?? null}
+          /* The card the reader tapped applies this; the sheet must agree. In
+             the time machine the armband is that gameweek's, not today's. */
+          multiplier={
+            tab === "team" && hist
+              ? (hist.picks.picks.find((p) => p.element === selected.id)?.multiplier ?? 1)
+              : selected.id === effCaptainId
+                ? capMult
+                : 1
+          }
         />
       )}
     </main>

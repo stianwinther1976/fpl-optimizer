@@ -299,8 +299,25 @@ export default function LiveTab({
 
   return (
     <div className="space-y-4">
-      {/* Score header */}
-      <div className="card flex flex-wrap items-center gap-x-6 gap-y-2 p-4">
+      {/*
+        THE ONE THING ON THIS TAB THAT MUST BE ANNOUNCED.
+        The page repaints the total, the bench, the clock and the "Updated"
+        stamp every thirty seconds, and "Refresh now" repaints them on demand —
+        and none of it reached a screen reader, because the app had no live
+        region anywhere. A reader who cannot see the number has no way to know
+        it moved, which on this tab is the entire point of the tab.
+
+        `polite`, not `assertive`: a score changing is worth hearing at the next
+        pause, not worth interrupting a sentence for. It wraps the header rather
+        than the fifteen rows for the same reason — announcing every row on
+        every poll is noise, and the header is the summary the reader wants.
+      */}
+      <div
+        className="card flex flex-wrap items-center gap-x-6 gap-y-2 p-4"
+        role="status"
+        aria-live="polite"
+        aria-atomic="false"
+      >
         <div>
           <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted">
             {anyLive && (
@@ -382,7 +399,12 @@ export default function LiveTab({
 
       {/* Match scores — two rows so twice as many fit on screen */}
       {gwFixtures.length > 0 && (
-        <div className="grid grid-flow-col grid-rows-2 gap-1.5 overflow-x-auto pb-1 auto-cols-max">
+        <div
+          className="grid grid-flow-col grid-rows-2 gap-1.5 overflow-x-auto pb-1 auto-cols-max"
+          tabIndex={0}
+          role="region"
+          aria-label="Match scores, scrollable"
+        >
           {gwFixtures.map((f) => {
             const minute = matchMinute(f, updatedAt ?? undefined);
             const liveNow = isInPlay(f);

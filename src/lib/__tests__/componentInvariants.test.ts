@@ -1151,3 +1151,67 @@ describe("a sheet that is not on screen", () => {
     expect(src.indexOf('if (e.key === "Escape")', onKey)).toBeLessThan(guard);
   });
 });
+
+describe("things the accessibility tree has to be told", () => {
+  /*
+   * All of these were verified in Chromium against the demo before being
+   * pinned here, because a source-level guard cannot see a rendered tree. What
+   * this block protects is the tokens surviving a refactor; what proved they
+   * WORK was the browser.
+   */
+  it("announces the live score, since the tab rewrites it every 30 seconds", () => {
+    // The app had no live region anywhere. The Live tab repaints the total, the
+    // bench, the clock and the "Updated" stamp on a 30-second poll, and a
+    // reader who cannot see the number had no way to know it moved — which on
+    // that tab is the whole point of the tab. Polite: a score is worth hearing
+    // at the next pause, not worth interrupting a sentence for.
+    const src = read("LiveTab.tsx");
+    expect(src).toContain('aria-live="polite"');
+    expect(src).toMatch(/role="status"[\s\S]{0,80}aria-live="polite"/);
+    // On the header, not on the fifteen rows: announcing every row on every
+    // poll is noise. There is exactly one, and it is the score header's card.
+    expect((src.match(/aria-live=/g) ?? []).length).toBe(1);
+    const at = src.indexOf('aria-live="polite"');
+    expect(src.slice(Math.max(0, at - 400), at)).toContain("card flex flex-wrap items-center");
+  });
+
+  it("keeps the promise `role=tablist` makes about the keyboard", () => {
+    // Every tab had `tabindex` unset and the arrow keys did nothing, so the
+    // strip announced a pattern it did not implement — worse than plain
+    // buttons, which at least do not lie about how they work. Verified in
+    // Chromium: ArrowRight moves selection and focus, End goes to the last tab.
+    const src = read("Dashboard.tsx");
+    expect(src).toContain("tabIndex={tab === key ? 0 : -1}");
+    for (const key of ["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp", "Home", "End"]) {
+      expect(src, `${key} is not handled`).toContain(`"${key}"`);
+    }
+    expect(src).toContain("document.getElementById(`tab-${order[to]}`)?.focus()");
+  });
+
+  it("states which layout is selected somewhere other than the colour", () => {
+    // The two buttons differed only by `btn-primary` versus `text-muted`, so
+    // the accessibility tree held two buttons and no state.
+    expect(read("Pitch.tsx")).toContain("aria-pressed={layout === v}");
+  });
+
+  it("lets a keyboard reach every horizontally scrolling panel", () => {
+    /*
+     * Measured at 420px on the fixtures table: scrollWidth 562 against
+     * clientWidth 386, with every focusable element inside it in the leftmost
+     * column — so 45 Tab stops left `scrollLeft` at 0 and two gameweeks and the
+     * average-difficulty column were unreachable without a pointer. This is a
+     * rule over the directory rather than a list of the panels someone thought
+     * of, which is how that one came to be missed.
+     */
+    const offenders: string[] = [];
+    for (const f of componentFiles) {
+      const src = read(f);
+      for (const m of src.matchAll(/className=(?:\{`|")[^"`]*overflow-x-auto[^"`]*(?:`\}|")/g)) {
+        const after = src.slice(m.index ?? 0, (m.index ?? 0) + 400);
+        const before = src.slice(Math.max(0, (m.index ?? 0) - 400), m.index ?? 0);
+        if (!/tabIndex=\{0\}/.test(after + before)) offenders.push(f);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});

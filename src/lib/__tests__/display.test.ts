@@ -6,8 +6,11 @@ import {
   benchBadgeFor,
   benchPoints,
   benchSortKey,
+  benchSummary,
+  captainXpLabel,
   fdrSortKey,
   kickoffLabel,
+  liveCornerNote,
   netEventPoints,
   netGwDelta,
   netGwPoints,
@@ -478,5 +481,55 @@ describe("the bench, once auto-substitutions have been applied", () => {
     expect(benchBadgeFor(15)).toBeUndefined();
     expect(benchBadgeFor(11)).toBeNull();
     expect(benchBadgeFor(1)).toBeNull();
+  });
+});
+
+describe("the bench figure beside a finished gameweek", () => {
+  const cards = [{ points: 8 }, { points: 10 }, { points: 2 }, { points: 1 }];
+
+  it("uses FPL's own number in an ordinary week", () => {
+    expect(benchSummary(9, cards, false)).toBe("bench 9 pts");
+    // Even when FPL's number and the cards disagree — `points_on_bench` is the
+    // authority there, and an auto-sub is exactly why they can differ.
+    expect(benchSummary(0, cards, false)).toBe("bench 0 pts");
+  });
+
+  it("sums the cards in a Bench Boost week, and says they counted", () => {
+    /*
+     * FPL reports `points_on_bench` as 0 under Bench Boost because none of
+     * those points sat on the bench — they counted. Printed literally the
+     * caption read `GW15: 61 pts · bench 0 pts` above four cards showing
+     * 8, 10, 2 and 1, and that zero was the one number that would have let a
+     * reader reconcile the corner (61) with the eleven cards above it (40).
+     */
+    expect(benchSummary(0, cards, true)).toBe("bench 21 pts (counted — Bench Boost)");
+  });
+});
+
+describe("a captain's projected points on a card", () => {
+  it("puts the multiplier in front of the figure, not after it", () => {
+    /*
+     * `${(xp * 2).toFixed(1)} xp ×2` printed the already-doubled number with a
+     * "×2" after it, so a 6.5 xp captain read "13.0 xp ×2" — which multiplies
+     * to 26 — while the captaincy list on the same panel showed him at 6.5.
+     */
+    expect(captainXpLabel(6.5, true)).toBe("2×6.5 xp");
+    expect(captainXpLabel(6.5, false)).toBe("6.5 xp");
+    expect(captainXpLabel(6.5, true, 3)).toBe("3×6.5 xp");
+  });
+});
+
+describe("the live pitch's corner note", () => {
+  it("explains the gap a hit opens between the corner and the cards", () => {
+    // The corner is net and the cards are not: 48 over eleven cards summing to
+    // 52, with the word "hit" nowhere on the tab.
+    expect(liveCornerNote(52, 4)).toBe(
+      "The eleven on the pitch have scored 52; the corner shows 48 after a −4 hit."
+    );
+  });
+
+  it("says nothing when there is no hit, rather than saying zero", () => {
+    expect(liveCornerNote(52, 0)).toBeNull();
+    expect(liveCornerNote(0, 0)).toBeNull();
   });
 });

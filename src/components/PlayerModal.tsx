@@ -51,6 +51,7 @@ export default function PlayerModal({
   fixtures = [],
   teams,
   nextEvent = null,
+  multiplier = 1,
 }: {
   element: Element;
   team: Team | undefined;
@@ -61,6 +62,16 @@ export default function PlayerModal({
   fixtures?: Fixture[];
   teams?: Map<number, Team>;
   nextEvent?: number | null;
+  /**
+   * What this player's score is multiplied by in the reader's team this
+   * gameweek — 2 for the captain, 3 under Triple Captain, 1 otherwise.
+   *
+   * THE MODAL HAD NO IDEA THE ARMBAND EXISTED. Tapping a card reading "4 pts"
+   * opened a sheet headed "2 pts", because the card applies the multiplier and
+   * the modal printed `stats.total_points` raw. Both numbers are true and the
+   * reader is given no way to know that.
+   */
+  multiplier?: number;
 }) {
   // Re-render when the reader changes a call anywhere — the button state and
   // the note below it both have to follow the store rather than local state,
@@ -167,8 +178,14 @@ export default function PlayerModal({
                   {gwFinished ? <Badge>Final</Badge> : <Badge tone="green">Live</Badge>}
                 </span>
               </div>
-              <div className={`text-xl font-bold ${gwFinished ? "" : "text-accent"}`}>
-                {total} {total === 1 ? "pt" : "pts"}
+              <div className={`text-right text-xl font-bold ${gwFinished ? "" : "text-accent"}`}>
+                {total == null ? "–" : total * multiplier}{" "}
+                {total != null && total * multiplier === 1 ? "pt" : "pts"}
+                {multiplier > 1 && total != null && (
+                  <div className="text-xs font-normal text-muted">
+                    {multiplier}× {total} as {multiplier === 3 ? "triple captain" : "captain"}
+                  </div>
+                )}
               </div>
             </div>
             {rows.length > 0 ? (

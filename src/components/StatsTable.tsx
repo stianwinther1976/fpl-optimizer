@@ -145,7 +145,12 @@ export default function StatsTable({
         />
       </div>
 
-      <div className="card overflow-x-auto">
+      <div
+        className="card overflow-x-auto"
+        tabIndex={0}
+        role="region"
+        aria-label="Player statistics, scrollable"
+      >
         <table className="w-full min-w-[640px] text-sm">
           <thead className="border-b border-border-c text-xs uppercase text-muted">
             <tr>

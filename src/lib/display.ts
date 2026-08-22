@@ -315,3 +315,58 @@ export function benchSortKey(pickPosition: number): number {
 export function benchBadgeFor(pickPosition: number): number | null | undefined {
   return pickPosition > 11 ? undefined : null;
 }
+
+
+
+/**
+ * The bench figure to print beside a finished gameweek.
+ *
+ * FPL REPORTS `points_on_bench` AS ZERO IN A BENCH BOOST WEEK, because none of
+ * those points sat on the bench — they counted. Printed literally, the caption
+ * read `GW15: 61 pts · bench 0 pts` directly beneath four bench cards showing
+ * 8, 10, 2 and 1. Worse, the zero is the one number that would let a reader
+ * reconcile the corner with the eleven cards above it: the XI summed to 40, the
+ * bench to 21, and the corner said 61.
+ *
+ * So in a Bench Boost week the figure comes from the cards on screen and is
+ * labelled as having counted. Every other week `points_on_bench` is exactly
+ * right and is used unchanged — FPL's own number, not a re-derivation of it.
+ */
+export function benchSummary(
+  reported: number,
+  cards: readonly { points: number }[],
+  benchBoost: boolean
+): string {
+  if (!benchBoost) return `bench ${reported} pts`;
+  let total = 0;
+  for (const c of cards) total += c.points;
+  return `bench ${total} pts (counted — Bench Boost)`;
+}
+
+/**
+ * The captain's xP as a pitch card should print it.
+ *
+ * `${(xp * 2).toFixed(1)} xp ×2` was rendering the ALREADY-DOUBLED figure with
+ * a "×2" after it, so a 6.5 xp captain read `13.0 xp ×2` — which a reader
+ * multiplies to 26 — while the captaincy list on the very same panel showed him
+ * at 6.5. Writing the multiplier in front states both quantities and leaves
+ * nothing to multiply twice.
+ */
+export function captainXpLabel(xp: number, isCaptain: boolean, multiplier = 2): string {
+  return isCaptain ? `${multiplier}×${xp.toFixed(1)} xp` : `${xp.toFixed(1)} xp`;
+}
+
+/**
+ * The sentence under the live pitch, when a hit makes the corner disagree with
+ * the cards above it.
+ *
+ * The corner total is NET of the gameweek's transfer cost and the player cards
+ * are not, so a −4 week put 48 in the corner over eleven cards summing to 52
+ * with nothing on the tab to explain the gap — the word "hit" appeared nowhere
+ * on it. The historic view of the same pitch already discloses this, and so
+ * does the Live tab; only the live Team pitch did not.
+ */
+export function liveCornerNote(gross: number, hit: number): string | null {
+  if (hit <= 0) return null;
+  return `The eleven on the pitch have scored ${gross}; the corner shows ${gross - hit} after a −${hit} hit.`;
+}
