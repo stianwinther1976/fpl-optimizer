@@ -1767,3 +1767,73 @@ describe("every tab computes a live score the same way", () => {
     expect(src).toMatch(/const noSubs = data\.picks\.active_chip === "bboost";/);
   });
 });
+
+
+describe("a sheet is a screen, so the back gesture closes it", () => {
+  /*
+   * `Sheet` closed on Escape and on a tap outside — neither of which exists as
+   * a reflex on a phone, where there is no Escape key at all — so the edge
+   * swipe fell through to the browser and took the whole page with it. Opening
+   * a player from the pitch and swiping back left the team entirely.
+   *
+   * Verified in Chromium against the dev server: with the fix, one back leaves
+   * the sheet closed and the path still `/team/999999`; five open/close cycles
+   * by Escape leave the history stack level, and one back from the clean page
+   * then goes to `/` — which is the proof that closing by any other route hands
+   * the entry back rather than leaking it.
+   */
+  const sheet = read("Sheet.tsx");
+
+  it("takes a history entry while it is open", () => {
+    expect(sheet).toMatch(/window\.history\.pushState\(\{ \.\.\.window\.history\.state \}, ""\)/);
+    expect(sheet).toMatch(/addEventListener\("popstate"/);
+  });
+
+  it("spreads the existing state rather than replacing it", () => {
+    // Next keeps its own routing state in `history.state`; a bare object
+    // breaks its popstate handling.
+    expect(sheet).not.toMatch(/pushState\(\{\}/);
+    expect(sheet).not.toMatch(/pushState\(null/);
+  });
+
+  it("defers the push a frame, so a StrictMode remount costs nothing", () => {
+    /*
+     * Pushing synchronously meant push, teardown's `history.back()`, push
+     * again — and `back()` is asynchronous, so the pop it queued landed after
+     * the second mount and closed the sheet the reader had just opened.
+     * Measured: the player sheet appeared and vanished within a frame,
+     * `[role="dialog"]` never observable.
+     */
+    expect(sheet).toMatch(/requestAnimationFrame\(\(\) => \{/);
+    expect(sheet).toMatch(/cancelAnimationFrame\(frame\)/);
+    expect(sheet).toMatch(/if \(cancelled\) return;/);
+  });
+
+  it("gives the entry back when it closes any other way", () => {
+    // The X, Escape, a tap outside. Without this the stack grows by one per
+    // sheet opened and the back gesture stops working on the page underneath.
+    expect(sheet).toMatch(/if \(pushed && !popped\) window\.history\.back\(\)/);
+  });
+
+  it("lets only the topmost sheet act on a pop", () => {
+    /*
+     * A chip sheet can open a player sheet on top of itself; one popstate
+     * reaches both listeners, and without this both would close. Same rule the
+     * Escape handler above it uses — pinned here because the stacked case could
+     * not be reached through the demo UI to verify in a browser.
+     */
+    const at = sheet.indexOf('addEventListener("popstate"');
+    expect(at).toBeGreaterThan(0);
+    const onPop = sheet.slice(sheet.indexOf("const onPop = ()"), at);
+    expect(onPop).toContain('querySelectorAll(\'[role="dialog"]\')');
+    expect(onPop).toMatch(/dialogs\[dialogs\.length - 1\] !== panelRef\.current/);
+  });
+
+  it("keeps `onClose` in a ref, so the effect runs once per sheet", () => {
+    // An effect keyed on `onClose` pushes a second entry every time the parent
+    // re-renders, so the reader would have to swipe as many times as the
+    // dashboard had rendered before anything closed.
+    expect(sheet).toMatch(/const closeRef = useRef\(onClose\)/);
+    expect(sheet).toMatch(/closeRef\.current\(\)/);
+  });
+});

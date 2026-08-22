@@ -19,6 +19,81 @@ export default function Sheet({
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<Element | null>(null);
+  /*
+   * `onClose` in a ref, because the history effect below must run EXACTLY ONCE
+   * per sheet. A parent that re-renders hands down a new closure, and an effect
+   * keyed on it would push a second entry every time — so the reader's back
+   * gesture would close nothing until they had swiped as many times as the
+   * dashboard had re-rendered.
+   */
+  const closeRef = useRef(onClose);
+  useEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
+
+  /*
+   * THE BACK GESTURE HAS TO CLOSE THE SHEET, NOT LEAVE THE TEAM.
+   *
+   * A sheet is a screen as far as the reader is concerned, and on a phone the
+   * way you dismiss a screen is to swipe in from the edge. This component
+   * closed on Escape and on a tap outside — neither of which exists as a
+   * reflex on iOS, where there is no Escape key at all — so the swipe fell
+   * through to the browser and took the whole page with it. Opening a player
+   * from the pitch and swiping back left the team entirely.
+   *
+   * So the sheet takes a history entry while it is open and gives it back when
+   * it closes. Three details, each of which is a bug if missed:
+   *
+   *  - `...window.history.state` is spread rather than replaced. Next keeps its
+   *    own routing state there and a bare object breaks its popstate handling.
+   *  - Only the TOPMOST dialog acts on a pop, the same rule the Escape handler
+   *    above uses: a chip sheet can open a player sheet on top of itself, one
+   *    popstate reaches both listeners, and without this both would close.
+   *  - `popped` records whether the entry was already consumed by the browser.
+   *    Closing by any other route — the X, Escape, a tap outside — has to pop
+   *    the entry itself, or the stack grows by one per sheet the reader opens
+   *    and the back gesture stops working on the page underneath.
+   */
+  useEffect(() => {
+    /*
+     * THE PUSH IS DEFERRED A FRAME, AND THAT IS NOT AN OPTIMISATION.
+     *
+     * React's development StrictMode mounts every effect, tears it down and
+     * mounts it again. Pushing synchronously meant: push, then the teardown's
+     * `history.back()`, then push again — and `back()` is asynchronous, so the
+     * pop it queues lands AFTER the second mount and is delivered to the new
+     * listener, which closes the sheet the reader has just opened. Measured in
+     * Chromium against the dev server: the player sheet appeared and vanished
+     * within a frame, `[role="dialog"]` never observable, history length up by
+     * one and stuck there.
+     *
+     * Deferring to `requestAnimationFrame` lets the teardown cancel a push that
+     * has not happened, so a StrictMode remount costs nothing and the real
+     * mount still gets its entry. The cost is that a back gesture inside the
+     * first frame is not intercepted, which is not a state a hand can reach.
+     */
+    let cancelled = false;
+    let pushed = false;
+    let popped = false;
+    const frame = requestAnimationFrame(() => {
+      if (cancelled) return;
+      window.history.pushState({ ...window.history.state }, "");
+      pushed = true;
+    });
+    const onPop = () => {
+      const dialogs = [...document.querySelectorAll('[role="dialog"]')];
+      if (dialogs.length > 1 && dialogs[dialogs.length - 1] !== panelRef.current) return;
+      popped = true;
+      closeRef.current();
+    };
+    window.addEventListener("popstate", onPop);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+      window.removeEventListener("popstate", onPop);
+      if (pushed && !popped) window.history.back();
+    };
+  }, []);
 
   useEffect(() => {
     openerRef.current = document.activeElement;
