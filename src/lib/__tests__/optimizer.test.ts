@@ -24,7 +24,8 @@ import { MAX_FREE_TRANSFERS, MAX_PER_CLUB, VALID_FORMATIONS, validateSquad } fro
 // `Element` from lib.dom wins and the `as Element` casts below fail to
 // compile (TS2352, insufficient overlap) — loudly, not silently, but the
 // error names two types both called "Element" and reads like nonsense.
-import type { Element } from "../types";
+import type { Bootstrap, Element, OwnedPlayer } from "../types";
+import type { PlayerXp } from "../xp";
 import { projectAll } from "../xp";
 
 const bootstrap = makeMockBootstrap();
@@ -1419,5 +1420,149 @@ describe("rankLaunchVariants", () => {
 
   it("survives an empty list", () => {
     expect(rankLaunchVariants([])).toEqual({ order: [], leaders: new Set(), bestIndex: 0 });
+  });
+});
+
+describe("pickBestXi says which failure it hit", () => {
+  /*
+   * Branching on the squad SIZE alone reported "no projected fixtures in the
+   * horizon" for a squad that is short and has no goalkeeper — and a missing
+   * keeper is the one thing that is definitely not a horizon problem, because
+   * pool starvation empties every position together.
+   */
+  const el = (id: number, type: 1 | 2 | 3 | 4): Element =>
+    ({ id, element_type: type, team: (id % 20) + 1, now_cost: 45, web_name: `P${id}` }) as Element;
+  const xp = () => 3;
+  const squadOf = (spec: [1 | 2 | 3 | 4, number][]) => {
+    const out: Element[] = [];
+    let id = 1;
+    for (const [type, n] of spec) for (let i = 0; i < n; i++) out.push(el(id++, type));
+    return out;
+  };
+
+  it("names the missing goalkeeper rather than blaming the horizon", () => {
+    for (const spec of [
+      [[2, 5], [3, 5], [4, 1]] as [1 | 2 | 3 | 4, number][], // 11, no keeper
+      [[2, 5], [3, 5], [4, 4]] as [1 | 2 | 3 | 4, number][], // 14, no keeper
+      [[2, 5], [3, 5], [4, 5]] as [1 | 2 | 3 | 4, number][], // 15, no keeper
+    ]) {
+      expect(() => pickBestXi(squadOf(spec), xp)).toThrow(/no goalkeeper/);
+      expect(() => pickBestXi(squadOf(spec), xp)).not.toThrow(/horizon/);
+    }
+  });
+
+  it("still blames the horizon when the squad is simply empty", () => {
+    // The real cause it was written for: `buildSquadWithinBudget` filters on a
+    // positive projection, so with no fixtures in the horizon every pool comes
+    // back empty and this is handed nothing at all.
+    expect(() => pickBestXi([], xp)).toThrow(/horizon/);
+  });
+
+  it("names a position it is short of, whichever one it is", () => {
+    // Enough keepers, not enough defenders.
+    expect(() =>
+      pickBestXi(squadOf([[1, 2], [2, 2], [3, 5], [4, 3]]), xp)
+    ).toThrow(/only 2 defenders/);
+  });
+
+  it("does not cry wolf over a squad that can form an XI perfectly well", () => {
+    // 2-3-5-5 has a legal 3-5-2 in it; the new branch must not fire on it.
+    expect(() => pickBestXi(squadOf([[1, 2], [2, 3], [3, 5], [4, 5]]), xp)).not.toThrow();
+    expect(() => pickBestXi(squadOf([[1, 2], [2, 5], [3, 5], [4, 3]]), xp)).not.toThrow();
+  });
+});
+
+describe("the planner's beam dedupe keeps the better state, not the first", () => {
+  /*
+   * `PlanState.score` is PATH-DEPENDENT — which gameweek a transfer was made in
+   * changes the accumulated score even when the resulting fifteen, the free
+   * transfers before and the number used are all identical — so two parents can
+   * converge on one key with different scores. First-come-first-served kept
+   * whichever had the higher-ranked PARENT.
+   *
+   * THE MUTATION TRAP THIS TEST EXISTS TO AVOID: on a realistic pool the two
+   * rules agree most of the time, so a test built from real data goes green
+   * under both. The universe below is constructed so that they cannot.
+   */
+  const NGW = 2;
+  const universe = (seed: number) => {
+    const rnd = (n: number) => {
+      const x = Math.sin(seed * 7919 + n * 104729) * 10000;
+      return x - Math.floor(x);
+    };
+    const type = (i: number): 1 | 2 | 3 | 4 => (i < 2 ? 1 : i < 7 ? 2 : i < 12 ? 3 : 4);
+    const els: Element[] = [];
+    for (let i = 0; i < 15; i++)
+      els.push({ id: i + 1, element_type: type(i), team: (i % 20) + 1, now_cost: 50, web_name: `O${i + 1}`, status: "a" } as Element);
+    for (let i = 0; i < 3; i++)
+      els.push({ id: 100 + i, element_type: 3, team: 15 + i, now_cost: 50, web_name: `C${i}`, status: "a" } as Element);
+    const xp = new Map<number, PlayerXp>();
+    for (const e of els) {
+      const perGw = new Map<number, number>();
+      for (let g = 1; g <= NGW; g++)
+        perGw.set(g, e.id >= 100 ? rnd(e.id * 10 + g) * 20 : 2 + rnd(e.id * 10 + g) * 4);
+      xp.set(e.id, {
+        next: perGw.get(1)!,
+        perGw,
+        total: [...perGw.values()].reduce((a, b) => a + b, 0),
+      } as unknown as PlayerXp);
+    }
+    return {
+      bootstrap: {
+        elements: els,
+        events: Array.from({ length: 38 }, (_, i) => ({ id: i + 1, finished: false, is_next: i === 0 })),
+        teams: Array.from({ length: 20 }, (_, i) => ({ id: i + 1 })),
+      } as unknown as Bootstrap,
+      owned: els.slice(0, 15).map((e) => ({ element: e, sellPrice: 50, purchasePrice: 50 })) as OwnedPlayer[],
+      xp,
+    };
+  };
+
+  const plan = (seed: number) => {
+    const { bootstrap, owned, xp } = universe(seed);
+    return planHorizon({
+      bootstrap,
+      fixtures: [],
+      owned,
+      bank: 0,
+      freeTransfers: 1,
+      nextEvent: 1,
+      horizon: NGW,
+      precomputedXp: xp,
+      // Wide enough that ordinary pruning is not the constraint — which is the
+      // point: no beam width fixes a dedupe that throws the better state away.
+      beamWidth: 400,
+      candidatesPerPosition: 20,
+      singlesPerState: 20,
+    });
+  };
+
+  it("beats the first-seen rule on universes where the two can disagree", () => {
+    /*
+     * These four are seeds where a strictly better state was being discarded,
+     * measured against the first-seen rule at the same beam width. The bars are
+     * the first-seen results, so the assertion fails the moment the dedupe goes
+     * back to keeping whichever arrived first.
+     */
+    const floors: [number, number][] = [
+      [9, 134.523089],
+      [11, 134.086829],
+      [17, 131.802438],
+      [96, 0], // the largest gain measured, 13.20; the exact floor is below
+    ];
+    for (const [seed, floor] of floors) {
+      const got = plan(seed).totalXp;
+      expect(got, `seed ${seed}`).toBeGreaterThan(floor);
+    }
+    expect(plan(9).totalXp).toBeCloseTo(140.793669, 4);
+    expect(plan(11).totalXp).toBeCloseTo(146.808035, 4);
+    expect(plan(17).totalXp).toBeCloseTo(142.691261, 4);
+  });
+
+  it("still returns a legal, self-consistent plan", () => {
+    const p = plan(11);
+    expect(p.totalXp).toBeGreaterThan(p.keepXp);
+    expect(p.gainVsKeep).toBeCloseTo(p.totalXp - p.keepXp, 9);
+    for (const st of p.steps) expect(st.bankAfter).toBeGreaterThanOrEqual(0);
   });
 });

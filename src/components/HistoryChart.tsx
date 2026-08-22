@@ -45,7 +45,16 @@ export default function HistoryChart({ data, entryId }: { data: TeamData; entryI
       <PastSeasons data={data} entryId={entryId} />
       <div className="card p-4">
         <SectionTitle>Points per gameweek</SectionTitle>
-        <div className="mt-4 h-64">
+        {/*
+          A NAME, AND NOT `role="application"`.
+          Recharts renders `<svg role="application">` with an EMPTY `<title>`,
+          so in the accessibility tree both charts appeared as
+          `{role: "application", name: ""}` — which puts a screen reader into
+          forms mode over content it cannot describe at all. Naming the wrapper
+          and marking the SVG decorative hands the reader to the KPI modals
+          instead, which expose the same series as real tables.
+        */}
+        <div className="mt-4 h-64" role="img" aria-label="Points per gameweek, line chart">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={rows}>
               <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
@@ -83,7 +92,7 @@ export default function HistoryChart({ data, entryId }: { data: TeamData; entryI
 
       <div className="card p-4">
         <SectionTitle>Overall rank</SectionTitle>
-        <div className="mt-4 h-64">
+        <div className="mt-4 h-64" role="img" aria-label="Overall rank by gameweek, line chart">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={rows}>
               <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />

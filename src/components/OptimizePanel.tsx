@@ -1008,9 +1008,18 @@ export default function OptimizePanel({
                   wording said the former and a reader would have concluded the
                   XI was full of differentials.
                 */}
+                {/*
+                  SAY WHICH 50.2 THIS IS. `splitByField` is fed
+                  `keepXi.starters`, which carry each man's OWN xp — so this
+                  total is the eleven un-captained, while "best XI projects 56.7
+                  xp" one card above includes the captain's second multiple.
+                  Two numbers, both labelled "your XI's projected points",
+                  6.5 apart, and nothing said the difference was the armband.
+                */}
                 <span className="text-sm text-muted">
-                  of your XI&apos;s {result.fieldSplit.total.toFixed(1)} projected points are
-                  not already shared with the rest of the field.
+                  of your XI&apos;s {result.fieldSplit.total.toFixed(1)} projected points
+                  (before the captain&apos;s second multiple) are not already shared with
+                  the rest of the field.
                 </span>
               </div>
               <p className="mt-2 text-xs text-muted">

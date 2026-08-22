@@ -148,11 +148,34 @@ export function pickBestXi(
    * the builder, which must keep returning short for that caller to filter.
    */
   if (!best) {
+    /*
+     * THREE FAILURES, NOT TWO. Branching on the count alone reported "no
+     * projected fixtures in the horizon" for a squad that is short AND has no
+     * goalkeeper — and the missing keeper is the one thing that is definitely
+     * not a horizon problem, because pool starvation empties every position
+     * together. Measured: 11 players with no keeper, and 14 with no keeper,
+     * both came back blaming the horizon.
+     */
+    const missing: string[] = [];
+    if (squad.filter((e) => e.element_type === 1).length < 1) missing.push("no goalkeeper");
+    for (const [type, need, name] of [
+      [2, 3, "defenders"],
+      [3, 2, "midfielders"],
+      [4, 1, "forward"],
+    ] as const) {
+      const have = squad.filter((e) => e.element_type === type).length;
+      if (have < need) missing.push(`only ${have} ${name}`);
+    }
     throw new Error(
-      squad.length < SQUAD_SIZE
-        ? `Cannot pick an XI from ${squad.length} of ${SQUAD_SIZE} players — ` +
-          `no projected fixtures in the horizon is the usual cause.`
-        : "No valid formation for this squad"
+      // `squad.length > 0`, because an EMPTY squad is the pool-starvation case
+      // the horizon message was written for — it is missing every position at
+      // once, and listing them all buries the one sentence that says why.
+      missing.length > 0 && squad.length > 0
+        ? `Cannot pick an XI from these ${squad.length} players — ${missing.join(", ")}.`
+        : squad.length < SQUAD_SIZE
+          ? `Cannot pick an XI from ${squad.length} of ${SQUAD_SIZE} players — ` +
+            `no projected fixtures in the horizon is the usual cause.`
+          : "No valid formation for this squad"
     );
   }
   const ranked = [...best.starters].sort((a, b) => b.xp - a.xp);
@@ -1601,8 +1624,7 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
 
   for (let gi = 0; gi < gws.length; gi++) {
     const gw = gws[gi];
-    const next: { s: PlanState; rank: number }[] = [];
-    const seen = new Set<string>();
+    const byKey = new Map<string, { s: PlanState; rank: number }>();
 
     for (const state of beam) {
       // Candidate single moves for THIS state, ranked by remaining-horizon gain.
@@ -1653,8 +1675,6 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
             .map((p) => p.element.id)
             .sort((a, b) => a - b)
             .join(",") + `|${state.ft}-${used}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
         const s: PlanState = {
           players: applied.players,
           bank: applied.bank,
@@ -1665,10 +1685,39 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
             { gw, moves, ftBefore: state.ft, hit, bankAfter: applied.bank },
           ],
         };
-        next.push({ s, rank: s.score + futureScore(applied.players, gi + 1) });
+        /*
+         * KEEP THE BEST STATE PER KEY, NOT THE FIRST ONE SEEN.
+         *
+         * `PlanState.score` is PATH-DEPENDENT: which gameweek a transfer was
+         * made in changes the accumulated score even when the resulting fifteen,
+         * the free transfers before and the number used are all identical. The
+         * dedupe was first-come-first-served in beam order, so of two parents
+         * converging on the same squad the one kept was whichever had the
+         * higher-ranked PARENT — not the higher score of its own.
+         *
+         * That is not ordinary beam pruning, and no beam width fixes it.
+         * Measured over 120 constructed two-gameweek universes (15 owned plus
+         * three candidates, all one price so the bank never binds), at beam
+         * width 400 — wide enough that pruning is not the constraint:
+         *
+         *     keep-best better in  34 of 120
+         *     first-seen better in  0 of 120
+         *     largest gain        13.20 discounted xP
+         *
+         * Never worse, which is what you would expect: keeping the higher score
+         * of two interchangeable states cannot lose.
+         *
+         * `optimize`'s own dedupe is sound and must not be "fixed" to match:
+         * there the score is `horizonScore` of the element set, a pure function
+         * of the final squad, so same-key states really are interchangeable.
+         */
+        const rank = s.score + futureScore(applied.players, gi + 1);
+        const held = byKey.get(key);
+        if (!held || rank > held.rank) byKey.set(key, { s, rank });
       }
     }
 
+    const next = [...byKey.values()];
     next.sort((a, b) => b.rank - a.rank);
     beam = next.slice(0, beamWidth).map((n) => n.s);
     if (beam.length === 0) break;

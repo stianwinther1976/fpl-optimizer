@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  chipTiming,
-  chipWindow,
-  seasonStructure,
-  structuralWindows,
-  MATERIAL_GAIN,
-} from "../chips";
+import { MATERIAL_GAIN, chipTiming, chipWindow, seasonStructure, structuralWindows } from "../chips";
 import type { Element, Fixture } from "../types";
 
 const LEAGUE = [1, 2, 3, 4];
@@ -284,10 +278,27 @@ describe("chipTiming scores the gameweeks the calendar flagged", () => {
         inHorizonBest: 10,
       }).verdict;
 
-    // The test is `edge < MATERIAL_GAIN` is immaterial, so the floor itself
-    // clears and only below it does not.
+    /*
+     * THE FLOOR ITSELF IS IMMATERIAL. `MATERIAL_GAIN`'s own doc and CLAUDE.md
+     * both say a flagged week must beat the in-horizon best BY MORE THAN the
+     * floor; the code said `edge < MATERIAL_GAIN`, which recommends on exactly
+     * the floor. Measure-zero on real projections — the point is that the
+     * constant meant one thing in the prose and another in the code.
+     *
+     * AND THIS TEST COULD NOT SEE IT. It fed `10 + MATERIAL_GAIN` and
+     * subtracted 10, which in binary floating point is 0.9000000000000004 and
+     * lands the same side of the comparison either way, so all three cases were
+     * identical under `<` and `<=`. The edge is now constructed so that it is
+     * exactly the floor.
+     */
+    const atEdge = (edge: number) =>
+      chipTiming("bboost", fx, squad, LEAGUE, 20, 38, CHIPS, 23, {
+        scoreGw: () => edge,
+        inHorizonBest: 0,
+      }).verdict;
+    expect(atEdge(MATERIAL_GAIN + 0.01)).toBe("structural-window-ahead");
+    expect(atEdge(MATERIAL_GAIN)).not.toBe("structural-window-ahead");
     expect(at(MATERIAL_GAIN + 0.01)).toBe("structural-window-ahead");
-    expect(at(MATERIAL_GAIN)).toBe("structural-window-ahead");
     // Just under: the double is still NAMED — it is a fact about the calendar —
     // but the app must not recommend waiting for it.
     expect(at(MATERIAL_GAIN - 0.01)).not.toBe("structural-window-ahead");
@@ -326,5 +337,41 @@ describe("chipTiming scores the gameweeks the calendar flagged", () => {
     expect(t.verdict).toBe("structural-window-ahead");
     expect(t.scored).toEqual([]);
     expect(t.note).toMatch(/GW25/);
+  });
+});
+
+describe("chipWindow picks the window that is actually open", () => {
+  it("prefers an open window to a later one that closes sooner", () => {
+    /*
+     * The test was `nextEvent <= stop_event` against a list sorted by
+     * `stop_event`, which finds the earliest window that has not CLOSED — not
+     * one that has OPENED. Read at GW5 against `[{1, 38}, {20, 25}]` it
+     * returned the GW20-25 window, so the advisor scanned GW20-25 and announced
+     * "window closes after GW25" for a chip playable now and through GW38.
+     */
+    const chips = [
+      { name: "bboost", start_event: 1, stop_event: 38 },
+      { name: "bboost", start_event: 20, stop_event: 25 },
+    ];
+    expect(chipWindow("bboost", chips, 5)).toEqual({ start: 1, stop: 38 });
+    // Inside both: the earlier-closing one is the binding constraint.
+    expect(chipWindow("bboost", chips, 22)).toEqual({ start: 20, stop: 25 });
+  });
+
+  it("names the next window to open when none is open yet", () => {
+    const chips = [{ name: "3xc", start_event: 20, stop_event: 38 }];
+    expect(chipWindow("3xc", chips, 5)).toEqual({ start: 20, stop: 38 });
+  });
+
+  it("still reports the last window once they have all closed", () => {
+    // "No window published" and "every window has passed" are different
+    // answers, and the expiry has to survive this change.
+    const chips = [
+      { name: "freehit", start_event: 2, stop_event: 19 },
+      { name: "freehit", start_event: 20, stop_event: 30 },
+    ];
+    expect(chipWindow("freehit", chips, 35)).toEqual({ start: 20, stop: 30 });
+    expect(chipWindow("freehit", null, 35)).toBeNull();
+    expect(chipWindow("freehit", [], 35)).toBeNull();
   });
 });

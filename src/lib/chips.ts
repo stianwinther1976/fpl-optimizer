@@ -163,7 +163,26 @@ export function chipWindow(
    * is returned once they have all closed; `chipTiming` compares `nextEvent`
    * against `stop` and reports the expiry.
    */
-  const open = mine.find((c) => nextEvent <= c.stop_event) ?? mine[mine.length - 1];
+  /*
+   * "STILL OPEN" MEANS OPEN, and the test was on the upper bound alone. Sorted
+   * by `stop_event`, `nextEvent <= stop` picks the earliest window that has not
+   * CLOSED — which need not have opened. Given `[{1, 38}, {20, 25}]` read at
+   * GW5 it returned `{20, 25}`, so `chipTiming` scanned GW20-25 and announced
+   * "window closes after GW25" for a chip playable now and through GW38.
+   *
+   * Unreachable on today's feed, where the two windows per chip are disjoint —
+   * which is exactly why it is worth fixing rather than arguing about: the doc
+   * above says "still open at `nextEvent`", and a rule that happens to hold
+   * because of the data's shape is not the rule that was written down.
+   *
+   * A window that has not opened yet is still the right answer when none is
+   * open — the reader needs to be told when it starts — so the fallback order
+   * is: open now, else the next one to open, else the last one to have closed.
+   */
+  const open =
+    mine.find((c) => nextEvent >= c.start_event && nextEvent <= c.stop_event) ??
+    mine.find((c) => nextEvent <= c.stop_event) ??
+    mine[mine.length - 1];
   return { start: open.start_event, stop: open.stop_event };
 }
 
@@ -362,10 +381,17 @@ export function chipTiming(
   if (best && scoring) {
     const edge = best.gain - scoring.inHorizonBest;
     // A scored gameweek only earns a recommendation if it beats what the
-    // horizon already found by more than the flat-surface spread. Otherwise the
+    // horizon already found by MORE THAN the flat-surface spread. Otherwise the
     // structure is still worth naming — it is a fact about the calendar — but
     // the app must not pretend it has found a better week.
-    if (edge < MATERIAL_GAIN) {
+    //
+    // `<=`, because "more than" is what the doc on `MATERIAL_GAIN` and
+    // CLAUDE.md both say and `<` recommended on an edge of exactly the floor.
+    // Measure-zero on real projections; the point is that the constant means
+    // one thing in the prose and another in the code, and the test that claimed
+    // to pin the boundary fed it `10 + 0.9 - 10`, which is 0.9000000000000004
+    // and lands the same side under either comparison.
+    if (edge <= MATERIAL_GAIN) {
       return {
         chip,
         window,
