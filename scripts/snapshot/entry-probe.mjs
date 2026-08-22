@@ -116,10 +116,13 @@ async function main() {
     const wait = EVERY_MS - ((Date.now() - started) % EVERY_MS);
     await new Promise((r) => setTimeout(r, wait));
   }
-  // ---- The assumption under `liveLeagueTotal`, checked rather than believed.
+  // ---- The assumption a live league total would rest on, checked first.
   //
-  // That helper computes a rival's live total as `total - event_total + live`,
-  // where `total - event_total` is meant to be the total BEFORE this gameweek.
+  // The league table's "Total" column is FPL's stored cumulative and lags the
+  // live GW column beside it; in GW1, where the two are the same number by
+  // definition, it showed 7 beside 5. The obvious fix is
+  // `total - event_total + live`, where `total - event_total` is meant to be
+  // the total BEFORE this gameweek.
   // That is only sound if the two fields come from the same snapshot and mean
   // what they say. If FPL published `event_total` as 0 while `total` carried
   // the gameweek — plausible, and unverified — then in GW1 the helper would
@@ -150,7 +153,7 @@ async function main() {
         (event === 1
           ? mismatched === 0
             ? "  => GW1 holds, the subtraction is sound"
-            : "  => GW1 BROKEN, `liveLeagueTotal` would be wrong"
+            : "  => GW1 BROKEN, the subtraction would double every total"
           : "  (only decisive in GW1)")
     );
   }
