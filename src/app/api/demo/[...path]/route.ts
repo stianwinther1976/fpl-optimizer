@@ -64,9 +64,16 @@ export async function GET(
   // and scored exactly what he did; and the gameweek, so the Team tab's time
   // machine drew the GW20 pitch under a GW15 caption and disagreed with the
   // history row beside it.
+  // AND BOUNDED, like `live` below. `picksFor` clamps with
+  // `max(1, min(CURRENT_GW, gw))`, so GW0 answered with GW1's picks and
+  // GW99999999 with GW20's — the same defect the note on `live` says was fixed
+  // there, left in place one endpoint over. The real API 404s a gameweek that
+  // has not been played, and a demo that answers where the real one refuses is
+  // a demo that stops being a rehearsal.
   else if (/^entry\/\d+\/event\/\d+\/picks\/$/.test(joined)) {
     const seg = joined.split("/");
-    body = u.picksFor(parseInt(seg[1], 10), parseInt(seg[3], 10));
+    const gw = parseInt(seg[3], 10);
+    if (gw >= 1 && gw <= u.currentEvent) body = u.picksFor(parseInt(seg[1], 10), gw);
   }
   // Per-entry too. This served the demo manager's own season — his points, his
   // ranks, his chips — to every id that asked, so the nine rivals in the

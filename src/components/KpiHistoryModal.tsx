@@ -2,7 +2,7 @@
 
 import type { TeamData } from "@/lib/fpl";
 import { CHIP_LABELS, fmtPrice, remainingChips } from "@/lib/rules";
-import { netGwPoints, signedPrice, teamValue } from "@/lib/display";
+import { netGwPoints, publishedAverage, signedPrice, teamValue } from "@/lib/display";
 import Sheet, { SheetClose } from "./Sheet";
 
 export type KpiMetric = "points" | "rank" | "gw" | "value" | "transfers" | "chips";
@@ -26,12 +26,16 @@ export default function KpiHistoryModal({
   onClose: () => void;
 }) {
   const rows = [...data.history.current].sort((a, b) => b.event - a.event);
+  // Null while FPL has not published one — the table then prints "–" rather
+  // than crediting the reader with beating an average of zero.
   const avgOf = (gw: number) =>
-    data.bootstrap.events.find((e) => e.id === gw)?.average_entry_score ?? null;
+    publishedAverage(data.bootstrap.events.find((e) => e.id === gw));
   const chipAt = (gw: number) => data.history.chips.find((c) => c.event === gw)?.name ?? null;
 
   const num = (n: number) => n.toLocaleString("en-GB");
-  const signed = (n: number) => (n > 0 ? `+${num(n)}` : num(n));
+  // U+2212 MINUS, not the hyphen `toLocaleString` produces. The same modal
+  // prints `−4 hit` two columns over, so one row carried both glyphs.
+  const signed = (n: number) => (n > 0 ? `+${num(n)}` : n < 0 ? `−${num(Math.abs(n))}` : num(n));
 
   const nameOf = new Map(data.bootstrap.elements.map((e) => [e.id, e.web_name]));
   const chipShort: Record<string, string> = {

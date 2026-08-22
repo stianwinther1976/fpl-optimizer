@@ -52,7 +52,13 @@
 
 import { XP_CONFIG } from "./xp";
 
-/** The reader's statement about one player, for the gameweek in front of them. */
+/**
+ * The reader's statement about one player, for the gameweek in front of them.
+ *
+ * "For the gameweek in front of them" is enforced, not just documented — the
+ * saved payload carries the gameweek and `loadStartCalls` drops it once that
+ * gameweek is behind.
+ */
 export type StartCall = "starts" | "benched";
 
 export interface MinutesLike {
@@ -93,7 +99,7 @@ export function applyStartCall(mm: MinutesLike, call: StartCall): MinutesLike {
    * `pStartFor("starts")` is the PRE-SEASON ceiling, 0.97. In season the model
    * blends observed start share and clamps to 1.0, so an ever-present carries
    * 1.0 — and taking the override neat then DEMOTED him for being named in the
-   * eleven. Measured on the demo's mid-season universe: 141 of 300 players sit
+   * eleven. Measured on the demo's mid-season universe: 143 of 300 players sit
    * above 0.97, and every one sampled lost points when told he starts (element
    * 8: 5.961 to 5.932 next, 18.570 to 18.467 over three gameweeks).
    *
@@ -102,13 +108,39 @@ export function applyStartCall(mm: MinutesLike, call: StartCall): MinutesLike {
    * the demoted number as the reader's own decision. `share` was already
    * guarded this way; `pStart` was not, and it feeds `p60` and `pPlay` directly.
    */
+  /*
+   * AND "BENCHED" IS ONE-SIDED THE OTHER WAY, WHICH IT WAS NOT.
+   *
+   * `pStartFor("benched")` is the range FLOOR, 0.08. Taken neat it is not a
+   * ceiling on a benched player, it is a floor under him — so anyone the model
+   * already rates below 0.08 was PROMOTED by being told he is not in the
+   * eleven. Measured on the 2026-08-19 snapshot, one "benched" call per player:
+   * 78 of 595 came out higher on the next gameweek, 81 higher over three, and
+   * the population is exactly the one a reader is most likely to mark — backup
+   * keepers. Arrizabalaga went 0.418 to 0.641 for being benched, off a model
+   * `pStart` of 0.0021.
+   *
+   * That is the mirror image of the `pStart` defect above, and it breaks the
+   * asymmetry this file's header states: "benched" LETS a share fall, it does
+   * not assert a level. So each direction now takes the side it is entitled to
+   * — `max` for "starts", `min` for "benched" — and neither can move a player
+   * against the reader's own stated meaning.
+   *
+   * The existing test only asserted `started > benched`, which is true under
+   * both rules; that is the CLAUDE.md failure mode where the test and the code
+   * share a belief.
+   */
   const asserted = pStartFor(call);
-  const p = call === "starts" ? Math.max(asserted, mm.pStart) : asserted;
+  const p = call === "starts" ? Math.max(asserted, mm.pStart) : Math.min(asserted, mm.pStart);
   const derived = (p * mm.minsPerStart) / 90;
   return {
     pStart: p,
     minsPerStart: mm.minsPerStart,
-    share: clamp(call === "starts" ? Math.max(derived, mm.share) : derived, 0, 1),
+    share: clamp(
+      call === "starts" ? Math.max(derived, mm.share) : Math.min(derived, mm.share),
+      0,
+      1
+    ),
   };
 }
 
@@ -168,18 +200,29 @@ function bump(): void {
  * sites is how a saved call ends up not applied, or an applied one not saved —
  * and the reader would have no way to tell which of the two had happened.
  */
-export function setStartCall(demo: boolean, id: number, call: StartCall | null): void {
+export function setStartCall(
+  demo: boolean,
+  gw: number | null,
+  id: number,
+  call: StartCall | null
+): void {
   const next = new Map(active);
   if (call === null) next.delete(id);
   else next.set(id, call);
   active = next;
-  saveStartCalls(demo, next);
+  saveStartCalls(demo, gw, next);
   bump();
 }
 
-/** Load persisted calls into the active set — once, on mount. */
-export function hydrateStartCalls(demo: boolean): void {
-  active = loadStartCalls(demo);
+/**
+ * Load persisted calls into the active set, for the gameweek in front of the
+ * reader now.
+ *
+ * Re-run whenever `gw` moves, not only on mount: see `loadStartCalls` for why
+ * a call outlives its gameweek otherwise.
+ */
+export function hydrateStartCalls(demo: boolean, gw: number | null): void {
+  active = loadStartCalls(demo, gw);
   bump();
 }
 
@@ -191,16 +234,67 @@ export function hydrateStartCalls(demo: boolean): void {
  */
 const key = (demo: boolean) => `${demo ? "demo-" : ""}fpl-start-calls`;
 
-export function loadStartCalls(demo: boolean): Map<number, StartCall> {
+/**
+ * The calls saved for ONE gameweek, and only for that gameweek.
+ *
+ * A CALL OUTLIVED THE MATCH IT WAS ABOUT. `StartCall`'s own doc says "for the
+ * gameweek in front of them" and a press conference is about one match, but
+ * the stored payload was a bare id->call map with no gameweek on it, and
+ * nothing anywhere expired it. So a reader who marked a player "Not in the XI"
+ * on a Saturday morning was still writing that player off at the same strength
+ * a month later — silently, at whatever gameweek happened to be next, with
+ * `PlayerXp.startCall` labelling the number as the reader's own decision. The
+ * round that scoped the call to offset 0 made this sharper rather than
+ * milder: the override now lands entirely on ONE gameweek, so if that
+ * gameweek is the wrong one there is nothing left to dilute it.
+ *
+ * The size of it, measured by re-projecting each player twice — once with no
+ * call and once with a "benched" one — and taking the drop in `next`:
+ *
+ *                                        moved   median   worst
+ *   2026-08-21 snapshot, GW2 next         285      0.94    2.85
+ *   demo mid-season universe, GW21        268      2.27    5.20
+ *
+ * "Moved" is players losing more than 0.05, out of 690 and 300 respectively;
+ * the pre-season figure is the smaller of the two because the model is flatter
+ * before any minutes are on record. Either way it is a whole gameweek of a
+ * player's projection, taken off by a press conference about a match that has
+ * already been played.
+ *
+ * Hence the stamp. `saveStartCalls` records the gameweek the reader was
+ * looking at; this returns nothing unless that is still the gameweek in front
+ * of them. `gw` is `squad.nextEvent` — the same anchor `projectAll` calls
+ * offset 0, so the stored gameweek and the projected one cannot drift apart.
+ *
+ * A payload written before the stamp existed has no gameweek, so it is
+ * dropped rather than honoured: an unknown gameweek is exactly the state this
+ * is here to refuse, and the cost of being wrong is one tap.
+ *
+ * The equality is the whole guard, and deliberately has no `gw == null`
+ * shortcut in front of it. A stored gameweek is always a number — `saveStartCalls`
+ * clears the key rather than writing a null one — so `parsed.gw !== null` is
+ * already true for every payload that exists, and an early return for it was
+ * a branch no state could reach. Mutation-testing it is what showed that:
+ * removing it left every test green.
+ */
+export function loadStartCalls(demo: boolean, gw: number | null): Map<number, StartCall> {
   try {
     const raw = localStorage.getItem(key(demo));
     if (!raw) return new Map();
-    const obj = JSON.parse(raw) as Record<string, string>;
+    const parsed = JSON.parse(raw) as { gw?: unknown; calls?: unknown };
+    if (parsed?.gw !== gw) return new Map();
+    const obj = (parsed.calls ?? {}) as Record<string, string>;
     const out = new Map<number, StartCall>();
     for (const [id, v] of Object.entries(obj)) {
-      // Anything unrecognised is dropped rather than coerced. A stored value
-      // this build does not understand is not evidence of anything.
-      if (v === "starts" || v === "benched") out.set(Number(id), v);
+      // Anything unrecognised is dropped rather than coerced — THE KEY AS WELL
+      // AS THE VALUE, which this used to say and not do. `Number("x")` is
+      // `NaN`, and a `NaN` key can never match `startCalls.get(el.id)`, so it
+      // was invisible to the projection and permanent everywhere else: it
+      // inflated `active.size`, which is half of `startCallsVersion()`, and
+      // `setStartCall` re-persisted it as `"NaN"` on the next write.
+      const n = Number(id);
+      if (!Number.isInteger(n) || n <= 0) continue;
+      if (v === "starts" || v === "benched") out.set(n, v);
     }
     return out;
   } catch {
@@ -208,9 +302,15 @@ export function loadStartCalls(demo: boolean): Map<number, StartCall> {
   }
 }
 
-export function saveStartCalls(demo: boolean, m: Map<number, StartCall>): void {
+export function saveStartCalls(
+  demo: boolean,
+  gw: number | null,
+  m: Map<number, StartCall>
+): void {
   try {
-    if (m.size === 0) localStorage.removeItem(key(demo));
-    else localStorage.setItem(key(demo), JSON.stringify(Object.fromEntries(m)));
+    // No gameweek to stamp means no way to expire it later, so there is
+    // nothing worth writing — see `loadStartCalls`.
+    if (m.size === 0 || gw == null) localStorage.removeItem(key(demo));
+    else localStorage.setItem(key(demo), JSON.stringify({ gw, calls: Object.fromEntries(m) }));
   } catch {}
 }

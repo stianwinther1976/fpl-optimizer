@@ -899,20 +899,30 @@ describe("only the topmost sheet traps focus", () => {
   });
 
   it("checks that before doing any focus work, not after", () => {
-    const at = src.indexOf('if (e.key !== "Tab") return;');
+    const at = src.indexOf("const onKey = (e: KeyboardEvent)");
     const guard = src.indexOf("dialogs[dialogs.length - 1] !== panel", at);
     const firstFocusCall = src.indexOf(".focus()", at);
     expect(guard).toBeGreaterThan(0);
     expect(guard).toBeLessThan(firstFocusCall);
   });
 
-  it("still lets Escape through from either sheet", () => {
-    // Escape is handled before the Tab branch and returns, so the stacking
-    // guard cannot swallow it.
-    const esc = src.indexOf('if (e.key === "Escape")');
-    const tab = src.indexOf('if (e.key !== "Tab") return;');
+  it("closes one sheet per Escape, not the stack", () => {
+    /*
+     * REVERSED FROM WHAT THIS TEST USED TO PIN. It required Escape to be
+     * handled BEFORE the stacking guard, on the reading that letting it through
+     * from either sheet was the generous behaviour. It is not — both listeners
+     * are on `document`, so one press ran both handlers and closed both sheets.
+     * WAI-ARIA's dialog pattern is that Escape dismisses the dialog it is in,
+     * and the sheet underneath here is a chip scenario that took seconds to
+     * compute. So the guard comes first and Escape obeys it.
+     */
+    const onKey = src.indexOf("const onKey = (e: KeyboardEvent)");
+    const guard = src.indexOf("dialogs[dialogs.length - 1] !== panel", onKey);
+    const esc = src.indexOf('if (e.key === "Escape")', onKey);
     expect(esc).toBeGreaterThan(0);
-    expect(esc).toBeLessThan(tab);
+    expect(guard).toBeLessThan(esc);
+    // Escape still reaches the handler at all: it is in the early-out's list.
+    expect(src).toContain('if (e.key !== "Escape" && e.key !== "Tab") return;');
   });
 });
 
@@ -981,7 +991,9 @@ describe("the recent-teams pill keeps its two actions apart", () => {
 
   it("suppresses navigation while the list is being edited", () => {
     const src = readApp("page.tsx");
-    const at = src.indexOf("router.push(`/team/${t.id}`)");
+    // `goTo`, not `router.push` — every in-app navigation now goes through a
+    // marker so the dashboard's back control knows there is a step behind it.
+    const at = src.indexOf("goTo(`/team/${t.id}`)");
     expect(src.slice(at, at + 220)).toMatch(/disabled=\{editing\}/);
   });
 
@@ -1005,8 +1017,961 @@ describe("the reader's line-up calls are hydrated per feed", () => {
     expect(at).toBeGreaterThan(0);
     // The effect's dependency array, within a few lines of the call.
     const tail = dash.slice(at, at + 200);
-    expect(tail).toMatch(/\}, \[entryId\]\)/);
+    expect(tail).toMatch(/\}, \[entryId, squadNextEvent\]\)/);
     // And it is told WHICH feed, rather than assuming one.
-    expect(dash.slice(at, at + 80)).toMatch(/DEMO_ENTRY_ID/);
+    expect(dash.slice(at, at + 90)).toMatch(/DEMO_ENTRY_ID/);
+  });
+
+  it("re-hydrates when the gameweek moves, and stamps the call with it", () => {
+    /*
+     * A call is about ONE match. `loadStartCalls` drops a payload stamped with
+     * a gameweek that is no longer next, but only the STORE expires — the
+     * in-memory set does not, so a session that stays open across a deadline
+     * would keep applying the expired call until a remount. The gameweek has
+     * to be in the dependency array for the expiry to reach the screen.
+     */
+    const dash = read("Dashboard.tsx");
+    expect(dash).toMatch(/const squadNextEvent = data\?\.squad\?\.nextEvent \?\? null;/);
+    expect(dash).toMatch(/hydrateStartCalls\([^)]*squadNextEvent\)/);
+    // And the write path carries the same gameweek, or nothing saved could
+    // ever be loaded back.
+    const modal = read("PlayerModal.tsx");
+    expect(modal).toMatch(/setStartCall\(\s*demo,\s*nextEvent,/);
+  });
+});
+
+describe("the pitch's bench survives an auto-substitution", () => {
+  /*
+   * `benchSortKey` and `benchBadgeFor` are tested properly in `display.test.ts`.
+   * What cannot be tested there is that the components CALL them: the bench
+   * arrays are built inline in JSX, and the bug was a `.sort()` on the raw pick
+   * position. Both pitches on the Dashboard render an auto-subbed gameweek —
+   * the live one and the time machine — and the fix has to reach both.
+   */
+  it("orders and badges both Dashboard benches through the shared rule", () => {
+    const dash = read("Dashboard.tsx");
+    const sorts = dash.match(/benchSortKey\(/g) ?? [];
+    const badges = dash.match(/benchBadgeFor\(/g) ?? [];
+    expect(sorts.length).toBe(4); // two comparators, two operands each
+    expect(badges.length).toBe(2); // one per pitch
+    // And no bench is still sorted on the bare pick order.
+    expect(dash).not.toMatch(/\.sort\(\(a, b\) => a\.pickPosition - b\.pickPosition\)/);
+    expect(dash).not.toMatch(/\.sort\(\(a, b\) => a\.position - b\.position\)/);
+  });
+
+  it("lets Pitch draw no badge at all, rather than defaulting to the row number", () => {
+    // `undefined` means "number it by list position"; `null` means "no number".
+    // Collapsing the two is how a substituted-off starter gets badged "1".
+    const pitch = read("Pitch.tsx");
+    expect(pitch).toMatch(/benchOrder\?: number \| null;/);
+    expect(pitch).toMatch(/p\.benchOrder === undefined \? i \+ 1 : p\.benchOrder/);
+    // Both layouts go through it, and neither keeps the old index-only badge.
+    expect((pitch.match(/benchBadge\(p, i\)/g) ?? []).length).toBe(3);
+    expect(pitch).not.toMatch(/row\(p, i \+ 1\)/);
+  });
+});
+
+describe("the optimizer panel's horizon control", () => {
+  it("does not throw away the Multi-GW plan, which never depended on it", () => {
+    /*
+     * `runPlan` passes a fixed `horizon: 6`, the button says "Plan next 6 GWs"
+     * and the copy says "the next six deadlines" — so the plan on screen is
+     * still an exact answer to the question it was asked. Clearing it cost the
+     * reader the panel's most expensive computation for nothing.
+     */
+    const src = read("OptimizePanel.tsx");
+    const at = src.indexOf("setHorizon(parseInt(");
+    expect(at).toBeGreaterThan(0);
+    const handler = src.slice(at, src.indexOf("}}", at));
+    expect(handler).toContain("setResult(null)");
+    expect(handler).toContain("setChipView(null)");
+    // The stale error belongs to the results being cleared, so it goes too.
+    expect(handler).toContain("setFailure(null)");
+    expect(handler).not.toContain("setPlan(null)");
+    // And the plan really is horizon-independent, which is why the above holds.
+    expect(src).toContain("horizon: 6,");
+  });
+
+  it("announces a failure assertively", () => {
+    // `status` is polite and queues behind whatever the panel is already
+    // saying — which is the progress text for the work that just failed.
+    const src = read("OptimizePanel.tsx");
+    const at = src.indexOf("{failure && (");
+    expect(at).toBeGreaterThan(0);
+    expect(src.slice(at, at + 200)).toContain('role="alert"');
+  });
+});
+
+describe("the mini-league ownership panel", () => {
+  it("counts my squad the way it counts the field's", () => {
+    /*
+     * `eoCount` credits a rival's player on `position <= 11 || bboost`, so
+     * effective ownership is about STARTING elevens. Three different rules were
+     * in play: threats and shields tested all fifteen of mine, differentials
+     * tested `pickPosition <= 11` with no Bench Boost case. A heavily-owned
+     * player on my bench was therefore excluded from "Threats" for being mine
+     * and listed under "Shields", which inverts what he actually is.
+     */
+    const src = read("MiniLeague.tsx");
+    // One rule, and it matches the EO denominator on both halves.
+    expect(src).toMatch(/const inMyXi = \(p: \{ pickPosition: number \}\) =>\s*p\.pickPosition <= 11 \|\| benchBoosted;/);
+    expect(src).toContain('const benchBoosted = data.squad.activeChip === "bboost";');
+    expect(src).toContain("p.position <= 11 || bboost");
+    // Every consumer goes through it — one definition, two uses, no second
+    // filter open-coded beside it.
+    expect((src.match(/inMyXi\b/g) ?? []).length).toBe(3);
+    expect(src).not.toMatch(/p\.pickPosition <= 11 &&/);
+    // `myIds` — the XI — is what threats and shields split on.
+    expect(src).toMatch(/threats[\s\S]{0,120}!myIds\.has\(id\) && v >= 0\.4/);
+    expect(src).toMatch(/shields = ranked\.filter\(\(\[id, v\]\) => myIds\.has\(id\) && v >= 0\.4\)/);
+  });
+
+  it("says which threats are already in your squad, sitting on your bench", () => {
+    /*
+     * Narrowing `myIds` to the XI fixed the shield inversion and handed the
+     * benched player the other wrong label: not in `myIds`, so printed under a
+     * heading asserting you do not own him — and, because the column is
+     * `slice(0, 5)`, displacing players the reader could actually buy. There
+     * are three states, not two, and the third one's move is to start him.
+     */
+    const src = read("MiniLeague.tsx");
+    expect(src).toContain(
+      "const mySquadIds = new Set(data.squad.currentPlayers.map((p) => p.element.id));"
+    );
+    expect(src).toMatch(/benched: mySquadIds\.has\(id\)/);
+    expect(src).toContain('note={t.benched ? "(on your bench)" : undefined}');
+    // The heading and the empty state must not claim you do not own them.
+    expect(src).not.toContain("they own, you don&apos;t");
+    expect(src).not.toMatch(
+      /<div className="text-xs text-muted">\s*No high-ownership player is missing/
+    );
+  });
+});
+
+describe("a sheet that is not on screen", () => {
+  it("gets out of the keyboard's way instead of trapping it", () => {
+    /*
+     * These mount inside a tab panel, so a slow one can land after the reader
+     * has changed tabs and end up `display:none`. It is then invisible but is
+     * still the only `[role="dialog"]` in the document, so the Tab trap is
+     * live, nothing inside it has an `offsetParent`, and the "nothing
+     * focusable" branch focuses a hidden element — measured in Chromium as six
+     * Tab presses that never move focus off `<body>`, with no visible dialog
+     * and no reason for the reader to press Escape.
+     */
+    const src = read("Sheet.tsx");
+    const guard = src.indexOf("panel.offsetParent === null");
+    expect(guard).toBeGreaterThan(0);
+    // Before any focus work — the trap's first act is to enumerate `items`.
+    const onKey = src.indexOf("const onKey = (e: KeyboardEvent)");
+    expect(guard).toBeGreaterThan(onKey);
+    expect(guard).toBeLessThan(src.indexOf("const items = ", onKey));
+    // But AFTER Escape: a sheet nobody can see must still be dismissible.
+    expect(src.indexOf('if (e.key === "Escape")', onKey)).toBeLessThan(guard);
+  });
+});
+
+describe("things the accessibility tree has to be told", () => {
+  /*
+   * All of these were verified in Chromium against the demo before being
+   * pinned here, because a source-level guard cannot see a rendered tree. What
+   * this block protects is the tokens surviving a refactor; what proved they
+   * WORK was the browser.
+   */
+  it("announces the live score, since the tab rewrites it every 30 seconds", () => {
+    // The app had no live region anywhere. The Live tab repaints the total, the
+    // bench, the clock and the "Updated" stamp on a 30-second poll, and a
+    // reader who cannot see the number had no way to know it moved — which on
+    // that tab is the whole point of the tab. Polite: a score is worth hearing
+    // at the next pause, not worth interrupting a sentence for.
+    const src = read("LiveTab.tsx");
+    expect(src).toContain('aria-live="polite"');
+    expect(src).toMatch(/role="status"[\s\S]{0,80}aria-live="polite"/);
+    // On the header, not on the fifteen rows: announcing every row on every
+    // poll is noise. There is exactly one, and it is the score header's card.
+    expect((src.match(/aria-live=/g) ?? []).length).toBe(1);
+    const at = src.indexOf('aria-live="polite"');
+    expect(src.slice(Math.max(0, at - 400), at)).toContain("card flex flex-wrap items-center");
+  });
+
+  it("keeps the promise `role=tablist` makes about the keyboard", () => {
+    // Every tab had `tabindex` unset and the arrow keys did nothing, so the
+    // strip announced a pattern it did not implement — worse than plain
+    // buttons, which at least do not lie about how they work. Verified in
+    // Chromium: ArrowRight moves selection and focus, End goes to the last tab.
+    const src = read("Dashboard.tsx");
+    expect(src).toContain("tabIndex={tab === key ? 0 : -1}");
+    for (const key of ["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp", "Home", "End"]) {
+      expect(src, `${key} is not handled`).toContain(`"${key}"`);
+    }
+    expect(src).toContain("document.getElementById(`tab-${order[to]}`)?.focus()");
+  });
+
+  it("states which layout is selected somewhere other than the colour", () => {
+    // The two buttons differed only by `btn-primary` versus `text-muted`, so
+    // the accessibility tree held two buttons and no state.
+    expect(read("Pitch.tsx")).toContain("aria-pressed={layout === v}");
+  });
+
+  it("lets a keyboard reach every horizontally scrolling panel", () => {
+    /*
+     * Measured at 420px on the fixtures table: scrollWidth 562 against
+     * clientWidth 386, with every focusable element inside it in the leftmost
+     * column — so 45 Tab stops left `scrollLeft` at 0 and two gameweeks and the
+     * average-difficulty column were unreachable without a pointer. This is a
+     * rule over the directory rather than a list of the panels someone thought
+     * of, which is how that one came to be missed.
+     */
+    const offenders: string[] = [];
+    for (const f of componentFiles) {
+      const src = read(f);
+      for (const m of src.matchAll(/className=(?:\{`|")[^"`]*overflow-x-auto[^"`]*(?:`\}|")/g)) {
+        const after = src.slice(m.index ?? 0, (m.index ?? 0) + 400);
+        const before = src.slice(Math.max(0, (m.index ?? 0) - 400), m.index ?? 0);
+        if (!/tabIndex=\{0\}/.test(after + before)) offenders.push(f);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe("the match sheet reads one match", () => {
+  it("goes through fixtureLines rather than the gameweek totals", () => {
+    /*
+     * `live.elements[].stats` is a GAMEWEEK total. Read as a per-match figure
+     * it listed players who only appeared in the other leg, showed them at
+     * 180', and ranked "top performers in this match" on two legs of BPS —
+     * the same family of defect `provisionalBonus` was rewritten to remove,
+     * still live one file over.
+     */
+    const src = read("MatchModal.tsx");
+    expect(src).toMatch(/fixtureLines\(fixture, live,/);
+    expect(src).not.toMatch(/live\?\.elements\.map\(\(e\) => \[e\.id, e\.stats\]\)/);
+    expect(src).not.toContain("total_points");
+  });
+});
+
+describe("the chip advisor's copy", () => {
+  const src = read("OptimizePanel.tsx");
+
+  it("carries the wildcard caveat on the sheet as well as the card", () => {
+    /*
+     * `wcGain` is `max(0, bestSquadWithinValue − keepSquad)`: bounded below by
+     * zero, and a freshly optimised squad beats a held one over any window, so
+     * it is almost always comfortably positive. The advisor card says in so
+     * many words that this is the size of a gap and not a reason to play the
+     * chip; the sheet showed the identical quantity under a bigger heading with
+     * no such sentence.
+     */
+    const at = src.indexOf('s.chip === "wildcard" && (');
+    expect(at).toBeGreaterThan(0);
+    expect(src.slice(at, at + 500)).toMatch(/not a reason to play the chip this week/);
+  });
+
+  it("gives a chip the reader does not hold no call to action", () => {
+    // The card dims and badges itself "Used / outside window", but the timing
+    // note rendered at full strength regardless — urging the reader to wait for
+    // a gameweek they cannot play it in, in the one colour that means "act".
+    const at = src.indexOf("{a.timing.note && (");
+    expect(at).toBeGreaterThan(0);
+    const block = src.slice(at, at + 1400);
+    expect(
+      (block.match(/available && a\.timing\.verdict === "structural-window-ahead"/g) ?? []).length
+    ).toBe(2); // the colour and the hourglass
+  });
+
+  it("uses the reader's spent chips to decide which window to reason about", () => {
+    // Two of each chip since 2025/26, one per half. Without this the advisor
+    // reasons over a window the reader has no chip left for.
+    expect(src).toContain("usedChips: data.history?.chips ?? []");
+    expect((src.match(/usedChips: data\.history\?\.chips \?\? \[\]/g) ?? []).length).toBe(2);
+  });
+
+  it("scores a chip preview on the same projection as the advisor", () => {
+    // `showChip` awaited the past-season load and not the recent-form load, so
+    // a chip tapped before Optimize projected without recent form while the
+    // advisor projected with it — Wildcard "+2.3 pts" against +0.0.
+    const at = src.indexOf("async function showChip");
+    const body = src.slice(at, src.indexOf("setChipView(scen)", at));
+    expect(body).toContain("await loadRecentForm()");
+    expect(body).toContain("recentForm: recent");
+  });
+});
+
+describe("tap targets on a phone", () => {
+  /*
+   * Measured in Chromium at 360x740 across every tab, before and after. The
+   * worst offenders were the fixtures table's club buttons at 71x20, the Stats
+   * sort headers at 34x24, "Refresh now" at 100x30, the Optimize chip badges at
+   * 34 tall, and the price slider's 16px track. The tab strip and the
+   * Pitch/List toggle already used `min-h-11`, so the 44px floor was known and
+   * applied to two controls out of thirty.
+   *
+   * `min-h-11` is 2.75rem = 44px. What is deliberately NOT enforced is WIDTH:
+   * seven tabs across 360px cannot each be 44 wide, and a table column header
+   * is as wide as its label. Height is the axis a thumb misses on.
+   */
+  const sites: [string, string][] = [
+    ["FixtureTicker.tsx", "min-h-11 text-left hover:text-accent"], // club buttons, were 20 tall
+    ["StatsTable.tsx", "-m-1 min-h-11 p-1 uppercase"], // sort headers, were 24
+    ["StatsTable.tsx", "min-h-11 rounded-md px-3 py-1.5"], // position pills, were 32
+    ["StatsTable.tsx", 'className="h-11 accent-[var(--accent)]"'], // price slider, 16px track
+    ["LiveTab.tsx", "mt-1 min-h-11 rounded-md border"], // Refresh now, was 30
+    ["LiveTab.tsx", "flex min-h-11 w-full items-center gap-3"], // player rows, were 41
+    ["OptimizePanel.tsx", "-m-1.5 flex min-h-11 items-center p-1.5"], // chip badges, were 34
+    ["MiniLeague.tsx", "flex min-h-11 cursor-pointer items-center"], // <summary>, was 16
+    ["PastSeasons.tsx", "grid min-h-11 w-full"], // season rows, were 36
+    ["PointsBreakdown.tsx", "min-h-11 rounded-lg border border-border-c"], // select, was 36
+  ];
+
+  it("keeps every control that was under 44px tall at the floor", () => {
+    const missing = sites.filter(([file, token]) => !read(file).includes(token));
+    expect(missing.map(([f, t]) => `${f}: ${t}`)).toEqual([]);
+  });
+
+  it("keeps the remove control on the landing page a full target", () => {
+    // It renders as a bare "✕" and was h-9 w-9.
+    const src = fs.readFileSync(path.resolve(__dirname, "../../app/page.tsx"), "utf8");
+    expect(src).toContain("flex h-11 w-11 items-center justify-center rounded-full");
+  });
+});
+
+describe("this gameweek's squad versus the squad to optimize from", () => {
+  /*
+   * `SquadState.players` carries next gameweek's transfers and, in a Free Hit
+   * week, is the fifteen the Free Hit replaced. `currentPlayers` is what is on
+   * the pitch. Anything rendered against THIS gameweek's live scores — or
+   * compared against rivals' teams for this gameweek — wants the second.
+   *
+   * A rule over the directory, because the first pass switched the Dashboard
+   * and the Live tab and missed the mini-league, which compares my side against
+   * `api.picks(rival, currentEvent)`.
+   */
+  it("uses currentPlayers everywhere a live score or a rival comparison is drawn", () => {
+    for (const f of ["Dashboard.tsx", "LiveTab.tsx", "MiniLeague.tsx"]) {
+      const src = read(f);
+      for (const m of src.matchAll(/(?:data\.)?squad!?\.players\b/g)) {
+        const at = m.index ?? 0;
+        const line = src.slice(src.lastIndexOf("\n", at) + 1, src.indexOf("\n", at));
+        // Team value is the one legitimate use: it pairs with `squad.bank`,
+        // which `buildSquadState` adjusts by the same pending transfers.
+        const isTeamValue = line.includes("sellPrice");
+        // A mention inside a comment is documentation, not a call site.
+        const isComment = /^\s*(\*|\/\/|\/\*)/.test(line);
+        expect(isTeamValue || isComment, `${f}: ${line.trim()}`).toBe(true);
+      }
+    }
+  });
+
+  it("keeps the optimizer on `players`, which is what it is for", () => {
+    // The mirror rule: the panel that plans NEXT gameweek must not be moved to
+    // `currentPlayers` by someone applying the rule above too broadly.
+    const src = read("OptimizePanel.tsx");
+    expect((src.match(/owned: squad!\.players/g) ?? []).length).toBe(3);
+    expect(src).not.toContain("owned: squad!.currentPlayers");
+  });
+});
+
+describe("the vice-captain takes over on the same signal in both tabs", () => {
+  it("asks the auto-sub projection, not just whether bonus is confirmed", () => {
+    /*
+     * `LiveTab` uses `gwDone || the projection dropped him`; the Dashboard used
+     * `gwFinished` alone, which waits for `finished` — bonus confirmed — on
+     * every fixture. Since the projection was moved to full time, the two
+     * disagreed for the hours FPL takes to settle a Saturday: probed at six
+     * points apart on identical data, 66 against 72. A takeover turns on
+     * MINUTES, which are settled at the whistle.
+     */
+    const dash = read("Dashboard.tsx");
+    expect(dash).toContain("autoSubs?.out.has(cap.element.id)");
+    const live = read("LiveTab.tsx");
+    expect(live).toContain("gwDone || blankedStarters.has(cap.element.id)");
+    // And both read the armband off the fifteen actually fielded.
+    for (const src of [dash, live]) {
+      expect(src).toMatch(/currentPlayers\.find\(\(p\) => p\.isCaptain\)/);
+      expect(src).toMatch(/currentPlayers\.find\(\(p\) => p\.isViceCaptain\)/);
+    }
+  });
+});
+
+describe("the player sheet in the gameweek time machine", () => {
+  /*
+   * Everything below the score is present tense, and under a GW15 heading that
+   * is a sheet lying about which week it describes. Read off the demo before
+   * the fix: "Recent gameweeks — started 5 of last 5" listed GW20 down to
+   * GW16 — every one LATER than the gameweek on display, one still in play —
+   * the transfer badge was GW20's, and the price predictor, FPL's next-gameweek
+   * projection and "Upcoming fixtures GW21-23" were all about today.
+   */
+  const modal = read("PlayerModal.tsx");
+
+  it("cuts the recent list at the gameweek being viewed", () => {
+    // The cut moved out of the fetch and into a memo, so the SEASON block can
+    // take its own (inclusive) cut of the same rounds — see the test below.
+    expect(modal).toMatch(/played\.filter\(\(r\) => r\.round < asOfGw\)/);
+    // And re-cuts it when the reader moves the time machine with the sheet
+    // open — in a MEMO. The fetch keys on `element.id` alone; keying it on
+    // `asOfGw` too re-ran `setPlayed(null)` on every step, so the season block
+    // flashed "Loading…" and the chips vanished for data already in hand.
+    expect(modal).toContain("}, [played, asOfGw]);");
+    expect(modal).toContain("}, [element.id]);");
+  });
+
+  it("drops every block that has no past-tense reading", () => {
+    for (const token of [
+      // FPL's next-gameweek projection, its price predictor, and the fixtures
+      // AFTER today — all three about a week later than the heading.
+      "{asOfGw == null && element.ep_next != null",
+      "{asOfGw == null && price && (",
+      "{asOfGw == null && upcoming.length > 0 && (",
+      // Injury news and the set-piece depth chart are statements about now
+      // with no historic value published, so there is nothing to relabel.
+      "{asOfGw == null && element.news && (",
+      "{asOfGw == null && (duties.length > 0 || netTransfers !== 0) && (",
+      // The reader's team-news buttons: a press conference cannot be held
+      // about a match that has been played, and tapping them wrote a call
+      // stamped with TODAY'S gameweek from a sheet describing a past one.
+      "{asOfGw == null && nextEvent != null && (",
+    ]) {
+      expect(modal, token).toContain(token);
+    }
+    // The transfer badges sit inside the duties wrapper, so they must not
+    // carry a second guard of their own — an unreachable branch reads as a
+    // protection that is doing something.
+    expect(modal).not.toContain("asOfGw == null && netTransfers");
+  });
+
+  it("includes the gameweek in its own heading, and excludes it from the form list", () => {
+    /*
+     * The two blocks shared one `round < asOfGw` array. Under a "GW15 points —
+     * 8 pts" heading the block beneath read "Season to GW15 — 87" when the
+     * inclusive figure is 95: measured on demo element 28, short by 5 / 8 / 9
+     * at GW10 / GW15 / GW20, always exactly the gameweek in the heading. FPL's
+     * own site shows the inclusive number.
+     *
+     * The recent list must keep the exclusive cut — that gameweek is already
+     * rendered above it as the headline, so including it would print the same
+     * round twice.
+     */
+    expect(modal).toMatch(/played\.filter\(\(r\) => r\.round < asOfGw\)/);
+    expect(modal).toMatch(/played\.filter\(\(r\) => r\.round <= asOfGw\)/);
+  });
+
+  it("does not print a summed zero before the rounds have arrived", () => {
+    // `toDate` is null until the fetch lands and stays null if it fails —
+    // `.catch(() => {})` swallows it — and summing an empty array gave a
+    // confident "Season to GW15 — Points 0 / Goals 0 / xGI 0.00".
+    expect(modal).toMatch(/if \(!played\) return null;/);
+    expect(modal).toMatch(/asOfGw != null && toDate == null \?/);
+  });
+
+  it("sums the season it is showing rather than printing today's", () => {
+    /*
+     * The block read POINTS / FORM / OWNED / GOALS / ASSISTS / XGI straight
+     * off the `element` row, which is today's, under a past gameweek's
+     * heading. The sheet already fetches this player's rounds, so the four
+     * countable figures have a real past-tense reading; form and ownership do
+     * not, and are dropped rather than relabelled.
+     */
+    expect(modal).toContain("`Season to GW${asOfGw}`");
+    expect(modal).toMatch(/points \+= r\.total_points/);
+    expect(modal).not.toMatch(/\["Form", element\.form\][\s\S]{0,400}asOfGw != null/);
+  });
+
+  it("counts only matches that have been played", () => {
+    // FPL emits a history row from the DEADLINE with `minutes: 0` and
+    // `starts: 0`. 538 of 600 players on the 2026-08-21 snapshot carried one
+    // inside their last-five window, so "started 4 of last 5" was read off a
+    // match that had not kicked off — and the chip for it rendered a red 0'.
+    expect(modal).toMatch(/rows\.filter\(\(r\) => r\.team_h_score !== null\)/);
+  });
+
+  it("is told which gameweek it is showing", () => {
+    const dash = read("Dashboard.tsx");
+    expect(dash).toContain('asOfGw={tab === "team" && hist ? hist.gw : null}');
+  });
+});
+
+describe("nobody reads FPL's gameweek average raw", () => {
+  /*
+   * `publishedAverage` is tested properly in `display.test.ts`. What cannot be
+   * tested there is that the components CALL it — the bug was three separate
+   * `?? null` expressions inline in JSX, each of which reads FPL's 0-for-not-
+   * published as a real score. Extracting the helper and leaving any one of
+   * them behind would pass every test in `display.test.ts` while shipping the
+   * original bug on that screen, which is exactly the failure mode this file
+   * exists for.
+   */
+  it("routes every average through the helper", () => {
+    for (const f of ["LiveTab.tsx", "HistoryChart.tsx", "KpiHistoryModal.tsx"]) {
+      const src = read(f);
+      expect(src, f).toMatch(/publishedAverage\(/);
+      // No raw read left in the CODE. The comments explaining the fix name the
+      // field, so they are stripped first — matching the bare token would pin
+      // the prose rather than the call.
+      const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+      expect(code.match(/average_entry_score/g) ?? [], f).toHaveLength(0);
+    }
+  });
+});
+
+describe("the chip sheet can say it has no gameweek", () => {
+  /*
+   * `chipScenario` now returns `bestGw: null` when no gameweek in the horizon
+   * is inside the chip's own window — expired, or not open yet. If the sheet
+   * still rendered `Best in GW{s.bestGw}` it would print "Best in GWnull", and
+   * the pitch below it would be handed a null `nextEvent`. The card beside this
+   * already declined to name a gameweek in that state; the sheet named GW20 for
+   * a chip that dies at GW19.
+   */
+  it("renders the empty-window branch instead of a gameweek", () => {
+    const src = read("OptimizePanel.tsx");
+    expect(src).toContain("{s.bestGw == null ? (");
+    expect(src).toMatch(/isSquadChip && s\.xi && s\.squad && s\.bestGw != null/);
+  });
+});
+
+describe("a recent-form load is stamped with the feed it started under", () => {
+  /*
+   * `setRecentForm` drops a map whose feed is no longer current, but only if
+   * the caller tells it which feed the data came from. Capturing it AFTER the
+   * await would hand back exactly the bug the store now guards against —
+   * `currentFeed()` evaluated at write time is the feed the reader navigated
+   * TO, not the one the hundreds of element-summary round trips ran under.
+   */
+  it("captures the feed before the fetch, not after it", () => {
+    const src = read("OptimizePanel.tsx");
+    const at = src.indexOf("const feed = currentFeed();");
+    expect(at).toBeGreaterThan(0);
+    const fetchAt = src.indexOf("await fetchRecentForm(");
+    expect(fetchAt).toBeGreaterThan(at);
+    expect(src).toMatch(/publishRecentForm\(map, feed\)/);
+  });
+});
+
+describe("the transfer card prints the plain horizon total", () => {
+  /*
+   * `keepHorizonXp` is the ranking key and is weighted by `gwDecay ** i`.
+   * Printing it as "327.0 xp" under "next 8 GWs", beside "best XI projects
+   * 61.1 xp in GW21", gave the reader two numbers on one card that cannot be
+   * reconciled — 40.9 a week against a stated 61.1, with no falling fixtures
+   * and nothing anywhere mentioning weighting. `optimizer.test.ts` pins the two
+   * quantities apart; this pins which one reaches the screen.
+   */
+  it("hands PlanRow the undiscounted sum", () => {
+    const src = read("OptimizePanel.tsx");
+    expect(src).toMatch(/net=\{result\.keepHorizonPlainXp\}/);
+    expect(src).not.toMatch(/net=\{result\.keepHorizonXp\}/);
+  });
+
+  it("says once what the weighting does, and what it does not", () => {
+    // The decay chooses WHICH players to move; the points and the hits are
+    // plain sums. Saying "plans are ranked on a weighted total" was true of
+    // the version that charged a −4 as 5.99.
+    const src = read("OptimizePanel.tsx");
+    expect(src).toMatch(/chosen on a weighted total/);
+    expect(src).toMatch(/a hit costs what FPL charges for it/);
+  });
+});
+
+describe("the safety score follows the feed and counts the same points", () => {
+  /*
+   * `bandMedianScore` is tested properly in `live.test.ts`. What cannot be
+   * tested there is that `LiveTab` calls it, and that the sample is FETCHED
+   * once but SCORED every poll. Both halves were wrong in the same
+   * comparison: one effect did the fetching and the scoring behind a ref that
+   * never reset, so the benchmark froze at the first live payload while the
+   * reader's own total moved every thirty seconds; and the reader's total
+   * carried projected bonus while the benchmark did not.
+   */
+  it("scores the sample in a memo over the live payload, not in the fetch", () => {
+    const src = read("LiveTab.tsx");
+    expect(src).toMatch(/const bandSafety = useMemo\(/);
+    expect(src).toMatch(/bandMedianScore\(/);
+    // The fetch stores picks and nothing else — no median inside it.
+    const at = src.indexOf("bandTried.current = true;");
+    expect(at).toBeGreaterThan(0);
+    const end = src.indexOf("}, [currentEvent, data.entry]);", at);
+    expect(end).toBeGreaterThan(at);
+    const effect = src.slice(at, end);
+    expect(effect).toContain("setBandPicks(picks)");
+    // No scoring inside the fetch — that is the half that used to freeze.
+    expect(effect).not.toContain("total_points");
+    expect(effect).not.toContain("bandMedianScore");
+  });
+
+  it("hands the rivals the same projected bonus the reader gets", () => {
+    const src = read("LiveTab.tsx");
+    expect(src).toMatch(/bonus\?\.byElement \?\? null/);
+  });
+});
+
+describe("the accuracy card reports itself in both directions", () => {
+  /*
+   * `improving = last.mae < first.mae` gating the summary meant a reader never
+   * saw "average miss UP from X to Y" — a self-grading card that only reported
+   * itself when the news was good, directly under the unhedged sentence
+   * "Systematic misses shrink automatically over time".
+   */
+  it("has no one-sided gate on the trend line", () => {
+    const src = read("ModelAccuracy.tsx");
+    expect(src).not.toMatch(/const improving\b/);
+    expect(src).toMatch(/const maeDelta = /);
+    // Both words are in the file, and the arrow follows the sign.
+    expect(src).toMatch(/maeDelta < 0 \? "down" : "up"/);
+    expect(src).toMatch(/maeDelta < 0 \? "▼" : "▲"/);
+  });
+
+  it("stopped promising in prose what the table has to show", () => {
+    const src = read("ModelAccuracy.tsx");
+    expect(src).not.toContain("Systematic misses shrink automatically over time");
+  });
+});
+
+describe("the calibration grades the projection the app ships", () => {
+  /*
+   * `pastSeasonStore` records the original of this failure: "calibration was
+   * grading predictions the shipped drafter never made". It came back for a
+   * different input — once `OptimizePanel` has run, the pitch and the Stats
+   * table are built WITH recent form while the calibration snapshot was built
+   * without it, and the calibration's output is a per-position multiplier
+   * applied to every player in the game.
+   *
+   * Recent form is model input from the official API, not a reader's opinion,
+   * so it belongs in the graded run. `startCalls` is the deliberate exception
+   * and `lineup.test.ts` pins that separately.
+   */
+  it("hands the snapshot the same recent form the pitch uses", () => {
+    const dash = read("Dashboard.tsx");
+    const at = dash.indexOf("snapshotPredictions(");
+    expect(at).toBeGreaterThan(0);
+    const before = dash.slice(Math.max(0, at - 2600), at);
+    const call = before.lastIndexOf("projectAll({");
+    expect(call).toBeGreaterThanOrEqual(0);
+    expect(before.slice(call)).toMatch(/recentForm: cachedRecentForm\(\) \?\? undefined/);
+  });
+
+  it("re-takes the snapshot when recent form lands", () => {
+    // Without the dependency the snapshot is taken once, before the fetch, and
+    // never revisited — so the fix above would be inert.
+    const dash = read("Dashboard.tsx");
+    const at = dash.indexOf("snapshotPredictions(");
+    const deps = dash.indexOf("}, [data, entryId, recentReady]);", at);
+    expect(deps).toBeGreaterThan(at);
+  });
+});
+
+describe("the Stats table says its xP will move", () => {
+  /*
+   * Recent form is fetched by `OptimizePanel`, published to `recentFormStore`
+   * and picked up by the Dashboard's projection, so a reader who looks at
+   * Stats, presses Optimize and comes back sees a different xP for the same
+   * player in one page load (measured on the demo: ARS Back 3, 19.5 then
+   * 19.4). The convergence is the point — the two tabs used to disagree
+   * permanently — but an unannounced change to the number the reader is
+   * comparing players on is its own defect.
+   */
+  it("is told whether recent form is in the projection", () => {
+    expect(read("Dashboard.tsx")).toMatch(/recentFormApplied=\{cachedRecentForm\(\) != null\}/);
+    const stats = read("StatsTable.tsx");
+    expect(stats).toMatch(/recentFormApplied = false,/);
+    expect(stats).toMatch(/xP sharpens once you run Optimize/);
+    expect(stats).toMatch(/matches the Optimize tab exactly/);
+  });
+});
+
+describe("the recommendation badge follows the number beside it", () => {
+  /*
+   * `gainVsKeep` is now a plain-points quantity net of the hit. Ranking the
+   * plans on the decayed `netXp` while printing the plain gain could badge a
+   * plan the reader cannot see is ahead — the same split that let a −4 hit be
+   * charged as 5.99 plain points at horizon 8.
+   */
+  it("ranks on the plain net, not the decayed one", () => {
+    const src = read("OptimizePanel.tsx");
+    expect(src).toMatch(/plan\.plainNetXp === Math\.max\(\.\.\.result\.plans\.map\(\(p\) => p\.plainNetXp\)\)/);
+    /*
+     * EVERY reader of "which plan is best", not just the equality form. The
+     * first version of this guard pinned `plan.netXp === Math.max(` and let a
+     * surviving `sort((a, b) => b.netXp - a.netXp)` through — which is what
+     * still chose the Line-up pitch's eleven and the "Against the field"
+     * figure, so the badge and the pitch under it described different teams.
+     */
+    for (const f of ["OptimizePanel.tsx"]) {
+      const code = read(f)
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/[^\n]*/g, "");
+      expect(code, f).not.toMatch(/\bnetXp\b/);
+    }
+    const opt = fs
+      .readFileSync(path.join(DIR, "../lib/optimizer.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // `optimizer.ts` still computes `netXp`; what it must not do is rank on it.
+    expect(opt).not.toMatch(/sort\(\(a, b\) => b\.netXp - a\.netXp\)/);
+  });
+});
+
+describe("every tab computes a live score the same way", () => {
+  /*
+   * `liveEntryScore` is tested properly in `live.test.ts`. What cannot be
+   * tested there is that the components USE it. Three tabs had three different
+   * answers for one manager: the Live tab with provisional bonus and the
+   * vice-captain takeover, the Team pitch corner with the takeover and no
+   * bonus, the Mini-league row with neither.
+   */
+  it("gives the Mini-league the shared definition", () => {
+    const src = read("MiniLeague.tsx");
+    expect(src).toMatch(/liveEntryScore\(/);
+    // And no hand-rolled loop left behind.
+    expect(src).not.toMatch(/pointsOf\.get\(p\.element\) \?\? 0\) \* mult/);
+  });
+
+  it("gives the Team pitch the provisional bonus the Live tab shows", () => {
+    const src = read("Dashboard.tsx");
+    expect(src).toMatch(/liveBonus\?\.byElement\.get\(e\.id\) \?\? 0/);
+    expect(src).toMatch(/provisionalBonus\(/);
+  });
+
+  it("moves the Team pitch's armband under every chip, as FPL does", () => {
+    /*
+     * THE OTHER HALF, WHICH THE GUARD ABOVE COULD NOT SEE — it pinned the bonus
+     * term, which is the half the code had already fixed.
+     *
+     * `autoSubs` bailed to null for `bboost` and `freehit`, and `out` is what
+     * fires the vice-captain takeover. So the armband stopped moving in exactly
+     * the two weeks a reader is most invested in. `LiveTab` states the rule:
+     * "Bench Boost cancels the substitution but not the vice-captain rule,
+     * which FPL applies in every week regardless of chip". Measured on a
+     * constructed universe at full time with bonus unconfirmed, captain
+     * blanked: Bench Boost 39 on the Live tab against 37 on the pitch, Free Hit
+     * 28 against 23, and 27 against 18 with a starter blanked as well.
+     */
+    const src = read("Dashboard.tsx");
+    // The XI split still bails; the blanked set does not.
+    expect(src).toMatch(/xi: noSubs \? null : new Set\(effectiveXi\), out: new Set\(out\)/);
+    expect(src).not.toMatch(/if \(data\.picks\.active_chip === "bboost"\) return null;/);
+    expect(src).not.toMatch(/if \(data\.picks\.active_chip === "freehit"\) return null;/);
+  });
+
+  it("takes auto-subs under Free Hit, and only cancels them under Bench Boost", () => {
+    /*
+     * FPL applies auto-substitutions under Free Hit exactly as in an ordinary
+     * gameweek; Bench Boost is the one that cancels them, because all fifteen
+     * already score. The bail covered both, so under a Free Hit the pitch
+     * counted the picked eleven while every other surface counted the
+     * substituted one — 90 against 96 on the constructed universe, 84 against
+     * 96 with a starter blanked as well.
+     */
+    const src = read("Dashboard.tsx");
+    expect(src).toMatch(/const noSubs = data\.picks\.active_chip === "bboost";/);
+  });
+});
+
+
+describe("a sheet is a screen, so the back gesture closes it", () => {
+  /*
+   * `Sheet` closed on Escape and on a tap outside — neither of which exists as
+   * a reflex on a phone, where there is no Escape key at all — so the edge
+   * swipe fell through to the browser and took the whole page with it. Opening
+   * a player from the pitch and swiping back left the team entirely.
+   *
+   * Verified in Chromium against the dev server: with the fix, one back leaves
+   * the sheet closed and the path still `/team/999999`; five open/close cycles
+   * by Escape leave the history stack level, and one back from the clean page
+   * then goes to `/` — which is the proof that closing by any other route hands
+   * the entry back rather than leaking it.
+   */
+  const sheet = read("Sheet.tsx");
+
+  it("takes a history entry while it is open", () => {
+    expect(sheet).toMatch(/window\.history\.pushState\(\{ \.\.\.window\.history\.state \}, ""\)/);
+    expect(sheet).toMatch(/addEventListener\("popstate"/);
+  });
+
+  it("spreads the existing state rather than replacing it", () => {
+    // Next keeps its own routing state in `history.state`; a bare object
+    // breaks its popstate handling.
+    expect(sheet).not.toMatch(/pushState\(\{\}/);
+    expect(sheet).not.toMatch(/pushState\(null/);
+  });
+
+  it("defers the push a frame, so a StrictMode remount costs nothing", () => {
+    /*
+     * Pushing synchronously meant push, teardown's `history.back()`, push
+     * again — and `back()` is asynchronous, so the pop it queued landed after
+     * the second mount and closed the sheet the reader had just opened.
+     * Measured: the player sheet appeared and vanished within a frame,
+     * `[role="dialog"]` never observable.
+     */
+    expect(sheet).toMatch(/requestAnimationFrame\(\(\) => \{/);
+    expect(sheet).toMatch(/cancelAnimationFrame\(frame\)/);
+    expect(sheet).toMatch(/if \(cancelled\) return;/);
+  });
+
+  it("gives the entry back when it closes any other way", () => {
+    // The X, Escape, a tap outside. Without this the stack grows by one per
+    // sheet opened and the back gesture stops working on the page underneath.
+    expect(sheet).toMatch(/if \(pushed && !popped\) window\.history\.back\(\)/);
+  });
+
+  it("lets only the topmost sheet act on a pop", () => {
+    /*
+     * A chip sheet can open a player sheet on top of itself; one popstate
+     * reaches both listeners, and without this both would close. Same rule the
+     * Escape handler above it uses — pinned here because the stacked case could
+     * not be reached through the demo UI to verify in a browser.
+     */
+    const at = sheet.indexOf('addEventListener("popstate"');
+    expect(at).toBeGreaterThan(0);
+    const onPop = sheet.slice(sheet.indexOf("const onPop = ()"), at);
+    expect(onPop).toContain('querySelectorAll(\'[role="dialog"]\')');
+    expect(onPop).toMatch(/dialogs\[dialogs\.length - 1\] !== panelRef\.current/);
+  });
+
+  it("keeps `onClose` in a ref, so the effect runs once per sheet", () => {
+    // An effect keyed on `onClose` pushes a second entry every time the parent
+    // re-renders, so the reader would have to swipe as many times as the
+    // dashboard had rendered before anything closed.
+    expect(sheet).toMatch(/const closeRef = useRef\(onClose\)/);
+    expect(sheet).toMatch(/closeRef\.current\(\)/);
+  });
+});
+
+describe("the fixture card can say FPL has not flagged kick-off", () => {
+  /*
+   * `kickOffPassed` is tested properly in `display.test.ts`. What cannot be
+   * tested there is that the card CALLS it — and the whole point is that a
+   * reader looking at "HUL v MUN / Sat 13:30" two minutes after the whistle
+   * cannot tell a late FPL flag from an app that has stopped fetching.
+   */
+  it("uses the third state instead of falling back to the kick-off time", () => {
+    const src = read("LiveTab.tsx");
+    expect(src).toMatch(/kickOffPassed\(f, \(updatedAt \?\? new Date\(\)\)\.getTime\(\)\)/);
+    expect(src).toContain('"waiting on FPL"');
+    // Measured against the last successful poll, not the wall clock: the point
+    // is to describe the DATA's age, and a stalled poll must not keep counting.
+    expect(src).not.toMatch(/kickOffPassed\(f, Date\.now\(\)\)/);
+  });
+});
+
+describe("the Live tab cannot present stale numbers as live", () => {
+  /*
+   * A reader watched Hull v Man Utd reach the hour mark with the fixture card
+   * still reading 2' and 0-0, in accent green with a live border, beside
+   * "Updated 14:45:14" and "Auto-refresh every 30s". Every one of those was
+   * true about the REQUEST. None of them was true about the DATA.
+   *
+   * The origin half is fixed in the proxy route (`cache: "no-store"`, measured
+   * below in `route.test.ts`) — Next's Data Cache was serving the last good
+   * body with a 200 while the upstream refused, so the route's own `!upstream.ok`
+   * branch never ran and the client had nothing to detect. These guards pin the
+   * client half: once the data IS known to be old, nothing on screen may keep
+   * claiming otherwise.
+   */
+  const src = read("LiveTab.tsx");
+
+  it("derives staleness from the shared helper, not inline arithmetic", () => {
+    expect(src).toContain("liveStaleMinutes(updatedAt, nowMs, LIVE_REFRESH_MS)");
+    // Its own clock, because `setError` gets the same string every poll and
+    // React bails out of the repaint. See the comment at the call site.
+    expect(src).toMatch(/setInterval\(\(\) => setNowMs\(Date\.now\(\)\), LIVE_REFRESH_MS \/ 3\)/);
+    expect(src).toMatch(/const ageMin = staleMin \?\? stallMin \?\? 0;/);
+  });
+
+  it("suppresses live styling on a fixture whose data is stale", () => {
+    // `isInPlay` reads the payload; the payload is what went stale.
+    expect(src).toMatch(/const liveNow = isInPlay\(f\) && !stale;/);
+    expect(src).not.toMatch(/const liveNow = isInPlay\(f\);/);
+  });
+
+  it("labels the age on the fixture clock rather than asserting a bare minute", () => {
+    expect(src).toContain("${ageMin}m old`");
+  });
+
+  it("stops claiming a 30s refresh while the feed is not answering", () => {
+    expect(src).toMatch(/Not updating — \$\{ageMin\} min old/);
+  });
+
+  it("also flags a feed that answers 200 with numbers that have not moved", () => {
+    /*
+     * The case both other defences miss. `no-store` at the origin and
+     * `liveStaleMinutes` are both about OUR REQUEST failing; neither fires when
+     * an upstream edge serves its own stale copy with a 200. Observed: a match
+     * that had finished 2-0 rendering `55'` under a current "Updated" stamp.
+     */
+    expect(src).toContain("feedStallMs(feedWatch, nowMs)");
+    // Folded in from the PAYLOAD, on the poll, not derived from the request.
+    expect(src).toMatch(/setFeedWatch\(\(w\) => advanceFeedWatch\(w, fx, currentEvent, Date\.now\(\)\)\)/);
+    // Either kind of staleness drives the same visible state.
+    expect(src).toMatch(/const stale = staleMin !== null \|\| stallMin !== null;/);
+  });
+
+  it("reads the match clock from the live feed, not from fixtures", () => {
+    /*
+     * Measured (probe run 32577720199): FPL holds `fixtures/` at its own edge
+     * for 300s and `event/{gw}/live/` for about 90s, so the fixtures clock runs
+     * 2-8 minutes behind while the player clock stays about 2. Extracting the
+     * better clock and leaving the old call behind would pass every test in
+     * `live.test.ts` while shipping the original lag.
+     */
+    expect(src).toContain("matchMinute(f, updatedAt ?? undefined, liveMatchMinutes(live, f.id))");
+    expect(read("MatchModal.tsx")).toContain(
+      "matchMinute(fixture, undefined, liveMatchMinutes(live, fixture.id))"
+    );
+  });
+
+  it("prints ONE live score, from the shared definition", () => {
+    /*
+     * The header read `entry.summary_overall_points` — FPL's stored figure,
+     * refreshed on their schedule and carrying no provisional bonus — while
+     * the Live tab computed from `event/{gw}/live/`. Reported: "Total points 3"
+     * two headings above "7 pts", same quantity, same moment.
+     *
+     * Both now go through `liveEntryScore`, which already owned the bench
+     * filter, the captain multiplier, the vice-captain takeover and the hit.
+     * A second implementation that agrees today is the shape this repo has
+     * been bitten by before.
+     */
+    expect(src).toContain("const total = data.picks");
+    expect(src).toContain("liveEntryScore(");
+    // The old inline sum survives only as the no-picks fallback, never as the
+    // primary path.
+    expect(src).not.toMatch(/const total = rows\.reduce/);
+
+    const dash = read("Dashboard.tsx");
+    expect(dash).toContain("liveEntryScore(");
+    expect(dash).toContain("liveOverallPoints(rows, currentEvent, liveNet)");
+    // NOT `liveGross - liveHit`, which is built for the corner note.
+    expect(dash).not.toMatch(/liveOverallPoints\(rows, currentEvent, liveGross/);
+  });
+
+  it("does not blank a populated live view because one poll failed", () => {
+    // `if (error)` threw away fifteen rows, the scores and the bench mid-match.
+    expect(src).toMatch(/if \(error && !live\)/);
+    expect(src).not.toMatch(/^\s*if \(error\)\s*$/m);
+  });
+});
+
+describe("the league table says how much football is left", () => {
+  /*
+   * A live standings row is read for two things: the score, and how much is
+   * still to come. Two points ahead with five players yet to kick off is a
+   * different position from two points ahead with none, and the score alone
+   * cannot tell them apart.
+   */
+  const src = read("MiniLeague.tsx");
+
+  it("counts over the same players the score counts", () => {
+    // `squadMatchState` runs `projectAutoSubs` and honours Bench Boost, the
+    // same as `liveEntryScore`. Counting the raw first eleven here would
+    // credit a benched player's fixture and miss his replacement.
+    expect(src).toContain("squadMatchState(picks, elementById, live, data.fixtures, currentEvent)");
+  });
+
+  it("renders both counts and stays quiet once neither applies", () => {
+    expect(src).toMatch(/d\.inPlay > 0 \|\| d\.toStart > 0/);
+    // Not "0 · 0" on every row of a finished gameweek.
+    expect(src).not.toMatch(/\{d\.inPlay\}\s*·\s*\{d\.toStart\}/);
   });
 });

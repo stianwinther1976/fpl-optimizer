@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEMO_ENTRY_ID, makeDemoUniverse } from "../demo";
 import { netGwDelta, netGwPoints } from "../display";
-import { matchMinute, projectAutoSubs, provisionalBonus } from "../live";
+import { isInPlay, matchMinute, projectAutoSubs, provisionalBonus } from "../live";
 import {
   INITIAL_BUDGET,
   computeFreeTransfers,
@@ -824,7 +824,10 @@ describe("the demo live feed is self-consistent", () => {
      * That is what happened when this was mutation-tested, so it is pinned.
      */
     const u = universe();
-    const inPlay = u.fixtures.filter((f) => f.event === CURRENT_GW && f.started && !f.finished);
+    // `isInPlay`, not `started && !finished` — the demo now carries a fixture
+    // at FULL TIME with its bonus unconfirmed, which is `finished: false` and
+    // is emphatically not in play. That distinction is the point of the flag.
+    const inPlay = u.fixtures.filter((f) => f.event === CURRENT_GW && isInPlay(f));
     expect(inPlay.length).toBeGreaterThan(0);
     for (const f of inPlay) {
       expect({ id: f.id, published: typeof f.minutes }).toEqual({ id: f.id, published: "number" });
@@ -839,7 +842,10 @@ describe("the demo live feed is self-consistent", () => {
 
   it("puts the clock and the minutes played on the same match", () => {
     const u = universe();
-    const inPlay = u.fixtures.filter((f) => f.event === CURRENT_GW && f.started && !f.finished);
+    // `isInPlay`, not `started && !finished` — the demo now carries a fixture
+    // at FULL TIME with its bonus unconfirmed, which is `finished: false` and
+    // is emphatically not in play. That distinction is the point of the flag.
+    const inPlay = u.fixtures.filter((f) => f.event === CURRENT_GW && isInPlay(f));
     expect(inPlay.length).toBeGreaterThan(0);
     const teams = new Set(inPlay.flatMap((f) => [f.team_h, f.team_a]));
     const minutes = u.live.elements
@@ -2396,5 +2402,172 @@ describe("the demo prices its players on the ladders FPL actually uses", () => {
       expect({ t, distinct: new Set(prices).size >= 8 }).toEqual({ t, distinct: true });
       expect({ t, rare: prices.filter((p) => p === top).length <= 3 }).toEqual({ t, rare: true });
     }
+  });
+});
+
+describe("the demo reaches full time with the bonus still pending", () => {
+  /*
+   * `finished` means BONUS CONFIRMED and `finished_provisional` means the final
+   * whistle has gone; after a Saturday afternoon the two are hours apart. Every
+   * demo fixture used to be `finished: true/false` with the provisional flag
+   * absent, so the window in which the match is over and the points are not was
+   * untestable — and three shipped defects lived in it.
+   */
+  const u = universe();
+  const settled = u.fixtures.filter(
+    (f) => f.event === CURRENT_GW && f.finished_provisional && !f.finished
+  );
+
+  it("carries exactly one such fixture", () => {
+    expect(settled).toHaveLength(1);
+    expect(settled[0].minutes).toBe(90);
+    expect(settled[0].started).toBe(true);
+  });
+
+  it("reads as over, not as live", () => {
+    const f = settled[0];
+    expect(isInPlay(f)).toBe(false);
+    expect(matchMinute(f, new Date(NOW))).toBe("FT");
+    // And it stays FT however far the wall clock is pushed.
+    expect(matchMinute(f, new Date(NOW + 6 * 3_600_000))).toBe("FT");
+  });
+
+  it("does not move a single number on the manager's own screens", () => {
+    // Chosen from the fixtures he holds nobody in, precisely so that adding it
+    // exercises the state without disturbing anything else the demo asserts.
+    const f = settled[0];
+    const mine = new Set(u.picks.picks.map((p) => u.byId.get(p.element)!.team));
+    expect(mine.has(f.team_h)).toBe(false);
+    expect(mine.has(f.team_a)).toBe(false);
+  });
+
+  it("lets the gameweek stay unfinished, since bonus is still moving", () => {
+    // `gwDone` deliberately waits for `finished`, not for the whistle.
+    expect(u.fixtures.filter((f) => f.event === CURRENT_GW).every((f) => f.finished)).toBe(false);
+  });
+});
+
+describe("auto-substitution waits for full time, not for bonus", () => {
+  /*
+   * `doneOnZero` gated on `finished`, which means BONUS CONFIRMED. So for the
+   * whole provisional window — the snapshot shows a fixture still provisional
+   * after the whistle, and a Saturday slate routinely takes hours — the app
+   * rendered "FT", stopped the pulsing live styling, and went on counting a
+   * starter who never came on. A substitution turns on MINUTES, which is a fact
+   * about the match and is settled at the whistle.
+   */
+  const u = universe();
+  const byId = new Map(u.bootstrap.elements.map((e) => [e.id, e]));
+
+  it("substitutes off a blank whose match is provisionally over", () => {
+    // Take the demo's own picks and put the blanking starter's fixture into the
+    // provisional state rather than the finished one.
+    const fixtures = u.fixtures.map((f) => ({ ...f }));
+    const before = projectAutoSubs(u.picks.picks, byId, u.live, fixtures, CURRENT_GW);
+    expect(before.out.length).toBeGreaterThan(0);
+    const outId = before.out[0];
+    const team = byId.get(outId)!.team;
+    for (const f of fixtures) {
+      if (f.event !== CURRENT_GW) continue;
+      if (f.team_h !== team && f.team_a !== team) continue;
+      f.finished = false;
+      f.finished_provisional = true;
+      f.minutes = 90;
+    }
+    const after = projectAutoSubs(u.picks.picks, byId, u.live, fixtures, CURRENT_GW);
+    expect(after.out).toEqual(before.out);
+    expect(after.in).toEqual(before.in);
+    expect(after.effectiveXi).toEqual(before.effectiveXi);
+  });
+
+  it("still waits while the match is genuinely in play", () => {
+    // The provisional flag is what says "over". Without it, `finished: false`
+    // means the ball is rolling and nobody has blanked yet.
+    const fixtures = u.fixtures.map((f) => ({ ...f, finished: false, finished_provisional: false }));
+    expect(projectAutoSubs(u.picks.picks, byId, u.live, fixtures, CURRENT_GW).out).toEqual([]);
+  });
+});
+
+describe("the demo has the same SHAPE as the feed it stands in for", () => {
+  /*
+   * All 380 demo fixtures shipped `stats: []` while the real feed carries `bps`
+   * and `bonus` rows on every started fixture — the 2026-08-21 snapshot's GW1
+   * fixture 1 has a 30-row BPS ladder from −8 to 41 and three bonus rows paying
+   * exactly the top three. `provisionalBonus` reads that ladder, and CLAUDE.md
+   * names its absence as the THIRD instance of "the API sent a field and
+   * `types.ts` did not model it" — so the branch written to replace the
+   * double-gameweek abstention took `ladder === null` on the only feed that
+   * runs locally, and never executed in a single browser sweep.
+   */
+  const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+  const u = makeDemoUniverse(NOW);
+  type Row = { element: number; value: number };
+  type Stat = { identifier: string; h: Row[]; a: Row[] };
+  const statsOf = (f: { stats?: Stat[] }): Stat[] => f.stats ?? [];
+  const find = (f: { stats?: Stat[] }, id: string) =>
+    statsOf(f).find((x) => x.identifier === id);
+
+  it("puts a BPS ladder on every started fixture", () => {
+    const started = u.fixtures.filter((f) => f.started);
+    expect(started.length).toBeGreaterThan(0);
+    for (const f of started) {
+      const bps = find(f, "bps");
+      expect(bps, `fixture ${f.id}`).toBeTruthy();
+      expect(bps!.h.length + bps!.a.length, `fixture ${f.id}`).toBeGreaterThan(0);
+    }
+    // And nothing on a fixture that has not kicked off, as the feed does.
+    for (const f of u.fixtures.filter((x) => !x.started)) {
+      expect(statsOf(f).length, `fixture ${f.id}`).toBe(0);
+    }
+  });
+
+  it("pays exactly the top three of each ladder, split home and away", () => {
+    const f = u.fixtures.find((x) => x.started)!;
+    const bps = find(f, "bps")!;
+    const bonus = find(f, "bonus")!;
+    const ladder = [...bps.h, ...bps.a].sort((a, b) => b.value - a.value);
+    const paid = [...bonus.h, ...bonus.a].sort((a, b) => b.value - a.value);
+    /*
+     * TIE-SHARING, WHICH FPL DOES AND THE FIRST VERSION OF THIS TEST DID NOT
+     * ALLOW: two players level on BPS both take 3 and the next takes 1, so the
+     * awards are not always [3, 2, 1]. What must hold is that everyone paid
+     * outscores everyone unpaid, and that the awards descend from 3.
+     */
+    const paidIds = new Set(paid.map((p) => p.element));
+    const worstPaid = Math.min(...ladder.filter((r) => paidIds.has(r.element)).map((r) => r.value));
+    const bestUnpaid = Math.max(
+      ...ladder.filter((r) => !paidIds.has(r.element)).map((r) => r.value)
+    );
+    expect(worstPaid).toBeGreaterThan(bestUnpaid);
+    expect(paid[0].value).toBe(3);
+    for (let i = 1; i < paid.length; i++) {
+      expect(paid[i].value).toBeLessThanOrEqual(paid[i - 1].value);
+    }
+    // Home rows are home players, away rows away players.
+    for (const r of bps.h) {
+      expect(u.bootstrap.elements.find((e) => e.id === r.element)!.team).toBe(f.team_h);
+    }
+    for (const r of bps.a) {
+      expect(u.bootstrap.elements.find((e) => e.id === r.element)!.team).toBe(f.team_a);
+    }
+  });
+
+  it("keeps a match in play out of BOTH finished flags", () => {
+    /*
+     * The fixture loop now sets `finished` and `finished_provisional` together,
+     * because the real feed has 0 of 380 fixtures `finished` without the
+     * provisional flag. A match sent back into play has to clear both, or
+     * `isInPlay` reads full time and the demo has no live fixture at all.
+     */
+    const inPlay = u.fixtures.filter(
+      (f) => f.started && !f.finished && !f.finished_provisional
+    );
+    expect(inPlay.length).toBe(2);
+    for (const f of inPlay) {
+      const bps = find(f, "bps")!;
+      expect(bps.h.length + bps.a.length).toBeGreaterThan(0);
+    }
+    // And no fixture is finished without being provisionally finished.
+    expect(u.fixtures.filter((f) => f.finished && !f.finished_provisional)).toHaveLength(0);
   });
 });

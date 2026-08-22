@@ -178,10 +178,10 @@ describe("templateClass", () => {
 });
 
 describe("lastTemplateCaptain", () => {
-  it("says nothing at all before a gameweek has finished", () => {
-    // Pre-season this is every gameweek, and `most_captained` is null on all
-    // 38. Reading an absent value as an id, or as "nobody", would be a claim
-    // about a week that has not happened.
+  it("says nothing at all until FPL publishes a most-captained player", () => {
+    // Pre-season `most_captained` is null on all 38. Reading an absent value as
+    // an id, or as "nobody", would be a claim about a week that has not
+    // happened.
     const events = [ev({ id: 1 }), ev({ id: 2 })];
     expect(lastTemplateCaptain(events)).toBeNull();
   });
@@ -195,9 +195,32 @@ describe("lastTemplateCaptain", () => {
     expect(lastTemplateCaptain(events)).toEqual({ gw: 2, element: 22 });
   });
 
-  it("ignores a most_captained on a gameweek that has not finished", () => {
+  it("reads a most_captained FPL has published, finished or not", () => {
+    /*
+     * REVERSED FROM WHAT THIS TEST USED TO PIN, and the old expectation was the
+     * `finished` mistake in a fourth place. FPL fills `most_captained` in at
+     * the DEADLINE: the 2026-08-21 snapshot publishes 411 for GW1 with
+     * `finished: false` and `is_current: true`. Requiring `finished` meant this
+     * returned null for the whole of an in-progress gameweek — disagreeing with
+     * `templateCaptain` on the same data, and making `wasTemplateCaptain` false
+     * for everyone exactly when a reader is looking at the captaincy view.
+     */
     const events = [ev({ id: 1, finished: false, most_captained: 11 })];
-    expect(lastTemplateCaptain(events)).toBeNull();
+    expect(lastTemplateCaptain(events)).toEqual({ gw: 1, element: 11 });
+    // Absent is still absent.
+    expect(lastTemplateCaptain([ev({ id: 1, finished: true })])).toBeNull();
+    expect(lastTemplateCaptain([])).toBeNull();
+  });
+
+  it("takes the latest gameweek by id, not by array position", () => {
+    // Nothing promises `events` is ordered, and the old loop walked backwards
+    // through the array assuming it was.
+    const events = [
+      ev({ id: 3, finished: false, most_captained: 33 }),
+      ev({ id: 1, finished: true, most_captained: 11 }),
+      ev({ id: 2, finished: true, most_captained: 22 }),
+    ];
+    expect(lastTemplateCaptain(events)).toEqual({ gw: 3, element: 33 });
   });
 });
 

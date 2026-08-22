@@ -11,7 +11,7 @@ import {
   ReferenceDot,
 } from "recharts";
 import type { TeamData } from "@/lib/fpl";
-import { netGwPoints } from "@/lib/display";
+import { netGwPoints, publishedAverage } from "@/lib/display";
 import { CHIP_LABELS } from "@/lib/rules";
 import { SectionTitle } from "./ui";
 import PastSeasons from "./PastSeasons";
@@ -24,7 +24,9 @@ export default function HistoryChart({ data, entryId }: { data: TeamData; entryI
     // manager took a hit — by exactly the size of the hit, on the one chart
     // whose whole job is "did I beat the average".
     points: netGwPoints(r),
-    average: data.bootstrap.events.find((e) => e.id === r.event)?.average_entry_score ?? null,
+    // Null, not 0, for the gameweek in progress: recharts breaks the line at a
+    // null and plots a nosedive to the axis at a 0. See `publishedAverage`.
+    average: publishedAverage(data.bootstrap.events.find((e) => e.id === r.event)),
     total: r.total_points,
     rank: r.overall_rank,
   }));
@@ -45,7 +47,16 @@ export default function HistoryChart({ data, entryId }: { data: TeamData; entryI
       <PastSeasons data={data} entryId={entryId} />
       <div className="card p-4">
         <SectionTitle>Points per gameweek</SectionTitle>
-        <div className="mt-4 h-64">
+        {/*
+          A NAME, AND NOT `role="application"`.
+          Recharts renders `<svg role="application">` with an EMPTY `<title>`,
+          so in the accessibility tree both charts appeared as
+          `{role: "application", name: ""}` — which puts a screen reader into
+          forms mode over content it cannot describe at all. Naming the wrapper
+          and marking the SVG decorative hands the reader to the KPI modals
+          instead, which expose the same series as real tables.
+        */}
+        <div className="mt-4 h-64" role="img" aria-label="Points per gameweek, line chart">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={rows}>
               <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
@@ -83,7 +94,7 @@ export default function HistoryChart({ data, entryId }: { data: TeamData; entryI
 
       <div className="card p-4">
         <SectionTitle>Overall rank</SectionTitle>
-        <div className="mt-4 h-64">
+        <div className="mt-4 h-64" role="img" aria-label="Overall rank by gameweek, line chart">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={rows}>
               <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />

@@ -333,6 +333,7 @@ function buildStateAt(
       finished: i + 1 < g,
       is_current: i + 1 === g - 1,
       is_next: i + 1 === g,
+      is_previous: i + 1 === g - 2,
       average_entry_score: 0,
       highest_score: null,
     })),
@@ -501,11 +502,31 @@ describe(`${SEASON} season backtest`, () => {
      * line called the whole thing "recent-starts", which was the name of only
      * one of the axes.
      *
-     * `starts` supplies the record with `minsPerStart` nulled, which is exactly
-     * the state the live fetch produces for a player who started none of his
-     * last five: the minutes model then falls back to the season figure. So the
-     * gap between `full` and `starts` is the measured-minutes term alone, and
-     * the gap between `starts` and `none` is the start-share term alone.
+     * `starts` supplies the record with `minsPerStart` nulled, so the minutes
+     * model falls back to the season figure. The gap between `full` and
+     * `starts` is then the measured-minutes term, and the gap between `starts`
+     * and `none` the start-share term.
+     *
+     * TWO CAVEATS THAT USED TO BE MISSING, both found by audit.
+     *
+     * FIRST, THIS IS NOT "exactly the state the live fetch produces", which is
+     * what this paragraph claimed. `fetchRecentForm` returns a null
+     * `minsPerStart` EXACTLY when `startShare` is 0 — the two are one fact
+     * stated twice — so nulling it while leaving `startShare` alone is a record
+     * shape the live fetch never emits and the model's own invariant forbids.
+     *
+     * SECOND, IT NO LONGER ISOLATES ONE TERM. Under the old `Math.max` floor,
+     * nulling `minsPerStart` left the floor untouched. `share` is now
+     * `(pStart * minsPerStart + subMinutes) / 90`, and `subMinutes` uses
+     * `recent.minsPerStart` when it has one — so the ablation moves that too.
+     * Probed: `starts 6 / 480 min` with recent `{0.8, 66, 82.5}` gives share
+     * 0.6621, and the same record with `minsPerStart: null` gives 0.6711 — the
+     * ablated arm projects MORE minutes than the full one.
+     *
+     * So read the `starts` column as "the measured-minutes term, plus whatever
+     * the substitute-minutes term does when it loses its own input", not as a
+     * clean decomposition. Isolating it properly means nulling `startShare`
+     * alongside it, which is a different experiment from the one recorded here.
      */
     type RecentMode = "full" | "starts" | "none";
 

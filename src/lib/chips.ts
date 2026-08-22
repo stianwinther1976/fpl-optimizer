@@ -147,14 +147,52 @@ export function seasonStructure(
  */
 export function chipWindow(
   chipName: string,
-  bootstrapChips: { name: string; start_event: number; stop_event: number }[] | null | undefined,
-  nextEvent: number
+  bootstrapChips:
+    | { name: string; start_event: number; stop_event: number; number?: number }[]
+    | null
+    | undefined,
+  nextEvent: number,
+  /**
+   * Chips the reader has already played, with the gameweek each was played in.
+   *
+   * WITHOUT THIS THE ADVISOR REASONS ABOUT A WINDOW THE READER HAS NO CHIP FOR.
+   * Since 2025/26 there are two of each chip, one per half. A manager who spent
+   * their first-half Bench Boost in GW5 and reads the advisor in GW10 was given
+   * the GW1-19 window — the one they have already used — so the note talked
+   * about the weeks between now and GW19 and never mentioned the double
+   * gameweek sitting in the second-half window, which is the only window their
+   * remaining chip can be played in.
+   */
+  usedChips?: { name: string; event: number }[]
 ): { start: number; stop: number } | null {
   if (!bootstrapChips || bootstrapChips.length === 0) return null;
-  const mine = bootstrapChips
+  const all = bootstrapChips
     .filter((c) => c.name === chipName)
     .sort((a, b) => a.stop_event - b.stop_event);
-  if (mine.length === 0) return null;
+  if (all.length === 0) return null;
+  const spent = (c: { start_event: number; stop_event: number; number?: number }) => {
+    const used = (usedChips ?? []).filter(
+      (u) => u.name === chipName && u.event >= c.start_event && u.event <= c.stop_event
+    ).length;
+    /*
+     * `number` IS A COUNT, NOT AN ORDINAL — checked rather than assumed.
+     *
+     * The ordinal reading ("this is the 2nd wildcard") would make `spent`
+     * demand two uses of a window that allows one, so a chip the reader had
+     * already played would never be marked spent and the advisor would go on
+     * recommending it. Both readings fit a field whose value is 1, so the
+     * distinguishing case is the SECOND window: on the 2026-08-19 and
+     * 2026-08-21 snapshots every one of the eight entries carries `number: 1`,
+     * including the GW20-38 wildcard. An ordinal would have said 2 there.
+     */
+    return used >= (c.number ?? 1);
+  };
+  // Windows the reader still holds a chip for. If they hold none, fall back to
+  // the full list rather than returning null: "you have used them all" is a
+  // different answer from "the game published no window", and the caller that
+  // dims the card already knows which chips remain.
+  const unspent = all.filter((c) => !spent(c));
+  const mine = unspent.length > 0 ? unspent : all;
   /*
    * "THE GAME PUBLISHED NO WINDOW" AND "EVERY WINDOW HAS PASSED" ARE DIFFERENT
    * ANSWERS, and returning null for both conflated them — a chip read in GW25
@@ -163,7 +201,26 @@ export function chipWindow(
    * is returned once they have all closed; `chipTiming` compares `nextEvent`
    * against `stop` and reports the expiry.
    */
-  const open = mine.find((c) => nextEvent <= c.stop_event) ?? mine[mine.length - 1];
+  /*
+   * "STILL OPEN" MEANS OPEN, and the test was on the upper bound alone. Sorted
+   * by `stop_event`, `nextEvent <= stop` picks the earliest window that has not
+   * CLOSED — which need not have opened. Given `[{1, 38}, {20, 25}]` read at
+   * GW5 it returned `{20, 25}`, so `chipTiming` scanned GW20-25 and announced
+   * "window closes after GW25" for a chip playable now and through GW38.
+   *
+   * Unreachable on today's feed, where the two windows per chip are disjoint —
+   * which is exactly why it is worth fixing rather than arguing about: the doc
+   * above says "still open at `nextEvent`", and a rule that happens to hold
+   * because of the data's shape is not the rule that was written down.
+   *
+   * A window that has not opened yet is still the right answer when none is
+   * open — the reader needs to be told when it starts — so the fallback order
+   * is: open now, else the next one to open, else the last one to have closed.
+   */
+  const open =
+    mine.find((c) => nextEvent >= c.start_event && nextEvent <= c.stop_event) ??
+    mine.find((c) => nextEvent <= c.stop_event) ??
+    mine[mine.length - 1];
   return { start: open.start_event, stop: open.stop_event };
 }
 
@@ -285,7 +342,10 @@ export function chipTiming(
   leagueTeamIds: number[],
   nextEvent: number,
   lastEvent: number,
-  bootstrapChips: { name: string; start_event: number; stop_event: number }[] | null | undefined,
+  bootstrapChips:
+    | { name: string; start_event: number; stop_event: number; number?: number }[]
+    | null
+    | undefined,
   /** Gameweeks already scored on expected points, which need no flagging. */
   horizonEnd: number,
   /**
@@ -293,9 +353,11 @@ export function chipTiming(
    * structural read, which is all the caller can offer if it has no projection
    * reaching that far.
    */
-  scoring?: ChipScoring
+  scoring?: ChipScoring,
+  /** See `chipWindow`: which half's window the reader still holds a chip for. */
+  usedChips?: { name: string; event: number }[]
 ): ChipTiming {
-  const window = chipWindow(chip, bootstrapChips, nextEvent);
+  const window = chipWindow(chip, bootstrapChips, nextEvent, usedChips);
   if (window === null) {
     return { chip, window: null, windows: [], scored: [], verdict: "unknown-window", note: "" };
   }
@@ -362,10 +424,17 @@ export function chipTiming(
   if (best && scoring) {
     const edge = best.gain - scoring.inHorizonBest;
     // A scored gameweek only earns a recommendation if it beats what the
-    // horizon already found by more than the flat-surface spread. Otherwise the
+    // horizon already found by MORE THAN the flat-surface spread. Otherwise the
     // structure is still worth naming — it is a fact about the calendar — but
     // the app must not pretend it has found a better week.
-    if (edge < MATERIAL_GAIN) {
+    //
+    // `<=`, because "more than" is what the doc on `MATERIAL_GAIN` and
+    // CLAUDE.md both say and `<` recommended on an edge of exactly the floor.
+    // Measure-zero on real projections; the point is that the constant means
+    // one thing in the prose and another in the code, and the test that claimed
+    // to pin the boundary fed it `10 + 0.9 - 10`, which is 0.9000000000000004
+    // and lands the same side under either comparison.
+    if (edge <= MATERIAL_GAIN) {
       return {
         chip,
         window,

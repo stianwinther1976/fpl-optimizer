@@ -2,9 +2,28 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type TeamData } from "@/lib/fpl";
-import type { EventLive, Fixture, Pick } from "@/lib/types";
-import { matchMinute, projectAutoSubs, provisionalBonus, isInPlay, LIVE_REFRESH_MS } from "@/lib/live";
-import { autoSubView, benchPoints, kickoffLabel } from "@/lib/display";
+import type { EntryEventPicks, EventLive, Fixture, Pick } from "@/lib/types";
+import {
+  bandMedianScore,
+  matchMinute,
+  liveMatchMinutes,
+  liveEntryScore,
+  projectAutoSubs,
+  provisionalBonus,
+  isInPlay,
+  LIVE_REFRESH_MS,
+  feedStallMs,
+  advanceFeedWatch,
+  type FeedWatch,
+} from "@/lib/live";
+import {
+  autoSubView,
+  benchPoints,
+  kickOffPassed,
+  liveStaleMinutes,
+  kickoffLabel,
+  publishedAverage,
+} from "@/lib/display";
 import { ErrorBox, Skeleton, Badge } from "./ui";
 import MatchModal from "./MatchModal";
 
@@ -24,7 +43,17 @@ export default function LiveTab({
   const [fixtures, setFixtures] = useState<Fixture[]>(data.fixtures);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
-  const [bandSafety, setBandSafety] = useState<number | null>(null);
+  // 0 until the first tick, which reads as "not stale" — correct, because
+  // `updatedAt` is still null then and there is nothing on screen to be stale.
+  const [nowMs, setNowMs] = useState(0);
+  /*
+   * State, not a ref: it is read during render, and `react-hooks/refs` rejects
+   * that — correctly, since a ref written on a poll and read on a repaint is a
+   * tearing hazard. `advanceFeedWatch` returns the SAME object when nothing
+   * moved, so setting it every thirty seconds costs no repaint.
+   */
+  const [feedWatch, setFeedWatch] = useState<FeedWatch>({ sig: "", at: 0 });
+  const [bandPicks, setBandPicks] = useState<EntryEventPicks[] | null>(null);
   const bandTried = useRef(false);
   const [matchOpen, setMatchOpen] = useState<Fixture | null>(null);
   // Latest-wins guard: an older in-flight response must never overwrite a
@@ -49,6 +78,8 @@ export default function LiveTab({
       setLive(l);
       setFixtures(fx);
       setUpdatedAt(new Date());
+      // The watch advances on the PAYLOAD, not on the request succeeding.
+      setFeedWatch((w) => advanceFeedWatch(w, fx, currentEvent, Date.now()));
       setError(null);
     } catch {
       if (my !== seq.current) return;
@@ -90,16 +121,44 @@ export default function LiveTab({
     };
   }, [refresh, currentEvent, gwDone, active]);
 
+  /*
+   * The staleness clock. Runs only while the gameweek can still change, so a
+   * finished gameweek and the off-season repaint nothing. A third of the poll
+   * interval, which is what makes "N min old" tick up rather than jump.
+   */
+  useEffect(() => {
+    if (gwDone) return;
+    // No eager set: `nowMs` starts at 0, which reads as "not stale", and that
+    // is the right answer for the first tick's worth of a freshly opened tab.
+    const t = setInterval(() => setNowMs(Date.now()), LIVE_REFRESH_MS / 3);
+    return () => clearInterval(t);
+  }, [gwDone]);
+
   const elementById = useMemo(
     () => new Map(data.bootstrap.elements.map((e) => [e.id, e])),
     [data.bootstrap]
   );
 
-  // Personalised safety score: sample ~20 managers at the user's overall-rank
-  // band (the Overall league is paged in rank order) and take the median of
-  // their net live scores — the score needed to keep pace with your peers.
+  /*
+   * Personalised safety score: sample ~20 managers at the reader's overall-rank
+   * band (the Overall league is paged in rank order) and take the median of
+   * their net live scores — the score needed to keep pace with their peers.
+   *
+   * FETCHED ONCE, SCORED EVERY POLL. It used to be both: one effect fetched the
+   * picks AND scored them, behind a `bandTried` ref that never reset, so the
+   * benchmark was a snapshot of the first live payload while the reader's own
+   * total kept moving every thirty seconds. Left long enough that is not a
+   * comparison at all — the number the app tells you to beat is the score your
+   * rivals had when you opened the tab, and "you're N above; on course to climb"
+   * is what almost everyone sees by the end of a Saturday.
+   *
+   * Picks genuinely do not change during a gameweek, so fetching them once is
+   * right; the scoring is what has to follow the feed. Splitting the two also
+   * closes the second asymmetry in the same comparison — see the bonus note in
+   * the memo below.
+   */
   useEffect(() => {
-    if (bandTried.current || live == null || currentEvent == null) return;
+    if (bandTried.current || currentEvent == null) return;
     const rank = data.entry.summary_overall_rank;
     if (rank == null) return;
     bandTried.current = true;
@@ -112,37 +171,15 @@ export default function LiveTab({
         // Spread the sample across the whole rank page for a fairer median.
         const all = standings.standings.results;
         const sample = all.filter((_, i) => i % Math.max(1, Math.floor(all.length / 20)) === 0).slice(0, 20);
-        const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
-        const scores = (
+        const picks = (
           await Promise.all(
-            sample.map(async (r) => {
-              try {
-                const p = await api.picks(r.entry, currentEvent);
-                const bb = p.active_chip === "bboost";
-                // Project auto-subs for rivals too, so the benchmark matches
-                // what their final score will actually be.
-                const subs = projectAutoSubs(p.picks, elementById, live, fixtures, currentEvent);
-                const effXi = new Set(subs.effectiveXi);
-                let pts = 0;
-                for (const pk of p.picks) {
-                  if (!bb && !effXi.has(pk.element)) continue;
-                  const mult = pk.multiplier > 1 ? pk.multiplier : 1;
-                  pts += (pointsOf.get(pk.element) ?? 0) * mult;
-                }
-                return pts - p.entry_history.event_transfers_cost;
-              } catch {
-                return null;
-              }
-            })
+            sample.map((r) => api.picks(r.entry, currentEvent).catch(() => null))
           )
-        ).filter((x): x is number => x != null);
-        if (scores.length >= 5) {
-          scores.sort((a, b) => a - b);
-          setBandSafety(scores[Math.floor(scores.length / 2)]);
-        }
+        ).filter((p): p is EntryEventPicks => p != null);
+        if (picks.length >= 5) setBandPicks(picks);
       } catch {}
     })();
-  }, [live, currentEvent, data.entry, elementById, fixtures]);
+  }, [currentEvent, data.entry]);
 
   const teams = useMemo(
     () => new Map(data.bootstrap.teams.map((t) => [t.id, t])),
@@ -165,11 +202,56 @@ export default function LiveTab({
     [live, fixtures, data.bootstrap, currentEvent]
   );
 
+  /**
+   * The rank band's median live score, recomputed on every poll.
+   *
+   * PROVISIONAL BONUS ON BOTH SIDES, WHICH IT WAS NOT. The reader's own total
+   * is `(raw + projectedBonus) * multiplier`; the benchmark was
+   * `stats.total_points` alone. So through the window CLAUDE.md describes as
+   * "hours apart" — final whistle to bonus confirmation — the app credited the
+   * reader two to eight points it credited nobody they were being compared
+   * against, and then printed "you're N above; on course to climb". Everything
+   * else in this comparison is already symmetric: both sides net of hits, both
+   * with projected auto-subs. `provisionalBonus` is per PLAYER, so the same map
+   * applies to a rival's picks unchanged.
+   *
+   * It does not bite on the demo — `demo.ts` itemises bonus in `explain` for
+   * in-play fixtures, so `provisionalBonus` returns an empty map there — which
+   * is why it could only be found by reading the two code paths against each
+   * other.
+   */
+  const bandSafety = useMemo(
+    () =>
+      bandPicks && live && currentEvent != null
+        ? bandMedianScore(
+            bandPicks,
+            elementById,
+            live,
+            fixtures,
+            currentEvent,
+            bonus?.byElement ?? null,
+            gwDone
+          )
+        : null,
+    [bandPicks, live, bonus, elementById, fixtures, currentEvent, gwDone]
+  );
+
   // Projected auto-subs: once a starter's matches have finished with 0
   // minutes, the bench steps in (like FPL will do when the GW is processed).
   const autoSubs = useMemo(() => {
     if (!live || !data.squad || currentEvent == null) return null;
-    const picks: Pick[] = data.squad.players.map((p) => ({
+    /*
+   * `currentPlayers` THROUGHOUT THIS FILE, and it is the whole file's subject.
+   *
+   * `squad.players` is the squad to optimize from: it has next gameweek's
+   * transfers already applied and, in a Free Hit week, is the fifteen the Free
+   * Hit replaced. Every number on this tab is about THIS gameweek's scores, so
+   * rendering that list meant a player who actually played vanishing from the
+   * table and an incoming player appearing with points he scored for someone
+   * else — and, because the auto-sub projection reads the real picks, the two
+   * disagreeing about who is even in the team.
+   */
+  const picks: Pick[] = data.squad.currentPlayers.map((p) => ({
       element: p.element.id,
       position: p.pickPosition,
       multiplier: 0,
@@ -199,7 +281,16 @@ export default function LiveTab({
       </div>
     );
   }
-  if (error)
+  /*
+   * BLANK THE TAB ONLY WHEN THERE IS NOTHING TO BLANK. This used to return the
+   * error box on any failed poll, which threw away a working live view — fifteen
+   * rows, the scores, the bench — because one request out of a hundred timed
+   * out. During a match that is the worst possible moment to have the screen
+   * replaced by a message. With data in hand the failure is reported by the
+   * staleness strip below instead, which says how old the numbers are rather
+   * than hiding them.
+   */
+  if (error && !live)
     return (
       <ErrorBox
         message={`${error}${gwDone ? "" : " Retrying automatically every 30s."}`}
@@ -208,14 +299,24 @@ export default function LiveTab({
     );
   if (!live || !data.squad) return <Skeleton className="h-64" />;
 
-  const anyLive = gwFixtures.some((f) => f.started && !f.finished);
+  // `isInPlay`, not `started && !finished`: `finished` means BONUS CONFIRMED,
+  // so for hours after a Saturday the header showed a pulsing dot and
+  // "Live GW n" over fixture chips that all read "FT" in muted styling. The
+  // commit that introduced `isInPlay` converted the chips one line below this
+  // and missed the header.
+  const anyLive = gwFixtures.some(isInPlay);
   const statById = new Map(live.elements.map((e) => [e.id, e.stats]));
+  /** Projected bonus on the rows this screen actually draws — see the legend. */
+  const myStarBonus = data.squad.currentPlayers.reduce(
+    (n, p) => n + (bonus?.byElement.get(p.element.id) ?? 0),
+    0
+  );
   const bboost = data.squad.activeChip === "bboost";
   const hits = data.picks?.entry_history.event_transfers_cost ?? 0;
   // Chip-aware: a Bench Boost week has no substitutions to project, so the
   // effective eleven is simply the eleven that were picked. See `autoSubView`.
   const { xi: effXi, subbedIn, subbedOut } = autoSubView(
-    data.squad.players.filter((p) => p.pickPosition <= 11).map((p) => p.element.id),
+    data.squad.currentPlayers.filter((p) => p.pickPosition <= 11).map((p) => p.element.id),
     autoSubs,
     bboost
   );
@@ -235,8 +336,8 @@ export default function LiveTab({
   // Effective captain: vice takes over once the captain can no longer play
   // (GW final, or all of the captain's matches finished on 0 minutes).
   const capMult = data.squad.activeChip === "3xc" ? 3 : 2;
-  const cap = data.squad.players.find((p) => p.isCaptain);
-  const vice = data.squad.players.find((p) => p.isViceCaptain);
+  const cap = data.squad.currentPlayers.find((p) => p.isCaptain);
+  const vice = data.squad.currentPlayers.find((p) => p.isViceCaptain);
   const capGone = cap != null && (gwDone || blankedStarters.has(cap.element.id));
   const effCapId =
     capGone &&
@@ -246,7 +347,7 @@ export default function LiveTab({
       ? vice.element.id
       : cap?.element.id;
 
-  const rows = data.squad.players
+  const rows = data.squad.currentPlayers
     .map((p) => {
       const s = statById.get(p.element.id);
       const counts = bboost || effXi.has(p.element.id);
@@ -264,7 +365,31 @@ export default function LiveTab({
     })
     .sort((a, b) => a.p.pickPosition - b.p.pickPosition);
 
-  const total = rows.reduce((sum, r) => sum + r.points, 0) - hits;
+  /*
+   * ONE DEFINITION, NOT A SECOND ONE THAT AGREES BY LUCK. Summing `rows` here
+   * reimplemented the bench/bboost filter, the captain multiplier, the
+   * vice-captain takeover and the hit — the same four rules `liveEntryScore`
+   * already owns, in a second place, in a component no test can render. The
+   * dashboard header and the mini-league both print this number too, and a
+   * reader can see two of them at once. `rows` stays for the per-player list;
+   * the headline comes from the shared function.
+   */
+  const total = data.picks
+    ? liveEntryScore(
+        data.picks,
+        elementById,
+        live,
+        fixtures,
+        currentEvent,
+        bonus?.byElement ?? null,
+        gwDone
+      )
+    : // No `EntryEventPicks` to hand the shared function — the picks fetch
+      // failed, or there are none yet. `rows` is then built from the squad
+      // alone, with no captain and no hit to apply, and summing it is all
+      // there is. Not a second definition of a live score so much as the
+      // degenerate case of one.
+      rows.reduce((sum, r) => sum + r.points, 0) - hits;
   const benchTotal = benchPoints(
     rows.map((r) => ({
       elementId: r.p.element.id,
@@ -273,13 +398,56 @@ export default function LiveTab({
     })),
     effXi
   );
-  const gwAvg =
-    data.bootstrap.events.find((e) => e.id === currentEvent)?.average_entry_score ?? null;
+  // Null while FPL has not published one — it is 0 for a gameweek in progress,
+  // and this tab is only ever open during one. See `publishedAverage`.
+  const gwAvg = publishedAverage(data.bootstrap.events.find((e) => e.id === currentEvent));
+
+  /*
+   * HOW OLD THE NUMBERS ARE, which is not the same question as whether the
+   * last request succeeded. See `liveStaleMinutes`.
+   *
+   * IT NEEDS ITS OWN CLOCK, for two reasons that both bite. Reading `Date.now()`
+   * during render is impure and `react-hooks/purity` rejects it outright — and
+   * the tempting answer, "a failing poll calls `setError` so the tab repaints
+   * anyway", is wrong: `setError` is handed the SAME string every time, and
+   * React bails out of a re-render when the next state is identical. A feed
+   * that stops answering therefore produces no repaints at all, which is
+   * precisely the case this has to detect.
+   */
+  const staleMin = gwDone ? null : liveStaleMinutes(updatedAt, nowMs, LIVE_REFRESH_MS);
+  /*
+   * THE SECOND KIND OF STALE, and the one that survives both other defences.
+   * `staleMin` catches a feed that has stopped ANSWERING. This catches a feed
+   * that answers 200 with numbers that have not moved — which is what a reader
+   * actually hit: a match that had finished 2-0 rendering `55'` under a current
+   * "Updated" stamp. See `feedStallMs`.
+   */
+  const stallMs = gwDone || nowMs === 0 ? null : feedStallMs(feedWatch, nowMs);
+  const stallMin = stallMs === null ? null : Math.floor(stallMs / 60_000);
+  const stale = staleMin !== null || stallMin !== null;
+  const ageMin = staleMin ?? stallMin ?? 0;
 
   return (
     <div className="space-y-4">
-      {/* Score header */}
-      <div className="card flex flex-wrap items-center gap-x-6 gap-y-2 p-4">
+      {/*
+        THE ONE THING ON THIS TAB THAT MUST BE ANNOUNCED.
+        The page repaints the total, the bench, the clock and the "Updated"
+        stamp every thirty seconds, and "Refresh now" repaints them on demand —
+        and none of it reached a screen reader, because the app had no live
+        region anywhere. A reader who cannot see the number has no way to know
+        it moved, which on this tab is the entire point of the tab.
+
+        `polite`, not `assertive`: a score changing is worth hearing at the next
+        pause, not worth interrupting a sentence for. It wraps the header rather
+        than the fifteen rows for the same reason — announcing every row on
+        every poll is noise, and the header is the summary the reader wants.
+      */}
+      <div
+        className="card flex flex-wrap items-center gap-x-6 gap-y-2 p-4"
+        role="status"
+        aria-live="polite"
+        aria-atomic="false"
+      >
         <div>
           <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted">
             {anyLive && (
@@ -319,19 +487,48 @@ export default function LiveTab({
           )}
         </div>
         <div className="ml-auto text-right text-xs text-muted">
-          {updatedAt && <div>Updated {updatedAt.toLocaleTimeString("en-GB")}</div>}
-          <div>{gwDone ? "Gameweek complete — auto-refresh off" : "Auto-refresh every 30s"}</div>
+          {updatedAt && (
+            <div className={stale ? "font-semibold text-warn" : undefined}>
+              Updated {updatedAt.toLocaleTimeString("en-GB")}
+            </div>
+          )}
+          {/*
+            "Auto-refresh every 30s" IS A CLAIM ABOUT THE REQUEST, and while the
+            feed was refusing it sat there unchanged next to numbers that had
+            not moved for an hour. Once the data is stale the line says what is
+            actually known: polling continues, and it is not getting through.
+          */}
+          <div className={stale ? "font-semibold text-warn" : undefined}>
+            {gwDone
+              ? "Gameweek complete — auto-refresh off"
+              : stale
+                ? `Not updating — ${ageMin} min old`
+                : "Auto-refresh every 30s"}
+          </div>
           <button
             type="button"
             onClick={() => refresh(true)}
-            className="mt-1 rounded-md border border-border-c bg-panel-2 px-3 py-1.5 hover:border-accent active:border-accent"
+            className="mt-1 min-h-11 rounded-md border border-border-c bg-panel-2 px-3 py-1.5 hover:border-accent active:border-accent"
           >
             Refresh now
           </button>
         </div>
 
-        {/* Safety score: median live score of ~20 managers at your overall-rank
-            band when available; falls back to the GW average estimate. */}
+        {/*
+          Safety score: median live score of ~20 managers at your overall-rank
+          band when available; falls back to FPL's own gameweek average.
+
+          THAT FALLBACK IS NOT AVAILABLE DURING PLAY, and it used to look as
+          though it were. `average_entry_score` is 0 until FPL publishes it
+          (see `publishedAverage`), so a failed rank-band sample mid-gameweek
+          produced "Safety score (est.): 0 pts — you're 34 above; on course to
+          climb". With the 0 read as "unpublished" the box simply does not
+          render then, which is the honest answer: nothing in the official API
+          says what the field is scoring right now except the sample this tab
+          takes itself. The fallback still has a real state — after the
+          gameweek, where the average is published and the box explains the
+          final margin.
+        */}
         {(bandSafety ?? gwAvg) != null &&
           (() => {
             const needed = bandSafety ?? gwAvg!;
@@ -351,9 +548,17 @@ export default function LiveTab({
               >
                 🛡️ Safety score {personalized ? "(your rank band)" : "(est.)"}:{" "}
                 <b>{needed} pts</b> —{" "}
-                {total >= needed
-                  ? `you're ${total - needed} above; on course to climb ▲`
-                  : `${needed - total} more needed to hold your rank`}
+                {/*
+                  LEVEL IS LEVEL. `total >= needed` sent an exact tie down the
+                  "climbing" branch, which then read "you're 0 above; on course
+                  to climb ▲" — matching the median holds your rank, it does not
+                  improve it, and that is the whole meaning of the number.
+                */}
+                {total === needed
+                  ? "level with your rank band — on course to hold your rank"
+                  : total > needed
+                    ? `you're ${total - needed} above; on course to climb ▲`
+                    : `${needed - total} more needed to hold your rank`}
               </div>
             );
           })()}
@@ -361,10 +566,24 @@ export default function LiveTab({
 
       {/* Match scores — two rows so twice as many fit on screen */}
       {gwFixtures.length > 0 && (
-        <div className="grid grid-flow-col grid-rows-2 gap-1.5 overflow-x-auto pb-1 auto-cols-max">
+        <div
+          className="grid grid-flow-col grid-rows-2 gap-1.5 overflow-x-auto pb-1 auto-cols-max"
+          tabIndex={0}
+          role="region"
+          aria-label="Match scores, scrollable"
+        >
           {gwFixtures.map((f) => {
-            const minute = matchMinute(f, updatedAt ?? undefined);
-            const liveNow = isInPlay(f);
+            // The live feed's clock is measured ~2 min behind against ~5-8
+            // for the fixtures one. See `liveMatchMinutes`.
+            const minute = matchMinute(f, updatedAt ?? undefined, liveMatchMinutes(live, f.id));
+            /*
+              `isInPlay` IS A FACT ABOUT THE PAYLOAD, not about the screen. A
+              fixture kept its green border and its accent-coloured clock while
+              the number in it was an hour old, because the flag it reads was
+              itself an hour old. Nothing here can be styled as live unless the
+              data behind it is current.
+            */
+            const liveNow = isInPlay(f) && !stale;
             const hs = f.team_h_score ?? 0;
             const as = f.team_a_score ?? 0;
             // Result colors (live and FT): winner green, loser red, draw yellow.
@@ -387,7 +606,7 @@ export default function LiveTab({
                 key={f.id}
                 type="button"
                 onClick={() => setMatchOpen(f)}
-                className={`card flex min-w-28 cursor-pointer flex-col items-center px-2 py-1.5 text-xs hover:border-accent active:border-accent sm:min-w-32 sm:text-sm ${liveNow ? "border-accent/50" : ""}`}
+                className={`card flex min-h-11 min-w-28 cursor-pointer flex-col items-center px-2 py-1.5 text-xs hover:border-accent active:border-accent sm:min-w-32 sm:text-sm ${liveNow ? "border-accent/50" : ""}`}
               >
                 <div className="flex items-center gap-1.5 font-semibold sm:gap-2">
                   <span className={hClass}>{teams.get(f.team_h)?.short_name}</span>
@@ -402,10 +621,22 @@ export default function LiveTab({
                   )}
                   <span className={aClass}>{teams.get(f.team_a)?.short_name}</span>
                 </div>
+                {/*
+                  THREE STATES, NOT TWO. A card reading "HUL v MUN / Sat 13:30"
+                  two minutes after the whistle is indistinguishable from an app
+                  that has stopped fetching — and "live doesn't work" is the
+                  reasonable conclusion the screen gives no way to check. When
+                  the kick-off has passed and FPL still has not flagged it, the
+                  card says so. See `kickOffPassed`.
+                */}
                 <div className={`text-xs ${liveNow ? "font-semibold text-accent" : "text-muted"}`}>
                   {f.started
-                    ? minute
-                    : kickoffLabel(f, (iso) =>
+                    ? stale
+                      ? `${minute} · ${ageMin}m old`
+                      : minute
+                    : kickOffPassed(f, (updatedAt ?? new Date()).getTime())
+                      ? "waiting on FPL"
+                      : kickoffLabel(f, (iso) =>
                           new Date(iso).toLocaleString("en-GB", {
                             weekday: "short",
                             hour: "2-digit",
@@ -423,7 +654,7 @@ export default function LiveTab({
           fixture={fixtures.find((f) => f.id === matchOpen.id) ?? matchOpen}
           teams={teams}
           live={live}
-          squadIds={new Set(data.squad.players.map((p) => p.element.id))}
+          squadIds={new Set(data.squad.currentPlayers.map((p) => p.element.id))}
           elements={data.bootstrap.elements}
           onPlayerSelect={(el) => {
             setMatchOpen(null);
@@ -441,7 +672,7 @@ export default function LiveTab({
             <Row
               key={p.element.id}
               type={onSelect ? "button" : undefined}
-              className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm ${onSelect ? "cursor-pointer hover:bg-panel-2/60 active:bg-panel-2" : ""}`}
+              className={`flex min-h-11 w-full items-center gap-3 px-4 py-2.5 text-left text-sm ${onSelect ? "cursor-pointer hover:bg-panel-2/60 active:bg-panel-2" : ""}`}
               onClick={onSelect ? () => onSelect(p.element) : undefined}
             >
               <span className="w-6 text-xs text-muted">{p.pickPosition}</span>
@@ -496,7 +727,10 @@ export default function LiveTab({
             needed. Confirmed on the real GW1 payload: FPL had already awarded
             3/2/1 and the projection was empty.
         */}
-        {(bonus?.byElement.size ?? 0) > 0 &&
+        {/* Over the rows actually drawn, not over the gameweek: the badge
+            renders only for the reader's own squad, so a ★ somewhere else in
+            the league still left the legend explaining a marker not on screen. */}
+        {myStarBonus > 0 &&
           "★ = projected bonus from live BPS (not confirmed until the match finishes). "}
         Auto-subs are projected once a starter&apos;s matches finish with 0 minutes. Captain
         doubling

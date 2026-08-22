@@ -1,7 +1,14 @@
 // Live-gameweek helpers: provisional bonus from BPS, auto-substitution
 // projection and live match state.
 
-import type { Bootstrap, Element, EventLive, Fixture, Pick as FplPick } from "./types";
+import type {
+  Bootstrap,
+  Element,
+  EntryEventPicks,
+  EventLive,
+  Fixture,
+  Pick as FplPick,
+} from "./types";
 import { isValidFormation } from "./rules";
 
 /**
@@ -36,10 +43,30 @@ export interface ProvisionalBonus {
 }
 
 /**
- * FPL awards 3/2/1 bonus to the top-BPS players per fixture. While a fixture is
- * live (or finished but not confirmed), we project bonus from current BPS.
+ * FPL awards 3/2/1 bonus to the top-BPS players per fixture. Once a fixture has
+ * finished but its bonus is not yet confirmed, we read it off the BPS ladder.
  * Ties follow the official pattern: tied players share the higher bonus and the
  * lower slots are skipped accordingly.
+ *
+ * AT FULL TIME ONLY, WHICH IT WAS NOT. The gate was `started && !finished`, so
+ * bonus was projected from the first minute of a match — and at minute two the
+ * BPS table holds a couple of completed passes, so whoever tops it is awarded
+ * 3, 2 or 1 points of pure noise. Reported from a live match: B.Fernandes
+ * captained, one appearance point, a projected 2 on top, doubled for the
+ * armband — the app showed 6 where FPL showed 2. Four phantom points on the
+ * headline total, at minute two.
+ *
+ * `finished_provisional` is the final whistle, and there the ladder is FINAL:
+ * nothing more can change it and only FPL's confirmation is outstanding. That
+ * is the window this function's own header describes as hours long, and it is
+ * the one state in which a reading off BPS is not a forecast. It is also the
+ * only one that has been measured — on the 2026-08-21 snapshot the fixture at
+ * `finished_provisional: true, finished: false` already carried the 3/2/1 rows
+ * beside its ladder, and the top three matched exactly.
+ *
+ * A mid-match projection is a forecast, and this app does not put forecasts in
+ * a total it presents as the reader's score. That the number was then
+ * multiplied by the captain is what turned a small wrong into a visible one.
  */
 export function provisionalBonus(
   bootstrap: Bootstrap,
@@ -68,8 +95,8 @@ export function provisionalBonus(
    *    projection entirely and the points vanished from the live total.
    *
    * `explain` carries a `fixture` id, so participation and awarded bonus are
-   * both answerable per leg. BPS is not in `explain` and FPL publishes it only
-   * as a gameweek total — see the abstention below.
+   * both answerable per leg. BPS is not in `explain` — but it IS on the fixture
+   * itself, which is the correction below.
    */
   const perFixture = new Map<number, Map<number, { minutes: number; bonus: number }>>();
   const legsPlayed = new Map<number, number>();
@@ -104,35 +131,80 @@ export function provisionalBonus(
 
   for (const f of fixtures) {
     if (f.event !== event) continue;
-    if (!f.started || f.finished) continue; // only project while in play / awaiting confirmation
+    // Full time, bonus not yet confirmed — and nothing else. See the header.
+    if (!f.finished_provisional || f.finished) continue;
     const inThis = perFixture.get(f.id);
+
+    /*
+     * THE FIXTURE'S OWN BPS LADDER, WHEN IT HAS ONE.
+     *
+     * `fixture.stats` carries a `bps` row per player who appeared IN THIS
+     * MATCH, split home and away. That is the exact quantity the ranking below
+     * wants, and its absence from the type is the only reason the gameweek
+     * total was ever used for it. Read off the real snapshot (2026-08-21, GW1
+     * fixture 1): 30 rows running −8 to 41, and the top three are precisely the
+     * three the fixture's `bonus` rows pay 3, 2 and 1.
+     *
+     * IT DOES NOT ANSWER PARTICIPATION, and an earlier version of this block
+     * said it did ("30 rows for the 30 players who appeared"). Thirty-ONE
+     * appeared: FPL omits zero-valued entries from a `stats` row, so Rushworth
+     * (element 110, 90 minutes, 1 point, 0 BPS) has no row at all. Counted
+     * against `element-summaries`, which carries a per-fixture history row per
+     * player. So participation stays with minutes and the ladder is used only
+     * for the ORDER — a man with no row is on 0, not absent, and 0 can win the
+     * third bonus point in a match where only two players score any BPS.
+     *
+     * `ladder` IS NULL WHEN THE ROW IS EMPTY, not merely when it is missing.
+     * FPL emits identifiers with both arrays empty — `own_goals`, `red_cards`,
+     * `penalties_saved` and `penalties_missed` all are, on that same fixture —
+     * so `bps` may arrive that way too, and a size-0 Map that reads as "we have
+     * a ladder" while every lookup falls through to the gameweek total is the
+     * exact bug this block exists to remove, silently re-enabled.
+     *
+     * Not assumed to be there at all. FPL may only populate it from the final
+     * whistle — the sandbox this was written in has no live fixture to check
+     * against — so with no usable row this falls through to exactly the
+     * behaviour it replaces, gameweek totals and the abstention.
+     */
+    const bpsRow = f.stats?.find((st) => st.identifier === "bps");
+    const rows = bpsRow ? [...bpsRow.h, ...bpsRow.a] : [];
+    const ladder = rows.length > 0 ? new Map(rows.map((r) => [r.element, r.value])) : null;
+
     const players = live.elements
       .filter((e) => {
         const t = teamOf.get(e.id);
         if (t !== f.team_h && t !== f.team_a) return false;
         // Per-fixture minutes when the feed itemises them; the gameweek total
-        // is the fallback for a single-fixture week, where the two agree.
+        // is the fallback for a single-fixture week, where the two agree. A
+        // player with a ladder entry played by definition, which covers the
+        // window before `explain` carries a fresh second leg.
+        if (ladder?.has(e.id)) return true;
         const mins = itemised ? (inThis?.get(e.id)?.minutes ?? 0) : e.stats.minutes;
         return (mins ?? 0) > 0;
       })
-      .map((e) => ({ id: e.id, bps: e.stats.bps }))
+      .map((e) => ({ id: e.id, bps: ladder ? (ladder.get(e.id) ?? 0) : e.stats.bps }))
       .sort((a, b) => b.bps - a.bps);
     if (players.length === 0) continue;
 
     /*
-     * ABSTAIN WHEN THE RANKING CANNOT BE TRUSTED.
+     * ABSTAIN WHEN THE RANKING CANNOT BE TRUSTED — WHICH IS NOW ONLY WHEN THE
+     * FIXTURE PUBLISHED NO USABLE BPS LADDER.
      *
-     * FPL publishes BPS only as a gameweek total. If anyone on this pitch has
-     * also played another fixture this gameweek, his figure includes points
-     * banked elsewhere and the 3/2/1 order here is not a reading of this match.
-     * Projecting a confident wrong ladder is worse than projecting nothing: the
-     * reader sees provisional bonus on the wrong three players and the numbers
-     * do not settle until FPL confirms.
+     * Without it the only BPS available is the gameweek total, so if anyone on
+     * this pitch has also played another fixture this gameweek his figure
+     * includes points banked elsewhere and the 3/2/1 order here is not a
+     * reading of this match. Projecting a confident wrong ladder is worse than
+     * projecting nothing: the reader sees provisional bonus on the wrong three
+     * players and the numbers do not settle until FPL confirms.
      *
-     * Single gameweeks — every gameweek most seasons — are unaffected, because
-     * there the gameweek total IS this fixture's total.
+     * `!ladder` is the same predicate the ranking above switches on, and that
+     * matters: gating the two on different tests is how an empty row came to
+     * select the gameweek-total ranking AND skip the abstention at once.
+     *
+     * Single gameweeks — every gameweek most seasons — never reached this
+     * either way, because there the gameweek total IS this fixture's total.
      */
-    if (players.some((p) => (legsPlayed.get(p.id) ?? 0) > 1)) continue;
+    if (!ladder && players.some((p) => (legsPlayed.get(p.id) ?? 0) > 1)) continue;
 
     // Group by bps value, award 3/2/1 with tie-sharing.
     let bonus = 3;
@@ -141,13 +213,12 @@ export function provisionalBonus(
       const tied = players.filter((p) => p.bps === players[i].bps);
       for (const p of tied) {
         /*
-         * Accumulate rather than `Math.max`, because FPL pays each leg — and
-         * note this cannot currently fire. Being credited from two legs means
-         * playing two, which makes BOTH of those fixtures abstain above. The
-         * `+` is here so that relaxing the abstention (if FPL ever publishes
-         * per-fixture BPS) does not silently reintroduce the old bug, and this
-         * comment is here so nobody writes a test for a branch that has no
-         * reachable input.
+         * Accumulate rather than `Math.max`, because FPL pays each leg. This
+         * used to be unreachable — being credited from two legs meant playing
+         * two, which made both fixtures abstain — and the note here said the
+         * `+` was insurance against the day per-fixture BPS turned up. It has:
+         * with `f.stats` a player top of both legs is now ranked in both, and
+         * `Math.max` would credit 3 where FPL pays 6.
          */
         const net = bonus - (inThis?.get(p.id)?.bonus ?? 0);
         if (net > 0) byElement.set(p.id, (byElement.get(p.id) ?? 0) + net);
@@ -158,6 +229,91 @@ export function provisionalBonus(
   }
 
   return { byElement };
+}
+
+/** One player's line in ONE fixture, rather than across the gameweek. */
+export interface FixtureLine {
+  minutes: number;
+  points: number;
+  /** Null when the fixture publishes no BPS ladder — see `provisionalBonus`. */
+  bps: number | null;
+}
+
+/**
+ * Everyone who appeared in ONE fixture, with that fixture's own numbers.
+ *
+ * `live.elements[].stats` IS A GAMEWEEK TOTAL. Read as a per-match figure it
+ * says a player who only appeared in leg 1 played in leg 2, gives him 180
+ * minutes, and ranks him by two legs of BPS — which is exactly the family of
+ * defect `provisionalBonus` was rewritten to remove, and it was still live one
+ * file over in the match sheet.
+ *
+ * `explain` carries a `fixture` id, so minutes and points are answerable per
+ * leg; `fixture.stats` carries the BPS ladder when FPL has published one. Where
+ * the feed itemises nothing at all — a stub, or a gameweek with a single
+ * fixture — the gameweek total IS this fixture's total and is used as-is.
+ */
+export function fixtureLines(
+  fixture: Fixture,
+  live: EventLive | null,
+  /**
+   * Which club each element plays for. Optional, and only used to keep players
+   * from other clubs out of the un-itemised fallback — `provisionalBonus` has
+   * always filtered on it there and this did not, so a stub feed could put a
+   * third club's player in a two-club match. Not reachable from the shipped
+   * feeds, which itemise; the asymmetry between two functions answering the
+   * same question is the reason to close it.
+   */
+  teamOf?: Map<number, number>
+): Map<number, FixtureLine> {
+  const out = new Map<number, FixtureLine>();
+  if (!live) return out;
+  const bpsRow = fixture.stats?.find((st) => st.identifier === "bps");
+  const rows = bpsRow ? [...bpsRow.h, ...bpsRow.a] : [];
+  // Empty is not "published" — see the same distinction in `provisionalBonus`.
+  const ladder = rows.length > 0 ? new Map(rows.map((r) => [r.element, r.value])) : null;
+  const itemised = live.elements.some((e) => (e.explain ?? []).length > 0);
+  for (const e of live.elements) {
+    const legs = (e.explain ?? []).filter((ex) => ex.fixture === fixture.id);
+    if (itemised && legs.length === 0) continue;
+    let minutes = 0;
+    let points = 0;
+    if (itemised) {
+      for (const leg of legs) {
+        for (const st of leg.stats) {
+          points += st.points;
+          if (st.identifier === "minutes") minutes += st.value;
+        }
+      }
+    } else {
+      const t = teamOf?.get(e.id);
+      if (teamOf && t !== fixture.team_h && t !== fixture.team_a) continue;
+      minutes = e.stats.minutes;
+      points = e.stats.total_points;
+    }
+    if (minutes <= 0 && points === 0) continue;
+    /*
+     * BPS, IN ORDER OF WHAT CAN BE PROVEN.
+     *
+     * The ladder is per-fixture and is the answer whenever it exists — and a
+     * player missing from it is on ZERO, not unknown, because FPL omits
+     * zero-valued entries from a `stats` row (measured: 31 players appeared in
+     * the snapshot's fixture 1 and 30 have rows; the missing one is a keeper on
+     * 0 BPS).
+     *
+     * With no ladder, the gameweek total is still exactly right for anyone with
+     * ONE leg this gameweek — which is every player in every ordinary gameweek.
+     * Returning null there threw away a correct number and emptied the BPS
+     * column of the match sheet in weeks where it had always been right.
+     */
+    const oneLeg = (e.explain ?? []).length <= 1;
+    out.set(e.id, {
+      minutes,
+      points,
+      bps: ladder ? (ladder.get(e.id) ?? 0) : !itemised || oneLeg ? e.stats.bps : null,
+    });
+  }
+  return out;
 }
 
 export interface AutoSubResult {
@@ -193,14 +349,32 @@ export function projectAutoSubs(
       else fxByTeam.set(t, [f]);
     }
   }
-  // A player is "done on 0" when they have fixtures this GW, every one has
-  // finished, and they played 0 minutes. (No fixture at all = blank GW = done.)
+  /*
+   * A player is "done on 0" when they have fixtures this GW, every one has
+   * REACHED FULL TIME, and they played 0 minutes. (No fixture at all = blank
+   * GW = done.)
+   *
+   * FULL TIME IS `finished_provisional`, NOT `finished`. A substitution turns
+   * entirely on MINUTES, which is a fact about the match and is settled at the
+   * whistle; `finished` waits for BONUS, which no auto-substitution depends on.
+   * CLAUDE.md states that split, and `isInPlay` and `matchMinute` were both
+   * corrected to it — this was not, so for the whole provisional window (the
+   * snapshot shows a fixture still provisional after full time, and a Saturday
+   * slate routinely takes hours) the app rendered "FT", stopped the pulsing
+   * live styling, and went on counting a starter who never came on while
+   * ignoring the bench player who replaces him.
+   *
+   * The risk in the other direction is a stat correction after the whistle,
+   * which would move a player off zero minutes. That does not favour waiting:
+   * FPL processes the substitution on the same data, so following it is being
+   * wrong exactly when FPL is, instead of being wrong for hours on purpose.
+   */
   const doneOnZero = (elId: number): boolean => {
     const el = elements.get(elId);
     if (!el) return false;
     const fx = fxByTeam.get(el.team) ?? [];
     if (fx.length === 0) return true; // blank GW: cannot score
-    if (!fx.every((f) => f.finished)) return false;
+    if (!fx.every((f) => f.finished || f.finished_provisional)) return false;
     return (liveById.get(elId)?.stats.minutes ?? 0) === 0;
   };
 
@@ -271,7 +445,58 @@ export function projectAutoSubs(
  * frozen is what a scoreboard shows too, and inferring the break from a stalled
  * counter would be guessing again.
  */
-export function matchMinute(f: Fixture, now: Date = new Date()): string {
+/**
+ * The match clock, read from the LIVE endpoint rather than from `fixtures/`.
+ *
+ * MEASURED, and it is the reason this function exists. Probe run 32577720199,
+ * 36 samples 20s apart across the 2026-08-22 15:00 BST kick-offs, recording
+ * FPL's own `age` header on both feeds:
+ *
+ *   `fixtures/`         age climbed 20 -> 301 and reset. Two resets 301s
+ *                       apart, so FPL's edge holds it for 300 SECONDS.
+ *   `event/{gw}/live/`  age never exceeded 92, resetting throughout — roughly
+ *                       a 90-second hold.
+ *
+ * So the clock the app was reading is behind by however far into FPL's own
+ * five-minute cache window the request lands. Sampled on IPS-SUN, kicked off
+ * 14:00:00Z, at 14:18:11Z — 18 minutes of football played:
+ *
+ *   `fixtures[].minutes` ............ 10   (8 minutes behind)
+ *   max player minutes, this fixture  16   (2 minutes behind)
+ *
+ * Across the run `fixtures[].minutes` sawtoothed between roughly 2 and 8
+ * minutes behind, stepping only at the instants `age` reset. The player clock
+ * moved smoothly and stayed about 2 behind. Nothing in this repo caused any of
+ * it and no caching change here can shorten it: it is upstream of the proxy,
+ * the CDN and the poll alike. Reading the other feed is the only lever.
+ *
+ * The comment this replaces claimed `fixtures[].minutes` had been measured
+ * tracking the real clock ("89 at the 89th minute"). No snapshot in this repo
+ * contains an in-play fixture, so that could not be reproduced, and the probe
+ * above contradicts it for the live feed.
+ *
+ * ONE FIXTURE ONLY, WHICH IS THE TRAP. `live.elements[].stats.minutes` is a
+ * GAMEWEEK total, so a player who banked 90 in leg 1 of a double would report
+ * 90 for a leg 2 that kicked off ten minutes ago. Only players with exactly
+ * one `explain` entry are counted — the same guard `provisionalBonus` needed,
+ * for the same reason. In a double that still leaves every single-leg player
+ * to read the clock from; when it leaves nobody, this returns null and the
+ * caller falls back to the fixtures clock.
+ */
+export function liveMatchMinutes(live: EventLive | null, fixtureId: number): number | null {
+  if (!live) return null;
+  let best: number | null = null;
+  for (const el of live.elements ?? []) {
+    const legs = el.explain ?? [];
+    if (legs.length !== 1 || legs[0].fixture !== fixtureId) continue;
+    const m = el.stats?.minutes;
+    if (typeof m !== "number" || !Number.isFinite(m)) continue;
+    if (best === null || m > best) best = m;
+  }
+  return best;
+}
+
+export function matchMinute(f: Fixture, now: Date = new Date(), liveMinutes?: number | null): string {
   // `finished` means BONUS CONFIRMED, not "the match has ended" — after a
   // Saturday afternoon those are hours apart, and for that whole window the
   // clock had nothing to tell it the match was over and sat on 90'.
@@ -280,8 +505,20 @@ export function matchMinute(f: Fixture, now: Date = new Date()): string {
   // Guard the type as well as the value: this arrives from the network, and a
   // string "54" would render as "54'" by luck and NaN-poison any arithmetic a
   // later caller does on it.
-  if (typeof f.minutes === "number" && Number.isFinite(f.minutes) && f.minutes > 0) {
-    const m = Math.floor(f.minutes);
+  /*
+   * The LARGER of the two, because both are lower bounds on how much football
+   * has been played and neither can run ahead of the match. `fixtures/` is
+   * five minutes stale at worst; the live feed is ninety seconds stale at
+   * worst; whichever has been refreshed more recently is the better answer,
+   * and that is exactly what taking the max picks.
+   */
+  const published =
+    typeof f.minutes === "number" && Number.isFinite(f.minutes) ? f.minutes : 0;
+  const fromLive =
+    typeof liveMinutes === "number" && Number.isFinite(liveMinutes) ? liveMinutes : 0;
+  const best = Math.max(published, fromLive);
+  if (best > 0) {
+    const m = Math.floor(best);
     /*
      * FPL STOPS COUNTING AT 90, so a match in stoppage reads exactly 90 and
      * stays there. Measured on ARS v COV: the feed said 89 at the 89th minute
@@ -302,4 +539,275 @@ export function matchMinute(f: Fixture, now: Date = new Date()): string {
   if (mins >= 45 && mins <= 60) return "HT~";
   const capped = Math.min(mins > 60 ? mins - 15 : mins, 90); // rough half-time adjustment
   return `${capped}'`;
+}
+
+
+/**
+ * The median live score of a sample of rival managers, scored exactly the way
+ * the reader's own total is.
+ *
+ * SYMMETRY IS THE WHOLE POINT, and two things broke it while this lived inline
+ * in `LiveTab`:
+ *
+ *  - The sample was fetched AND scored in one effect behind a ref that never
+ *    reset, so the benchmark was a snapshot of the first live payload while the
+ *    reader's total moved every thirty seconds. Left long enough that is not a
+ *    comparison: the number you are told to beat is the score your rivals had
+ *    when you opened the tab, and "you're N above; on course to climb" is what
+ *    almost everyone sees by the end of a Saturday. Picks do not change during
+ *    a gameweek, so they are still fetched once; the SCORING is what has to
+ *    follow the feed, which is why it is a pure function here.
+ *
+ *  - `provisionalBonus` was applied to the reader and to nobody else. Through
+ *    the window CLAUDE.md describes as "hours apart" — final whistle to bonus
+ *    confirmation — that credited the reader two to eight points the benchmark
+ *    credited no one. The bonus map is per PLAYER, so it applies to a rival's
+ *    picks unchanged.
+ *
+ *  - THE ARMBAND DID NOT MOVE FOR RIVALS, and the commit that fixed the bonus
+ *    half asserted that "everything else in this comparison is already
+ *    symmetric". It was not. The reader's side promotes the vice-captain once
+ *    the captain can no longer play; this took `pk.multiplier` off the picks
+ *    payload, which is what FPL recorded at the deadline. Measured on one demo
+ *    squad whose captain played 0 minutes and whose vice scored 13: the reader
+ *    was credited 59 and the same squad scored here came to 46. It pushes the
+ *    same direction as the bonus gap — the reader gets the takeover and the
+ *    benchmark never does — and it also drags the median DOWN, because every
+ *    band rival whose captain blanks is scored too low.
+ *
+ * Everything else really is symmetric: both sides net of hits, both with
+ * projected auto-subs. Returns null below `minSample`, because a median of
+ * three managers is not a rank band.
+ */
+export function bandMedianScore(
+  picks: EntryEventPicks[],
+  elements: Map<number, Element>,
+  live: EventLive,
+  fixtures: Fixture[],
+  gw: number,
+  bonusByElement: Map<number, number> | null,
+  gwDone = false,
+  minSample = 5
+): number | null {
+  const scores = picks.map((p) =>
+    liveEntryScore(p, elements, live, fixtures, gw, bonusByElement, gwDone)
+  );
+  if (scores.length < minSample) return null;
+  scores.sort((a, b) => a - b);
+  return scores[Math.floor(scores.length / 2)];
+}
+
+/**
+ * One manager's live gameweek score, net of hits — THE definition, used
+ * everywhere a manager's live score is shown.
+ *
+ * THREE TABS COMPUTED THIS THREE DIFFERENT WAYS. The Live tab had provisional
+ * bonus and the vice-captain takeover; the Team pitch corner had the takeover
+ * and no bonus; the Mini-league row had neither, for the reader and for every
+ * rival. Measured on the demo squad at GW20, identical inputs:
+ *
+ *                                          Live   Team pitch   Mini-league
+ *   demo as shipped                          48       48           48
+ *   bonus awarded but not yet confirmed      48       46           46
+ *   captain blanked, vice played             53       53           52
+ *
+ * The first row agrees only because `demo.ts` itemises bonus into `explain`
+ * for in-play fixtures — which FPL does not — so `provisionalBonus` returns an
+ * empty map and the divergence is invisible on the only feed that runs
+ * locally. The second row is the real state between the final whistle and
+ * bonus confirmation, which CLAUDE.md and `isInPlay` above both describe as
+ * hours long. The third row's gap is the vice's entire raw score, 4 to 15
+ * points on real data.
+ *
+ * `pk.multiplier` is what FPL recorded at the DEADLINE and already carries
+ * Triple Captain, so it stands unless the takeover fires — recomputing it from
+ * `active_chip` in the ordinary case would replace a fact with an inference.
+ */
+export function liveEntryScore(
+  p: EntryEventPicks,
+  elements: Map<number, Element>,
+  live: EventLive,
+  fixtures: Fixture[],
+  gw: number,
+  bonusByElement: Map<number, number> | null,
+  gwDone = false
+): number {
+  const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
+  const minsOf = new Map(live.elements.map((e) => [e.id, e.stats.minutes]));
+  const bb = p.active_chip === "bboost";
+  const subs = projectAutoSubs(p.picks, elements, live, fixtures, gw);
+  const effXi = new Set(subs.effectiveXi);
+  /*
+   * The takeover rule, term for term: the captain is gone once the gameweek is
+   * done or the auto-sub projection has dropped him, he must be on zero
+   * minutes, and the vice must have played.
+   */
+  const capMult = p.active_chip === "3xc" ? 3 : 2;
+  const blanked = new Set(subs.out);
+  const capPick = p.picks.find((k) => k.is_captain);
+  const vicePick = p.picks.find((k) => k.is_vice_captain);
+  const takeover =
+    capPick != null &&
+    vicePick != null &&
+    (gwDone || blanked.has(capPick.element)) &&
+    (minsOf.get(capPick.element) ?? 0) === 0 &&
+    (minsOf.get(vicePick.element) ?? 0) > 0;
+  let pts = 0;
+  for (const pk of p.picks) {
+    if (!bb && !effXi.has(pk.element)) continue;
+    let mult = pk.multiplier > 1 ? pk.multiplier : 1;
+    if (takeover) {
+      if (pk.element === capPick!.element) mult = 1;
+      else if (pk.element === vicePick!.element) mult = capMult;
+    }
+    pts += ((pointsOf.get(pk.element) ?? 0) + (bonusByElement?.get(pk.element) ?? 0)) * mult;
+  }
+  return pts - (p.entry_history?.event_transfers_cost ?? 0);
+}
+
+/**
+ * How long the in-play feed may show the SAME numbers before it is not live.
+ *
+ * A BOUND, NOT A FITTED VALUE, and it is worth being precise about which:
+ * the longest freeze this feed can legitimately show is half time, which the
+ * Laws of the Game cap at 15 minutes. That is a rule of the sport, not a
+ * measurement of FPL, so it does not need a sweep — but the margin on top of
+ * it does not have one either. Five minutes is a guess at FPL's own update
+ * lag; nothing here has measured it, and no snapshot taken so far contains an
+ * in-play fixture to measure it from.
+ *
+ * Erring long is the right direction. A false "not updating" during half time
+ * of a 3pm slot — when every match freezes at 45 together — would be the
+ * advisory crying wolf on the one screen that has to be trusted.
+ */
+export const FEED_STALL_MS = 20 * 60_000;
+
+/**
+ * Everything about this gameweek's in-play matches that MUST change while
+ * football is being played.
+ *
+ * WHY THIS EXISTS AT ALL, because two other defences already looked like they
+ * covered it and do not:
+ *
+ *  - The origin no longer serves a cached body behind a failed upstream
+ *    (`cache: "no-store"`), and
+ *  - `liveStaleMinutes` catches a feed that has stopped ANSWERING.
+ *
+ * Both are about OUR request failing. Neither fires when the request succeeds
+ * and the payload is simply old — an upstream edge serving its own stale copy,
+ * which is indistinguishable from a fresh one at every layer we control. It
+ * was observed: a match that had finished 2-0 rendered `55'` under a current
+ * "Updated" stamp, having earlier rendered `2'` for over an hour. The payload
+ * advanced once and stopped again, and every HTTP status along the way was 200.
+ *
+ * So the only honest test left is whether OUR OWN DATA MOVES. This makes no
+ * claim about FPL's internals and does not estimate a minute from the clock —
+ * the repo has three shipped defects from doing exactly that. It compares the
+ * feed with itself.
+ *
+ * Scores and the finish flags are folded in as well as the clock, so a feed
+ * that is alive in any respect counts as alive.
+ */
+export function liveSignature(fixtures: Fixture[], event: number): string {
+  return fixtures
+    .filter((f) => f.event === event && isInPlay(f))
+    .map(
+      (f) =>
+        `${f.id}:${f.minutes ?? ""}:${f.team_h_score ?? ""}-${f.team_a_score ?? ""}:${
+          f.finished ? 1 : 0
+        }${f.finished_provisional ? 1 : 0}`
+    )
+    .sort()
+    .join("|");
+}
+
+/**
+ * The watch a caller holds between polls: the last in-play signature seen, and
+ * when it was first seen.
+ */
+export type FeedWatch = { sig: string; at: number };
+
+/**
+ * Fold a fresh payload into the watch, returning the SAME OBJECT when nothing
+ * moved.
+ *
+ * Referential stability is the point of that: this is held in React state and
+ * set from the poll, so returning a new object every thirty seconds would
+ * repaint the tab forever for no change. Pure — no ref written during render,
+ * which `react-hooks/refs` rejects and which was the first shape of this.
+ */
+export function advanceFeedWatch(
+  watch: FeedWatch,
+  fixtures: Fixture[],
+  event: number,
+  now: number
+): FeedWatch {
+  const sig = liveSignature(fixtures, event);
+  return sig === watch.sig ? watch : { sig, at: now };
+}
+
+/**
+ * How long the feed has shown the same in-play numbers, or null while it moves.
+ *
+ * An empty signature — no match in play — is never a stall: the gap between two
+ * kick-offs is not the feed failing, and `advanceFeedWatch` resets the clock on
+ * the way in and out of it.
+ */
+export function feedStallMs(watch: FeedWatch, now: number): number | null {
+  if (watch.sig === "") return null;
+  const held = now - watch.at;
+  return held >= FEED_STALL_MS ? held : null;
+}
+
+/**
+ * How much football a manager's counting players still have in front of them.
+ *
+ * The number a live table is actually read for. A rival two points ahead with
+ * five players still to kick off is in a different position from one two
+ * points ahead with none, and the score alone cannot tell them apart — which
+ * is why every live standings view worth using prints this beside it.
+ *
+ * COUNTED OVER THE SAME PLAYERS THE SCORE IS. Auto-subs and Bench Boost decide
+ * who counts, so this runs `projectAutoSubs` exactly as `liveEntryScore` does;
+ * counting the raw first eleven would credit a rival for a benched player's
+ * fixture and miss the substitute who actually replaced him.
+ *
+ * A player is resolved against HIS CLUB'S fixtures in this gameweek, not one
+ * fixture, so a double gameweek answers sensibly: in play if any leg is
+ * running, otherwise to start if any leg has not kicked off, otherwise done.
+ * `blank` is players with no fixture at all — neither waiting nor playing, and
+ * reported separately rather than quietly counted as finished.
+ */
+export function squadMatchState(
+  p: EntryEventPicks,
+  elements: Map<number, Element>,
+  live: EventLive,
+  fixtures: Fixture[],
+  gw: number
+): { inPlay: number; toStart: number; played: number; blank: number } {
+  const bb = p.active_chip === "bboost";
+  const effXi = new Set(projectAutoSubs(p.picks, elements, live, fixtures, gw).effectiveXi);
+  const byTeam = new Map<number, Fixture[]>();
+  for (const f of fixtures) {
+    if (f.event !== gw) continue;
+    for (const t of [f.team_h, f.team_a]) {
+      const list = byTeam.get(t);
+      if (list) list.push(f);
+      else byTeam.set(t, [f]);
+    }
+  }
+  let inPlay = 0;
+  let toStart = 0;
+  let played = 0;
+  let blank = 0;
+  for (const pk of p.picks) {
+    if (!bb && !effXi.has(pk.element)) continue;
+    const team = elements.get(pk.element)?.team;
+    const legs = team == null ? [] : (byTeam.get(team) ?? []);
+    if (legs.length === 0) blank++;
+    else if (legs.some((f) => isInPlay(f))) inPlay++;
+    else if (legs.some((f) => !f.started)) toStart++;
+    else played++;
+  }
+  return { inPlay, toStart, played, blank };
 }

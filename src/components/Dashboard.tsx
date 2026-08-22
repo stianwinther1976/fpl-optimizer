@@ -2,13 +2,25 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { canGoBack } from "@/lib/nav";
 import dynamic from "next/dynamic";
 import { api, entryNotFoundMessage, FplApiError, loadTeamData, fmtNum, fmtRank, rankPercentile, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
 import type { Element, EntryEventPicks, EventLive, Fixture } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
-import { projectAutoSubs, LIVE_REFRESH_MS } from "@/lib/live";
-import { netEventPoints, netGwDelta, netGwPoints, valueDelta } from "@/lib/display";
+import { projectAutoSubs, provisionalBonus, liveEntryScore, LIVE_REFRESH_MS } from "@/lib/live";
+import {
+  benchBadgeFor,
+  benchSortKey,
+  benchSummary,
+  liveCornerNote,
+  netEventPoints,
+  netGwDelta,
+  netGwPoints,
+  valueDelta,
+  liveOverallPoints,
+} from "@/lib/display";
 import { saveRecentTeam } from "@/lib/recent";
 import { currentSeasonName } from "@/lib/seasonArchive";
 import { launchPool } from "@/lib/pool";
@@ -18,6 +30,11 @@ import {
   pastSeasonVersion,
   subscribePastSeason,
 } from "@/lib/pastSeasonStore";
+import {
+  cachedRecentForm,
+  recentFormVersion,
+  subscribeRecentForm,
+} from "@/lib/recentFormStore";
 import {
   reconcileFinishedGws,
   seedDemoCalibration,
@@ -210,6 +227,11 @@ export default function Dashboard({
     * is the server snapshot: this is a client component under the App Router,
     * so it is still rendered once on the server.
     */
+  const recentReady = useSyncExternalStore(
+    subscribeRecentForm,
+    recentFormVersion,
+    recentFormVersion
+  );
   const pastReady = useSyncExternalStore(
     subscribePastSeason,
     pastSeasonVersion,
@@ -223,14 +245,40 @@ export default function Dashboard({
    * different footballer. `lineup.ts` keys storage the same way, so this is the
    * one place the two have to agree.
    */
+  // The gameweek a line-up call is about. Same anchor `projectAll` calls
+  // offset 0, so a stamped call and the projection cannot disagree.
+  const router = useRouter();
+  /*
+   * Read once on mount, into state. `canGoBack()` is module state React cannot
+   * see change, and reading it during render would make the button's label
+   * depend on something outside React's model — the same class of mistake
+   * `pastSeasonStore` and `recentFormStore` both exist to avoid. It cannot
+   * change while this screen is mounted anyway: a navigation away unmounts it.
+   */
+  const [backable, setBackable] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- module state is not readable during SSR, and this is the client-only answer
+    setBackable(canGoBack());
+  }, []);
+  const squadNextEvent = data?.squad?.nextEvent ?? null;
   const callsVersion = useSyncExternalStore(
     subscribeStartCalls,
     startCallsVersion,
     startCallsVersion
   );
+  /*
+   * RE-HYDRATED ON THE GAMEWEEK, NOT JUST ON THE FEED. A call is about one
+   * match, and `loadStartCalls` now enforces that by dropping a payload
+   * stamped with a gameweek that is no longer next. Keying this effect on
+   * `entryId` alone would leave the expired set in memory until a remount, so
+   * the reader would keep seeing a stale call applied for the rest of the
+   * session. `squadNextEvent` is null while the team is still loading, which
+   * hydrates to empty — the right way round: no call is applied until the app
+   * knows which gameweek it would be applied to.
+   */
   useEffect(() => {
-    hydrateStartCalls(entryId === DEMO_ENTRY_ID);
-  }, [entryId]);
+    hydrateStartCalls(entryId === DEMO_ENTRY_ID, squadNextEvent);
+  }, [entryId, squadNextEvent]);
   useEffect(() => {
     if (!data) return;
     let cancelled = false;
@@ -288,6 +336,25 @@ export default function Dashboard({
            * here is the model's bias, and an override is not the model.
            */
           startCalls: new Map(),
+          /*
+           * RECENT FORM IS NOT AN OVERRIDE, AND WAS BEING TREATED AS ONE BY
+           * OMISSION. It is model input fetched from the official API, not a
+           * reader's opinion, so leaving it out here graded a projection the
+           * app does not ship: once `OptimizePanel` has run, the pitch and the
+           * Stats table are built WITH it while the calibration snapshot was
+           * built without. That is verbatim the failure `pastSeasonStore`
+           * records — "calibration was grading predictions the shipped drafter
+           * never made" — reintroduced for a different input, and the
+           * calibration's output is a per-position multiplier applied to every
+           * player in the game.
+           *
+           * `recentReady` is in this effect's dependency array for the same
+           * reason: without it the snapshot is taken once, before the fetch
+           * lands, and never revisited. `snapshotPredictions` overwrites, so
+           * the last projection before the deadline wins — which is the most
+           * informed one.
+           */
+          recentForm: cachedRecentForm() ?? undefined,
         });
         snapshotPredictions(demo, nextEv, xp, currentSeasonName(data.bootstrap.events));
       }
@@ -296,7 +363,7 @@ export default function Dashboard({
     return () => {
       cancelled = true;
     };
-  }, [data, entryId]);
+  }, [data, entryId, recentReady]);
 
   const currentEventObj = data?.bootstrap.events.find((e) => e.is_current) ?? null;
   const currentEvent = currentEventObj?.id ?? data?.squad?.currentEvent ?? null;
@@ -411,11 +478,31 @@ export default function Dashboard({
     };
   }, [viewGw, entryId, data, histRetry]);
 
+  /*
+   * THE SAME POINTS THE LIVE TAB SHOWS, PROVISIONAL BONUS INCLUDED.
+   *
+   * This map is what the Team pitch draws its per-player scores and its corner
+   * total from, and it was `stats.total_points` alone while `LiveTab` adds
+   * `provisionalBonus` — so between the final whistle and bonus confirmation,
+   * hours after a Saturday, the two tabs disagreed about the same squad by two
+   * to eight points. Invisible on the demo, whose in-play fixtures itemise
+   * bonus into `explain` so `provisionalBonus` returns an empty map, which is
+   * why it survived every browser sweep.
+   */
+  const liveBonus = useMemo(
+    () =>
+      liveData && currentEvent != null
+        ? provisionalBonus(data!.bootstrap, data!.fixtures, liveData, currentEvent)
+        : null,
+    [liveData, data, currentEvent]
+  );
   const livePointsOf = useMemo(() => {
     const m = new Map<number, number>();
-    for (const e of liveData?.elements ?? []) m.set(e.id, e.stats.total_points);
+    for (const e of liveData?.elements ?? []) {
+      m.set(e.id, e.stats.total_points + (liveBonus?.byElement.get(e.id) ?? 0));
+    }
     return m;
-  }, [liveData]);
+  }, [liveData, liveBonus]);
 
   // xP for the pitch view's "xP" mode (next gameweek). calVersion re-projects
   // after the calibration factors update; callsVersion after the reader
@@ -426,14 +513,24 @@ export default function Dashboard({
     void calVersion;
     void pastReady;
     void callsVersion;
+    void recentReady;
     const past = cachedPastSeason();
     return projectAll({
       bootstrap: data.bootstrap,
       fixtures: data.fixtures,
       nextEvent: nextEv,
       pastSeason: past ?? undefined,
+      /*
+       * THE SAME RECENT FORM THE OPTIMIZE PANEL USES, once it has fetched it.
+       * Without this the Stats table and the transfer plans quoted different
+       * five-gameweek xP for the same player in one page load — 13.8 against
+       * 14.5 on a player the plan was recommending selling, with nothing on
+       * either screen to say why. `StatsTable`'s header claims that defect was
+       * closed by handing it this projection; it was only moved here.
+       */
+      recentForm: cachedRecentForm() ?? undefined,
     });
-  }, [data, calVersion, pastReady, callsVersion]);
+  }, [data, calVersion, pastReady, callsVersion, recentReady]);
 
   const liveMinutesOf = useMemo(() => {
     const m = new Map<number, number>();
@@ -441,16 +538,110 @@ export default function Dashboard({
     return m;
   }, [liveData]);
 
-  // Effective captain: Triple Captain aware; once the GW is final, the vice
-  // takes over if the captain played 0 minutes (official rule).
+
+  // Effective XI after projected auto-subs. FPL swaps in bench players once a
+  // starter's fixtures finish with 0 minutes, so the "final" team total must
+  // count those subs (matches the official score before FPL processes it).
+  const autoSubs = useMemo(() => {
+    if (!liveData || !data?.picks || currentEvent == null) return null;
+    /*
+     * THIS SET DESCRIBES `data.picks`, WHICH IS NOT ALWAYS `squad.players`.
+     *
+     * Two cases where using it to split the pitch draws the wrong team:
+     *
+     *  - FREE HIT. `loadTeamData` deliberately builds `squad.players` from the
+     *    PREVIOUS gameweek's picks, because the one-week team is not the squad
+     *    that matters for transfers. Intersecting the base squad with the Free
+     *    Hit XI leaves whoever happens to be in both — probed at 2 cards on the
+     *    pitch and 13 on the bench, in an impossible formation, possibly with
+     *    no keeper. The pitch now draws `squad.currentPlayers`, which IS the
+     *    Free Hit fifteen, so the sets agree again — but the bail stays,
+     *    because it is also what stops a Free Hit week being rendered from a
+     *    squad the reader is not fielding if a caller ever passes `players`.
+     *  - BENCH BOOST. All fifteen score and FPL makes no substitution at all,
+     *    so the "effective XI" is the picked eleven. `display.ts`'s
+     *    `autoSubView` exists for this seam and `componentInvariants` has a
+     *    whole block on it — which reads only `LiveTab.tsx`, so it could not
+     *    see this call site. The time-machine branch below has the guard; the
+     *    live branch did not.
+     *
+     * A null `xi` in both cases sends every consumer back to
+     * `pickPosition <= 11`, which is the right answer for each.
+     *
+     * BUT `out` IS NOT ABOUT THE XI, AND BAILING TOOK IT WITH THEM. `out` is
+     * "whose matches finished on zero minutes" — a per-player fact about
+     * MINUTES, true under every chip — and it is also what fires the
+     * vice-captain takeover below. Returning null outright therefore stopped
+     * the armband moving in exactly the two weeks a reader is most invested in.
+     * `LiveTab` says the rule in so many words — "Bench Boost cancels the
+     * substitution but not the vice-captain rule, which FPL applies in every
+     * week regardless of chip" — and this file did the opposite. Measured on a
+     * constructed universe with a fixture at full time and bonus unconfirmed,
+     * captain blanked: Bench Boost 39 on the Live tab against 37 here, Free Hit
+     * 28 against 23, and 27 against 18 with a starter blanked as well.
+     */
+    const elementById = new Map(data.bootstrap.elements.map((e) => [e.id, e]));
+    const { effectiveXi, out } = projectAutoSubs(
+      data.picks.picks,
+      elementById,
+      liveData,
+      data.fixtures,
+      currentEvent
+    );
+    /*
+     * AND FREE HIT IS NOT A NO-SUBS WEEK. FPL applies auto-substitutions under
+     * Free Hit exactly as it does in an ordinary gameweek; Bench Boost is the
+     * one that cancels them, because all fifteen already score. The bail here
+     * covered both, so under a Free Hit the pitch counted the picked eleven
+     * while every other surface counted the substituted one — measured on the
+     * constructed universe at 90 against 96, and 84 against 96 with a starter
+     * blanked as well.
+     *
+     * The reason the Free Hit bail was added is in the note above: `autoSubs`
+     * describes `data.picks`, and intersecting it with a squad built from the
+     * PREVIOUS gameweek drew an impossible team. That is fixed at the source —
+     * the pitch draws `currentPlayers`, which IS the Free Hit fifteen, the same
+     * set `data.picks.picks` holds — so the bail is no longer protecting
+     * anything and is costing the substitution.
+     */
+    const noSubs = data.picks.active_chip === "bboost";
+    return { xi: noSubs ? null : new Set(effectiveXi), out: new Set(out) };
+  }, [liveData, data, currentEvent]);
+  const effectiveXiIds = autoSubs?.xi ?? null;
+
+  /*
+   * Effective captain: Triple Captain aware; once the GW is final, the vice
+   * takes over if the captain played 0 minutes (official rule).
+   *
+   * `currentPlayers`, not `players` — this is a statement about THIS
+   * gameweek's armband, and `players` carries next gameweek's transfers (and,
+   * in a Free Hit week, an entirely different fifteen).
+   */
   const capMult = data?.squad?.activeChip === "3xc" ? 3 : 2;
   const effCaptainId = useMemo(() => {
     const squad = data?.squad;
     if (!squad) return null;
-    const cap = squad.players.find((p) => p.isCaptain);
-    const vice = squad.players.find((p) => p.isViceCaptain);
+    const cap = squad.currentPlayers.find((p) => p.isCaptain);
+    const vice = squad.currentPlayers.find((p) => p.isViceCaptain);
+    /*
+     * THE SAME TEST THE LIVE TAB USES, WHICH THIS ONE WAS NOT.
+     *
+     * `gwFinished` waits for `finished` on every fixture — bonus confirmed —
+     * while `LiveTab` asks `gwDone || the auto-sub projection dropped him`, and
+     * that projection was moved to full time (`finished_provisional`) earlier
+     * in this session. So for the hours FPL takes to settle a Saturday the Live
+     * tab swapped the armband and the Team pitch did not: probed at six points
+     * apart on identical data, 66 against 72.
+     *
+     * The Dashboard was the wrong one. A takeover turns on MINUTES, which are
+     * settled at the whistle — the same argument that moved `doneOnZero`.
+     * `autoSubs.out` is that judgement already made, so using it also means the
+     * two tabs cannot drift apart again.
+     */
+    const capBlanked =
+      cap != null && (gwFinished || (autoSubs?.out.has(cap.element.id) ?? false));
     if (
-      gwFinished &&
+      capBlanked &&
       cap &&
       (liveMinutesOf.get(cap.element.id) ?? 0) === 0 &&
       vice &&
@@ -459,23 +650,54 @@ export default function Dashboard({
       return vice.element.id;
     }
     return cap?.element.id ?? null;
-  }, [data, gwFinished, liveMinutesOf]);
+  }, [data, gwFinished, liveMinutesOf, autoSubs]);
 
-  // Effective XI after projected auto-subs. FPL swaps in bench players once a
-  // starter's fixtures finish with 0 minutes, so the "final" team total must
-  // count those subs (matches the official score before FPL processes it).
-  const effectiveXiIds = useMemo(() => {
-    if (!liveData || !data?.picks || currentEvent == null) return null;
-    const elementById = new Map(data.bootstrap.elements.map((e) => [e.id, e]));
-    const { effectiveXi } = projectAutoSubs(
-      data.picks.picks,
-      elementById,
+  /*
+   * The gross the eleven on the pitch have scored, and the hit that separates
+   * it from the corner total. Lifted out of the JSX so both can be printed:
+   * the corner is net and the cards are not, and nothing said so.
+   */
+  const liveHit = data?.picks?.entry_history.event_transfers_cost ?? 0;
+  const liveGross = useMemo(() => {
+    const squad = data?.squad;
+    if (!squad || !liveData) return 0;
+    return squad.currentPlayers
+      .filter((p) =>
+        squad.activeChip === "bboost"
+          ? true
+          : effectiveXiIds
+            ? effectiveXiIds.has(p.element.id)
+            : p.pickPosition <= 11
+      )
+      .reduce(
+        (s, p) =>
+          s + (livePointsOf.get(p.element.id) ?? 0) * (p.element.id === effCaptainId ? capMult : 1),
+        0
+      );
+  }, [data, liveData, effectiveXiIds, livePointsOf, effCaptainId, capMult]);
+  const liveHitNote = liveCornerNote(liveGross, liveHit);
+
+  /*
+   * THE HEADER'S OWN LIVE SCORE, and it is deliberately `liveEntryScore` and
+   * not the `liveGross - liveHit` two lines up. That figure is built for the
+   * corner note; this one has to agree, to the point, with the number the Live
+   * tab and the mini-league print, because a reader can see two of the three at
+   * once. `liveEntryScore` is the single definition — see its note — and using
+   * anything else here is how "Total points 3" ended up beside "7 pts".
+   */
+  const liveNet = useMemo(() => {
+    if (!data?.picks || !liveData || currentEvent == null || gwFinished) return null;
+    return liveEntryScore(
+      data.picks,
+      new Map(data.bootstrap.elements.map((e) => [e.id, e])),
       liveData,
       data.fixtures,
-      currentEvent
+      currentEvent,
+      liveBonus?.byElement ?? null,
+      gwFinished
     );
-    return new Set(effectiveXi);
-  }, [liveData, data, currentEvent]);
+  }, [data, liveData, currentEvent, gwFinished, liveBonus]);
+
 
   if (error) {
     return (
@@ -512,8 +734,8 @@ export default function Dashboard({
   const comparable = curr != null && past != null && past.event < curr.event;
   const period = comparable ? `vs GW${past.event}` : "";
 
-  const fmtSigned = (n: number, digits = 0) =>
-    `${n > 0 ? "+" : n < 0 ? "−" : "±"}${Math.abs(n).toLocaleString("en-GB", {
+  const fmtSigned = (n: number, digits = 0, unit = "") =>
+    `${n > 0 ? "+" : n < 0 ? "−" : "±"}${unit}${Math.abs(n).toLocaleString("en-GB", {
       minimumFractionDigits: digits,
       maximumFractionDigits: digits,
     })}`;
@@ -569,7 +791,9 @@ export default function Dashboard({
   if (comparable) {
     const diff = valueDelta(curr, past);
     valueStat = {
-      text: `${fmtSigned(diff / 10, 1)}m`,
+      // `£` on both sides of the sign, because the modal that opens from this
+      // card renders `£0.0m` for the same pair and the card rendered `±0.0m`.
+      text: `${fmtSigned(diff / 10, 1, "£")}m`,
       period,
       good: diff === 0 ? null : diff > 0,
       direction: diff >= 0 ? "up" : "down",
@@ -591,36 +815,63 @@ export default function Dashboard({
   // scores puts a spike on the very week a hit turned into a loss.
   const pointsTrend = rows.slice(-8).map((r) => netGwPoints(r));
 
-  // "Chips left" shows everything still available this season; the subtitle
-  // notes how many are usable right now (windows can open later).
-  const chipsLeft = squad
-    ? remainingChips(
-        history.chips.map((c) => ({ name: c.name, event: c.event })),
-        data.bootstrap.chips ?? null,
-        squad.nextEvent,
-        "season"
-      )
-    : [];
-  const chipsNow = squad
-    ? remainingChips(
-        history.chips.map((c) => ({ name: c.name, event: c.event })),
-        data.bootstrap.chips ?? null,
-        squad.nextEvent,
-        "now"
-      )
-    : [];
+  /*
+   * "Chips left" shows everything still available this season; the subtitle
+   * notes how many are usable right now (windows can open later).
+   *
+   * NOT GATED ON `squad`, WHICH MADE IT SAY ZERO. Before GW1 there are no picks
+   * to build a squad from, and the card read `Chips left / 0 / None` while the
+   * modal it opens — which has no such gate — listed all six. A manager who has
+   * played nothing holds every chip; zero is not "unknown", it is the opposite
+   * of the truth. The page's own copy two inches below says a missing squad is
+   * normal before GW1 and that only points and rank show a dash.
+   *
+   * `squad?.nextEvent ?? null` is what the modal passes, and `remainingChips`
+   * treats null as "no window filter", which is right when there is no
+   * gameweek to filter on.
+   */
+  const chipsUsed = history.chips.map((c) => ({ name: c.name, event: c.event }));
+  const chipsLeft = remainingChips(
+    chipsUsed,
+    data.bootstrap.chips ?? null,
+    squad?.nextEvent ?? null,
+    "season"
+  );
+  const chipsNow = remainingChips(
+    chipsUsed,
+    data.bootstrap.chips ?? null,
+    squad?.nextEvent ?? null,
+    "now"
+  );
 
   return (
     <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <Link
-            href="/"
+          {/*
+            ONE STEP BACK WHEN THERE IS ONE, AND THE LABEL FOLLOWS.
+            This was `<Link href="/">` labelled "← Switch team". For the
+            ordinary journey — landing page, then a team — the two destinations
+            coincide, so it read correctly. They come apart on the route the
+            mini-league opens: tap a rival and you are on THEIR team, where the
+            arrow points at your own league table and the link went to the
+            landing page instead.
+
+            The fallback is the reason this is not just `router.back()`.
+            Reached cold — a shared link, a bookmark, the home-screen icon —
+            there is no in-app screen behind this one, and going back would
+            eject the reader from the app entirely. `nav.ts` is what tells the
+            two apart; `history.length` cannot, because it counts the whole
+            tab's history and not this app's.
+          */}
+          <button
+            type="button"
+            onClick={() => (backable ? router.back() : router.push("/"))}
             className="-ml-2 inline-flex min-h-11 items-center px-2 text-xs text-muted hover:text-accent"
           >
-            ← Switch team
-          </Link>
+            ← {backable ? "Back" : "Switch team"}
+          </button>
           <h1 className="text-xl font-bold sm:text-2xl">
             {entry.name}{" "}
             <span className="text-sm font-normal text-muted sm:text-base">
@@ -670,9 +921,20 @@ export default function Dashboard({
 
       {/* KPI row */}
       <div className="mt-3 grid grid-cols-3 gap-2 sm:gap-3 lg:grid-cols-6">
+        {/*
+          LIVE WHILE THE GAMEWEEK IS LIVE. `summary_overall_points` is FPL's
+          stored figure: refreshed on their schedule and never carrying
+          provisional bonus, so it read 3 beside the Live tab's 7 for the same
+          quantity. See `liveOverallPoints`. Once the gameweek is finished
+          FPL's number is the authority again — it has the confirmed bonus.
+        */}
         <Stat
           label="Total points"
-          value={fmtNum(entry.summary_overall_points)}
+          value={fmtNum(
+            liveNet != null && currentEvent != null
+              ? liveOverallPoints(rows, currentEvent, liveNet)
+              : entry.summary_overall_points
+          )}
           accent
           delta={pointsDelta}
           trend={pointsTrend.length > 1 ? pointsTrend : undefined}
@@ -690,7 +952,11 @@ export default function Dashboard({
         <Stat
           label="Latest GW"
           value={
-            latestGwPoints != null ? `${latestGwPoints} pts` : "–"
+            liveNet != null
+              ? `${liveNet} pts`
+              : latestGwPoints != null
+                ? `${latestGwPoints} pts`
+                : "–"
           }
           delta={gwDelta}
           sub={
@@ -760,6 +1026,38 @@ export default function Dashboard({
             id={`tab-${key}`}
             aria-selected={tab === key}
             aria-controls={`panel-${key}`}
+            /*
+             * ROVING TABINDEX AND ARROW KEYS, because `role="tablist"` is a
+             * PROMISE about the keyboard and the strip was making it without
+             * keeping it: every tab had `tabindex` unset and the arrow keys did
+             * nothing, so a screen-reader user was told "tab, 1 of 7" and then
+             * found the only way through was Tab, seven stops, exactly as if
+             * the roles were not there. Announcing a pattern and not
+             * implementing it is worse than plain buttons, which at least do
+             * not lie about how they work.
+             */
+            tabIndex={tab === key ? 0 : -1}
+            onKeyDown={(e) => {
+              const order = TABS.map(([k]) => k);
+              const at = order.indexOf(tab);
+              const to =
+                e.key === "ArrowRight" || e.key === "ArrowDown"
+                  ? (at + 1) % order.length
+                  : e.key === "ArrowLeft" || e.key === "ArrowUp"
+                    ? (at - 1 + order.length) % order.length
+                    : e.key === "Home"
+                      ? 0
+                      : e.key === "End"
+                        ? order.length - 1
+                        : -1;
+              if (to < 0) return;
+              e.preventDefault();
+              selectTab(order[to]);
+              // Focus follows selection, which is the automatic-activation
+              // variant of the pattern — right here, because selecting a tab is
+              // cheap and every panel is already mounted.
+              document.getElementById(`tab-${order[to]}`)?.focus();
+            }}
             onClick={() => selectTab(key)}
             className={`min-h-11 flex-1 whitespace-nowrap border-b-2 px-1 py-3 text-xs sm:flex-none sm:px-3 sm:text-sm ${
               tab === key
@@ -846,7 +1144,10 @@ export default function Dashboard({
                        A finished gameweek's auto-subs are settled fact, not a
                        projection, so drawing the picked eleven here is simply
                        showing the wrong team. Measured on the demo's GW5: the
-                       eleven cards summed to 30 against a caption reading 40.
+                       eleven cards summed to 30 against a caption reading 40,
+                       because a keeper who blanked was drawn in goal while the
+                       bench keeper who replaced him and scored 10 was drawn on
+                       the bench.
                        Under Bench Boost all fifteen count and no sub happens,
                        so the picked split is the right one there.
                     */
@@ -868,8 +1169,11 @@ export default function Dashboard({
                       .filter((x): x is NonNullable<typeof x> => x != null);
                     const bench = hist.picks.picks
                       .filter((p) => (histXi ? !histXi.has(p.element) : p.position > 11))
-                      .sort((a, b) => a.position - b.position)
-                      .map(toPlayer)
+                      .sort((a, b) => benchSortKey(a.position) - benchSortKey(b.position))
+                      .map((p) => {
+                        const card = toPlayer(p);
+                        return card && { ...card, benchOrder: benchBadgeFor(p.position) };
+                      })
                       .filter((x): x is NonNullable<typeof x> => x != null);
                     const eh = hist.picks.entry_history;
                     return (
@@ -890,7 +1194,12 @@ export default function Dashboard({
                         <p className="text-xs text-muted">
                           GW{hist.gw}: {eh.points - eh.event_transfers_cost} pts
                           {eh.event_transfers_cost > 0 && ` (after −${eh.event_transfers_cost} hit)`}
-                          {" · "}bench {eh.points_on_bench} pts
+                          {" · "}
+                          {benchSummary(
+                            eh.points_on_bench,
+                            bench.map((c) => ({ points: c.live?.points ?? 0 })),
+                            hist.picks.active_chip === "bboost"
+                          )}
                           {eh.rank != null && ` · GW rank ${eh.rank.toLocaleString("en-GB")}`}
                           {" · "}
                           {eh.event_transfers} transfer{eh.event_transfers === 1 ? "" : "s"} made
@@ -911,14 +1220,16 @@ export default function Dashboard({
                   `pickPosition <= 11`. So a starter who blanked was drawn on
                   the pitch and the substitute who replaced him was drawn on
                   the bench, and the eleven cards did not add up to the number
-                  printed on the same pitch. Measured in the demo: cards summed
-                  to 30 against a corner reading 40, with a "0 pts" keeper on
-                  the pitch and the bench keeper who actually played showing 10.
+                  printed on the same pitch. Measured on the demo's live GW20:
+                  the picked eleven's cards summed to 50 while the effective
+                  eleven scored 52, so the corner read 48 after the week's
+                  4-point hit — a blanking forward drawn on the pitch and the
+                  2-point defender who replaced him drawn on the bench.
                   Two tabs away `LiveTab` renders the same gameweek correctly.
                   Falls back to the picked eleven before any live data exists.
               */}
               <Pitch
-                starters={squad.players
+                starters={squad.currentPlayers
                   .filter((p) =>
                     effectiveXiIds ? effectiveXiIds.has(p.element.id) : p.pickPosition <= 11
                   )
@@ -936,14 +1247,15 @@ export default function Dashboard({
                         }
                       : undefined,
                   }))}
-                bench={squad.players
+                bench={squad.currentPlayers
                   .filter((p) =>
                     effectiveXiIds ? !effectiveXiIds.has(p.element.id) : p.pickPosition > 11
                   )
-                  .sort((a, b) => a.pickPosition - b.pickPosition)
+                  .sort((a, b) => benchSortKey(a.pickPosition) - benchSortKey(b.pickPosition))
                   .map((p) => ({
                     element: p.element,
                     xp: xpOf?.get(p.element.id)?.next,
+                    benchOrder: benchBadgeFor(p.pickPosition),
                     live: liveData
                       ? { points: livePointsOf.get(p.element.id) ?? 0, final: gwFinished }
                       : undefined,
@@ -954,26 +1266,7 @@ export default function Dashboard({
                 onSelect={setSelected}
                 cornerTotal={
                   liveData && currentEvent != null
-                    ? {
-                        title: `GW${currentEvent}`,
-                        points:
-                          squad.players
-                            .filter((p) =>
-                              squad.activeChip === "bboost"
-                                ? true
-                                : effectiveXiIds
-                                  ? effectiveXiIds.has(p.element.id)
-                                  : p.pickPosition <= 11
-                            )
-                            .reduce(
-                              (s, p) =>
-                                s +
-                                (livePointsOf.get(p.element.id) ?? 0) *
-                                  (p.element.id === effCaptainId ? capMult : 1),
-                              0
-                            ) - (data.picks?.entry_history.event_transfers_cost ?? 0),
-                        final: gwFinished,
-                      }
+                    ? { title: `GW${currentEvent}`, points: liveGross - liveHit, final: gwFinished }
                     : null
                 }
               />
@@ -983,6 +1276,15 @@ export default function Dashboard({
                     ? `Final GW${currentEvent} points shown under each player — tap a player for the full breakdown.`
                     : `Live GW${currentEvent} points shown in green under each player (captain doubled) — tap a player for the breakdown.`
                   : "Tap a player for details."}{" "}
+                {/*
+                  SAY WHERE THE MISSING FOUR POINTS WENT. The corner is net of
+                  the gameweek's transfer cost and the cards above it are not,
+                  so a −4 week put 48 in the corner over eleven cards summing to
+                  52 with the word "hit" appearing nowhere on the tab. The
+                  historic view of this very pitch already discloses it, and so
+                  does the Live tab; only this one did not.
+                */}
+                {liveData && liveHitNote ? `${liveHitNote} ` : ""}
                 Selling prices follow the official 50%-of-profit rule.
               </p>
                 </>
@@ -1034,7 +1336,12 @@ export default function Dashboard({
         )}
         {visited.has("stats") && (
           <div hidden={tab !== "stats"} role="tabpanel" id="panel-stats" aria-labelledby="tab-stats">
-            <StatsTable data={data} onSelect={setSelected} xp={xpOf} />
+            <StatsTable
+              data={data}
+              onSelect={setSelected}
+              xp={xpOf}
+              recentFormApplied={cachedRecentForm() != null}
+            />
           </div>
         )}
         {visited.has("fixtures") && (
@@ -1075,6 +1382,18 @@ export default function Dashboard({
           fixtures={data.fixtures}
           teams={teams}
           nextEvent={data.squad?.nextEvent ?? null}
+          /* The card the reader tapped applies this; the sheet must agree. In
+             the time machine the armband is that gameweek's, not today's. */
+          /* The time machine's gameweek, so the sheet stops describing today
+             under a past week's heading. */
+          asOfGw={tab === "team" && hist ? hist.gw : null}
+          multiplier={
+            tab === "team" && hist
+              ? (hist.picks.picks.find((p) => p.element === selected.id)?.multiplier ?? 1)
+              : selected.id === effCaptainId
+                ? capMult
+                : 1
+          }
         />
       )}
     </main>

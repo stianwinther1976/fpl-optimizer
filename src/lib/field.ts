@@ -188,22 +188,42 @@ export function splitByField(
  * The player the field captained most in a given finished gameweek, if FPL has
  * said so yet.
  *
- * The only hard fact about armbands the public API publishes. It is null for
- * every gameweek that has not finished — including, pre-season, all of them —
- * so every caller has to be able to say nothing.
+ * The only hard fact about armbands the public API publishes. It is null until
+ * FPL fills it in — pre-season that is every gameweek — so every caller has to
+ * be able to say nothing.
+ *
+ * IT IS NOT GATED ON `finished`, and this doc used to say it was. FPL fills
+ * `most_captained` in at the DEADLINE, not at bonus confirmation: the
+ * 2026-08-21 snapshot publishes 411 for GW1 with `finished: false` and
+ * `is_current: true`. That is the same `finished`-versus-actually-over mistake
+ * this repo has now made four times, in a fourth place.
  */
 export function templateCaptain(events: Event[], gw: number): number | null {
   const ev = events.find((e) => e.id === gw);
   return ev?.most_captained ?? null;
 }
 
-/** The most recent gameweek FPL has published a most-captained player for. */
+/**
+ * The most recent gameweek FPL has published a most-captained player for.
+ *
+ * "PUBLISHED" IS THE WHOLE TEST, and this used to also require `finished`.
+ * FPL fills the field in at the deadline, so through an entire in-progress
+ * gameweek this returned null while `templateCaptain` on the same data returned
+ * a player — the two disagreed, and `CaptainRead.wasTemplateCaptain` was false
+ * for everyone for the whole week, which is exactly when a reader is looking at
+ * it. Verified on the 2026-08-21 snapshot: GW1 carries `most_captained: 411`
+ * with `finished: false`.
+ *
+ * Scanning by gameweek id rather than array position, because nothing promises
+ * `events` is ordered and the old loop assumed it.
+ */
 export function lastTemplateCaptain(events: Event[]): { gw: number; element: number } | null {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i];
-    if (e.finished && e.most_captained != null) return { gw: e.id, element: e.most_captained };
+  let best: { gw: number; element: number } | null = null;
+  for (const e of events) {
+    if (e.most_captained == null) continue;
+    if (best == null || e.id > best.gw) best = { gw: e.id, element: e.most_captained };
   }
-  return null;
+  return best;
 }
 
 /**
@@ -220,9 +240,17 @@ export interface CaptainRead {
   ownership: number | null;
   klass: TemplateClass | null;
   /**
-   * Was this the field's most-captained player the last time FPL published
-   * one? Not a share, and not this week's — but the one hard statement about
-   * armbands available, and it identifies the pick that moves nobody.
+   * Was this the field's most-captained player the last time FPL published one?
+   *
+   * Not a share — it names one player, not a percentage. And IT MAY WELL BE
+   * THIS WEEK'S: FPL fills `most_captained` in at the deadline, not at bonus
+   * confirmation, so from the moment a gameweek locks this is that gameweek's
+   * answer. (It said "not this week's" while `lastTemplateCaptain` required
+   * `finished`, which made the sentence true and the behaviour wrong — through
+   * an in-progress gameweek nobody was marked at all.)
+   *
+   * Still the one hard statement about armbands the public API makes, and it
+   * identifies the pick that moves nobody.
    */
   wasTemplateCaptain: boolean;
 }

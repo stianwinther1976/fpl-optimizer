@@ -1,11 +1,13 @@
 import { beforeEach, describe, it, expect } from "vitest";
 import {
-  applyGwOutcome,
-  calibrationMultiplier,
   CAL_CONFIG,
   IDENTITY_FACTORS,
+  activeCalibration,
+  applyGwOutcome,
+  calibrationMultiplier,
   loadCalibration,
   reconcileFinishedGws,
+  setActiveCalibration,
   type CalibrationState,
   type GradedPlayer,
 } from "../calibration";
@@ -203,6 +205,34 @@ describe("convergence", () => {
     expect(calibrationMultiplier(st.factors, 4)).not.toBeCloseTo(Math.sqrt(rFwd), 2);
   });
 
+  it("leaves byPos alone for a uniform bias, and moves at the documented alpha", () => {
+    /*
+     * `CAL_CONFIG.alpha` IS A TUNED CONSTANT AND MUST NOT MOVE BY ACCIDENT.
+     *
+     * An attempt at the saturation bug below divided `byPos` by how much
+     * `global` actually moved rather than by the aggregate residual. That
+     * equals the residual only at r = 1, so `byPos` picked up part of the
+     * aggregate bias too — the double-count the module's own comment forbids —
+     * and the applied multiplier moved 51% of the way per gameweek against a
+     * documented 0.3. Measured then: byPos 0.97835 at r = 0.9 where it should
+     * be exactly 1. Retuning alpha without a sweep is what CLAUDE.md forbids
+     * outright, so both halves are pinned.
+     */
+    for (const r of [0.9, 0.8, 1.1]) {
+      const entries: GradedPlayer[] = [];
+      for (const pos of [1, 2, 3, 4]) {
+        for (let i = 0; i < 20; i++) entries.push({ pos, pred: 5, actual: 5 * r });
+      }
+      const s = applyGwOutcome(fresh(), 1, entries, 0);
+      // A bias with no positional component lives entirely in `global`.
+      for (const pos of [1, 2, 3, 4]) {
+        expect(s.factors.byPos[pos], `byPos[${pos}] at r=${r}`).toBeCloseTo(1, 9);
+      }
+      const alphaEff = (calibrationMultiplier(s.factors, 1) - 1) / (r - 1);
+      expect(alphaEff, `effective alpha at r=${r}`).toBeCloseTo(CAL_CONFIG.alpha, 6);
+    }
+  });
+
   it("does not let byPos integrate the wrong way when global saturates", () => {
     /*
      * `byPos` divides the aggregate residual out on the assumption `global`
@@ -337,7 +367,13 @@ describe("persistence across a season boundary", () => {
     const changed = await reconcileFinishedGws(false, boot(2026, 1), async () =>
       new Map(Array.from({ length: 40 }, (_, i) => [i + 1, 0]))
     );
-    expect(changed).toBe(true);
+    /*
+     * FALSE, and that is the point of the test's other two assertions. The
+     * return value means "re-project" — nothing here moved a factor, so a
+     * re-projection would compute the identical numbers at the cost of the most
+     * expensive pass in the app. The work that DID happen is persisted below.
+     */
+    expect(changed).toBe(false);
     // Untouched by a snapshot it had no business grading...
     expect(JSON.parse(store.get("fpl-calibration")!).factors.global).toBe(1);
     // ...and the orphan key is gone, so it cannot poison a later pass either.
@@ -352,8 +388,136 @@ describe("persistence across a season boundary", () => {
     const changed = await reconcileFinishedGws(false, boot(2026, 1), async () => {
       throw new Error("live data gone");
     });
-    expect(changed).toBe(true);
+    // Persisted (below) but not a reason to re-project: no factor moved.
+    expect(changed).toBe(false);
     expect(JSON.parse(store.get("fpl-calibration")!).reconciled).toContain(1);
     expect(store.has("fpl-pred-1")).toBe(false);
+  });
+
+  it("does not ask for a re-projection on every load when storage refuses writes", async () => {
+    /*
+     * Safari private browsing and a full quota both make `setItem` throw. The
+     * season stamp then never lands, so the rollover is re-detected on the next
+     * load, and the next — and while `changed` was one variable that meant a
+     * full re-projection, forever, to arrive at identity factors.
+     */
+    const real = Object.getOwnPropertyDescriptor(globalThis, "localStorage")!;
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: () => {
+          throw new Error("QuotaExceededError");
+        },
+        removeItem: (k: string) => void store.delete(k),
+      },
+    });
+    try {
+      for (let load = 0; load < 3; load++) {
+        expect(
+          await reconcileFinishedGws(false, boot(2026, 1), async () => new Map())
+        ).toBe(false);
+      }
+    } finally {
+      Object.defineProperty(globalThis, "localStorage", real);
+    }
+  });
+
+  it("asks for a re-projection when the stored factors are not the active ones", async () => {
+    /*
+     * The baseline is what a re-projection would READ, not what this call
+     * happened to load. On a first load the module is running on identity while
+     * the store holds real factors, so comparing against the loaded state
+     * returned false while `setActiveCalibration` moved every projection in the
+     * app — the caller had already rendered with identity and was told there
+     * was nothing to do.
+     */
+    setActiveCalibration(IDENTITY_FACTORS);
+    store.set(
+      "fpl-calibration",
+      JSON.stringify({
+        factors: { global: 0.9, byPos: { 1: 1, 2: 1.1, 3: 1, 4: 0.8 } },
+        log: [],
+        reconciled: [],
+        season: "2026/27",
+      })
+    );
+    // Nothing to grade: no snapshot, and the season already matches.
+    expect(await reconcileFinishedGws(false, boot(2026, 1), async () => new Map())).toBe(true);
+    expect(activeCalibration().global).toBe(0.9);
+    // Second load, same store, same active factors — now genuinely nothing.
+    expect(await reconcileFinishedGws(false, boot(2026, 1), async () => new Map())).toBe(false);
+  });
+
+  it("survives a stored field of the wrong type instead of dying on it forever", () => {
+    /*
+     * `reconciled` and `log` are read OUTSIDE any try/catch that could absorb
+     * it, so a null threw out of the caller's effect: no gameweek could ever be
+     * graded again, and because the throw preceded the save, the bad value was
+     * never overwritten. Dead on every later load, silently.
+     */
+    for (const bad of [
+      { reconciled: null },
+      { log: null },
+      { reconciled: "3", log: 7 },
+      { reconciled: [1, "2", null, 3], log: [{ gw: 1 }, null, "x"] },
+    ]) {
+      store.clear();
+      store.set(
+        "fpl-calibration",
+        JSON.stringify({
+          factors: { global: 1, byPos: { 1: 1, 2: 1, 3: 1, 4: 1 } },
+          season: "2026/27",
+          ...bad,
+        })
+      );
+      const s = loadCalibration(false, "2026/27");
+      expect(Array.isArray(s.reconciled), JSON.stringify(bad)).toBe(true);
+      expect(Array.isArray(s.log), JSON.stringify(bad)).toBe(true);
+      expect(s.reconciled.every((g) => typeof g === "number")).toBe(true);
+      // And the thing that actually broke: grading runs rather than throwing.
+      expect(() => s.reconciled.includes(1)).not.toThrow();
+    }
+  });
+
+  it("treats a missing season stamp as last season's, not as this one", () => {
+    // Every install written before the field existed carries no season. Reading
+    // that as "this season" is how the rollover came to never fire for anyone.
+    store.set(
+      "fpl-calibration",
+      JSON.stringify({
+        factors: { global: 1, byPos: { 1: 1, 2: 1, 3: 1, 4: 1 } },
+        log: [],
+        reconciled: [3, 4, 5],
+      })
+    );
+    expect(loadCalibration(false, "2026/27").reconciled).toEqual([]);
+  });
+
+  it("refuses to load a factor that is not a finite number", () => {
+    /*
+     * `calibrationMultiplier` is `clamp(global * byPos, 0.7, 1.35)`, and
+     * `Math.max(0.7, Math.min(1.35, NaN))` is `NaN` — so one bad value in the
+     * store turns every projection in the app into NaN until site data is
+     * cleared. The old guard was `s?.factors?.byPos`, an object test, which
+     * says nothing about either number.
+     */
+    store.set(
+      "fpl-calibration",
+      JSON.stringify({
+        factors: { global: null, byPos: { 1: "1.2", 2: 5, 3: 0.9, 4: 1 } },
+        log: [],
+        reconciled: [],
+        season: "2026/27",
+      })
+    );
+    const f = loadCalibration(false, "2026/27").factors;
+    expect(f.global).toBe(1); // null is not a number
+    expect(f.byPos[1]).toBe(1); // nor is a numeric string
+    expect(f.byPos[2]).toBe(CAL_CONFIG.factorMax); // out of range, but a real value: clamped
+    expect(f.byPos[3]).toBe(0.9); // untouched
+    for (const pos of [1, 2, 3, 4]) {
+      expect(Number.isFinite(calibrationMultiplier(f, pos))).toBe(true);
+    }
   });
 });

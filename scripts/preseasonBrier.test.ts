@@ -342,6 +342,7 @@ function buildPreseasonState(season: string): PreseasonState {
       finished: false,
       is_current: false,
       is_next: i === 0,
+      is_previous: false,
       average_entry_score: 0,
       highest_score: null,
     })),

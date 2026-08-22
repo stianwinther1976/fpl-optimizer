@@ -107,6 +107,25 @@ describe("an override moves the projection and is labelled", () => {
     projectAll({ bootstrap, fixtures, nextEvent: 11, horizon: 3, pastSeason: undefined, startCalls: calls });
 
   const target = bootstrap.elements.find((e) => e.element_type === 3)!;
+  /*
+   * A SEPARATE TARGET FOR THE RAISING DIRECTION, because `target` cannot test
+   * it. Every player `makeMockBootstrap` builds has started every gameweek the
+   * mock has played — `minutes: 2000, starts: 22` for a club's first-choice and
+   * `900/10` for the rest, against ten finished gameweeks — so the in-season
+   * model clamps `pStart` to 1.0 for all of them, and `applyStartCall(_,
+   * "starts")` is a `Math.max` against 0.97: a no-op by construction. Measured
+   * on `target`: `gainNext` 0, `gainTotal` 0, so the assertion below was
+   * `expect(0).toBeCloseTo(0)` and stayed green with `applyStartCall` replaced
+   * by the identity function.
+   *
+   * Cutting one midfielder to two starts in 240 minutes gives the model
+   * somewhere to move from: base 3.544, "starts" 5.886, "benched" 3.013.
+   */
+  const rotator = bootstrap.elements.find(
+    (e) => e.element_type === 3 && !e.web_name.endsWith("1")
+  )!;
+  rotator.minutes = 240;
+  rotator.starts = 2;
 
   it("benching a player lowers his projection and starting him raises it", () => {
     const base = run(new Map()).get(target.id)!.next;
@@ -114,6 +133,52 @@ describe("an override moves the projection and is labelled", () => {
     const started = run(new Map([[target.id, "starts"]])).get(target.id)!.next;
     expect(benched).toBeLessThan(base);
     expect(started).toBeGreaterThan(benched);
+  });
+
+  it("never RAISES a player's projection for being told he is benched", () => {
+    /*
+     * `pStartFor("benched")` is the range FLOOR, 0.08. Taken neat it is not a
+     * ceiling on a benched man, it is a floor under him — so anyone the model
+     * already rated below 0.08 was PROMOTED by the reader saying he is out of
+     * the eleven. Measured on the 2026-08-19 snapshot, one "benched" call per
+     * player: 78 of 595 came out higher on the next gameweek, and the
+     * population is exactly the one a reader is most likely to mark — backup
+     * keepers. Arrizabalaga went 0.418 to 0.641, off a model `pStart` of
+     * 0.0021.
+     *
+     * The test above ("benched < base, started > benched") holds under both
+     * rules, which is why it could not catch this. This one asserts the
+     * asymmetry the file's header actually states.
+     */
+    const deep = bootstrap.elements.filter((e) => e.element_type === 1);
+    expect(deep.length).toBeGreaterThan(1);
+    for (const e of bootstrap.elements) {
+      const base = run(new Map()).get(e.id)!;
+      const benched = run(new Map([[e.id, "benched"]])).get(e.id)!;
+      expect(benched.next, `${e.web_name} next`).toBeLessThanOrEqual(base.next + 1e-9);
+      expect(benched.total, `${e.web_name} total`).toBeLessThanOrEqual(base.total + 1e-9);
+    }
+  });
+
+  it("applies each direction one-sidedly, at the level of the minutes model", () => {
+    // The unit-level statement of the same rule, over the whole grid: "starts"
+    // may only raise, "benched" may only lower, and neither touches how long a
+    // start lasts.
+    for (const pStart of [0, 0.001, 0.02, 0.08, 0.3, 0.75, 0.97, 1]) {
+      for (const mps of [0, 30, 60, 75, 90]) {
+        for (const share of [0, 0.01, 0.2, 0.6, 1]) {
+          const mm = { pStart, minsPerStart: mps, share };
+          const up = applyStartCall(mm, "starts");
+          const down = applyStartCall(mm, "benched");
+          expect(up.pStart).toBeGreaterThanOrEqual(pStart);
+          expect(up.share).toBeGreaterThanOrEqual(share);
+          expect(down.pStart).toBeLessThanOrEqual(pStart);
+          expect(down.share).toBeLessThanOrEqual(share);
+          expect(up.minsPerStart).toBe(mps);
+          expect(down.minsPerStart).toBe(mps);
+        }
+      }
+    }
   });
 
   it("never lowers a nailed player's pStart for being told he starts", () => {
@@ -226,28 +291,78 @@ describe("persistence", () => {
   it("keeps the demo's calls away from the real feed's", () => {
     // The demo numbers its players 1..300 and so do three hundred real
     // footballers. A call saved against demo id 42 must never reach real id 42.
-    saveStartCalls(true, new Map([[42, "starts"]]));
-    expect(loadStartCalls(false).size).toBe(0);
-    expect(loadStartCalls(true).get(42)).toBe("starts");
+    saveStartCalls(true, 5, new Map([[42, "starts"]]));
+    expect(loadStartCalls(false, 5).size).toBe(0);
+    expect(loadStartCalls(true, 5).get(42)).toBe("starts");
+  });
+
+  it("does not hand back a call made for a gameweek that has been played", () => {
+    /*
+     * The defect this exists for: a reader marks a player "Not in the XI" on a
+     * Saturday morning, and with nothing dating the payload the same write-off
+     * is still applied a month later at whatever gameweek is next — at FULL
+     * strength, because the override now lands on offset 0 alone.
+     */
+    saveStartCalls(false, 5, new Map([[8, "benched"]]));
+    expect(loadStartCalls(false, 5).get(8)).toBe("benched");
+    expect(loadStartCalls(false, 6).size).toBe(0);
+    expect(loadStartCalls(false, 4).size).toBe(0);
+  });
+
+  it("refuses a payload it cannot date, in either direction", () => {
+    // A bare id->call map is what shipped before the stamp existed. An unknown
+    // gameweek is exactly the state this refuses, so it is dropped rather than
+    // honoured against today's.
+    store.set("fpl-start-calls", JSON.stringify({ "8": "starts" }));
+    expect(loadStartCalls(false, 5).size).toBe(0);
+    // And with no gameweek in front of the reader there is nothing to apply a
+    // call to: no stored payload can match a null gameweek, and nothing is
+    // written for one either.
+    saveStartCalls(false, 5, new Map([[8, "starts"]]));
+    expect(loadStartCalls(false, null).size).toBe(0);
+    saveStartCalls(false, null, new Map([[8, "starts"]]));
+    expect(store.has("fpl-start-calls")).toBe(false);
+  });
+
+  it("drops a key that is not a player id, rather than coercing it to NaN", () => {
+    /*
+     * `Number("x")` is `NaN`, and a `NaN` key can never match
+     * `startCalls.get(el.id)` — so it was invisible to the projection and
+     * permanent everywhere else: it inflated `active.size`, which is half of
+     * `startCallsVersion()`, and `setStartCall` re-persisted it as `"NaN"` on
+     * the next write. The comment beside it already said keys were dropped
+     * rather than coerced; only the value was.
+     */
+    store.set(
+      "fpl-start-calls",
+      JSON.stringify({
+        gw: 5,
+        calls: { "8": "starts", x: "benched", "0": "starts", "-3": "benched", "1.5": "starts" },
+      })
+    );
+    expect([...loadStartCalls(false, 5)]).toEqual([[8, "starts"]]);
   });
 
   it("drops a stored value it does not recognise rather than coercing it", () => {
-    store.set("fpl-start-calls", JSON.stringify({ 7: "starts", 8: "maybe", 9: null }));
-    const m = loadStartCalls(false);
+    store.set(
+      "fpl-start-calls",
+      JSON.stringify({ gw: 5, calls: { 7: "starts", 8: "maybe", 9: null } })
+    );
+    const m = loadStartCalls(false, 5);
     expect(m.get(7)).toBe("starts");
     expect(m.has(8)).toBe(false);
     expect(m.has(9)).toBe(false);
   });
 
   it("clears the key entirely when the last call is removed", () => {
-    saveStartCalls(false, new Map([[1, "benched"]]));
-    saveStartCalls(false, new Map());
+    saveStartCalls(false, 5, new Map([[1, "benched"]]));
+    saveStartCalls(false, 5, new Map());
     expect(store.has("fpl-start-calls")).toBe(false);
   });
 
   it("survives unreadable storage without throwing", () => {
     store.set("fpl-start-calls", "{not json");
-    expect(loadStartCalls(false).size).toBe(0);
+    expect(loadStartCalls(false, 5).size).toBe(0);
   });
 });
 
@@ -283,9 +398,76 @@ describe("the calibration snapshot is taken without overrides", () => {
     const at = src.indexOf("snapshotPredictions(");
     expect(at).toBeGreaterThan(0);
     // The projectAll that feeds it is the one immediately above.
-    const before = src.slice(Math.max(0, at - 1400), at);
+    // Wide enough to reach past the note explaining what else that call
+    // passes — the window was 1400 and the comment outgrew it.
+    const before = src.slice(Math.max(0, at - 2600), at);
     const call = before.lastIndexOf("projectAll({");
     expect(call).toBeGreaterThanOrEqual(0);
     expect(before.slice(call)).toMatch(/startCalls:\s*new Map\(\)/);
+  });
+});
+
+describe("a call is about the gameweek in front of the reader", () => {
+  const bootstrap = makeMockBootstrap();
+  const fixtures = makeMockFixtures();
+  const run = (calls: Map<number, "starts" | "benched">) =>
+    projectAll({ bootstrap, fixtures, nextEvent: 11, horizon: 5, pastSeason: undefined, startCalls: calls });
+  const target = bootstrap.elements.find((e) => e.element_type === 3)!;
+  /*
+   * A SEPARATE TARGET FOR THE RAISING DIRECTION, because `target` cannot test
+   * it. Every player `makeMockBootstrap` builds has started every gameweek the
+   * mock has played — `minutes: 2000, starts: 22` for a club's first-choice and
+   * `900/10` for the rest, against ten finished gameweeks — so the in-season
+   * model clamps `pStart` to 1.0 for all of them, and `applyStartCall(_,
+   * "starts")` is a `Math.max` against 0.97: a no-op by construction. Measured
+   * on `target`: `gainNext` 0, `gainTotal` 0, so the assertion below was
+   * `expect(0).toBeCloseTo(0)` and stayed green with `applyStartCall` replaced
+   * by the identity function.
+   *
+   * Cutting one midfielder to two starts in 240 minutes gives the model
+   * somewhere to move from: base 3.544, "starts" 5.886, "benched" 3.013.
+   */
+  const rotator = bootstrap.elements.find(
+    (e) => e.element_type === 3 && !e.web_name.endsWith("1")
+  )!;
+  rotator.minutes = 240;
+  rotator.starts = 2;
+
+  it("moves the next gameweek and leaves the rest of the horizon alone", () => {
+    /*
+     * `StartCall`'s doc says "for the gameweek in front of them", and a press
+     * conference is about one match. Folding the call into the whole horizon
+     * took a striker on the demo from 19.1 over five gameweeks to 5.3 — a
+     * 13.8-point write-off from a claim worth at most one gameweek of it. That
+     * figure feeds `totalDiscounted`, which is what `planHorizon` ranks
+     * transfers on, so one tap became a sell recommendation.
+     */
+    const base = run(new Map()).get(target.id)!;
+    const benched = run(new Map([[target.id, "benched"]])).get(target.id)!;
+    expect(benched.next).toBeLessThan(base.next);
+    // The drop over the horizon is the drop in gameweek one, and no more.
+    const dropNext = base.next - benched.next;
+    const dropTotal = base.total - benched.total;
+    expect(dropTotal).toBeGreaterThan(0);
+    expect(dropTotal).toBeCloseTo(dropNext, 6);
+    // Every later gameweek is untouched.
+    for (const [gw, v] of base.perGw) {
+      if (gw === 11) continue;
+      expect(benched.perGw.get(gw), `GW${gw}`).toBeCloseTo(v, 9);
+    }
+  });
+
+  it("does the same in the raising direction", () => {
+    const base = run(new Map()).get(rotator.id)!;
+    const started = run(new Map([[rotator.id, "starts"]])).get(rotator.id)!;
+    const gainNext = started.next - base.next;
+    // The call has to MOVE him, or the equality below is 0 == 0 and would hold
+    // for a `applyStartCall` that did nothing at all.
+    expect(gainNext).toBeGreaterThan(1);
+    expect(started.total - base.total).toBeCloseTo(gainNext, 6);
+    for (const [gw, v] of base.perGw) {
+      if (gw === 11) continue;
+      expect(started.perGw.get(gw), `GW${gw}`).toBeCloseTo(v, 9);
+    }
   });
 });

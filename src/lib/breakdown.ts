@@ -5,7 +5,7 @@
 // and captaincy (incl. Triple Captain / Bench Boost) are applied so the totals
 // match what FPL actually awarded you.
 
-import { api } from "./fpl";
+import { api, FplApiError } from "./fpl";
 import { projectAutoSubs } from "./live";
 import type { Element, EntryEventPicks, EventLive, Fixture } from "./types";
 
@@ -87,6 +87,21 @@ export interface SeasonBreakdown {
   hits: number;
   /** Per-gameweek squad gross points and hit cost. */
   perGw: Map<number, { points: number; hits: number }>;
+  /**
+   * Gameweeks that were asked for and could not be fetched.
+   *
+   * A HOLE IN THE MIDDLE IS INVISIBLE WITHOUT THIS. The loader's `catch` treats
+   * "503 from the proxy" identically to "manager joined late", so a transient
+   * failure silently deleted a whole gameweek from the season total: probed by
+   * failing GW3 of GW1-5, `gws` came back `[1,2,4,5]`, progress reported 5 of
+   * 5, and `playersTotal` read 178 against a true 248 — 70 points gone, under a
+   * heading built from `gws[0]`-`gws[last]` that still said GW1 to GW5.
+   *
+   * Worse, this feeds `toArchive`, whose only guard is
+   * `existing.gwsPlayed > a.gwsPlayed` — so a later, longer, holed run
+   * overwrites an earlier complete one permanently.
+   */
+  missing: number[];
 }
 
 /** Effective per-element multipliers for one gameweek: applies auto-subs and
@@ -212,7 +227,9 @@ export function aggregateBreakdown(
     for (const [k, v] of Object.entries(r.byCat)) catTotals[k] = (catTotals[k] ?? 0) + v;
   }
 
-  return { gws, rows, catTotals, playersTotal, hits, perGw };
+  // `missing` belongs to the LOADER, which is the only thing that can know a
+  // fetch failed; an aggregation of what it was handed has nothing to report.
+  return { gws, rows, catTotals, playersTotal, hits, perGw, missing: [] };
 }
 
 /** Fetch picks + live for every finished gameweek and aggregate. Bounded
@@ -228,6 +245,7 @@ export async function loadSeasonBreakdown(
   const queue = [...finishedGws];
   const total = queue.length;
   const collected: { gw: number; picks: EntryEventPicks; live: EventLive }[] = [];
+  const missing: number[] = [];
   let done = 0;
 
   const worker = async () => {
@@ -235,10 +253,41 @@ export async function loadSeasonBreakdown(
       const gw = queue.shift();
       if (gw == null) return;
       try {
-        const [picks, live] = await Promise.all([api.picks(entryId, gw), api.live(gw)]);
+        /*
+         * SEQUENTIAL, so a 404 can be attributed. Run together, the catch
+         * cannot tell which leg failed — and "the manager had no picks that
+         * gameweek" is a fact about PICKS only. A 404 from `event/{gw}/live/`
+         * is a gameweek we could not read, and folding it into the benign case
+         * deleted it silently: probed by 404-ing the live feed alone, `gws`
+         * came back [1,2,4,5] with `missing: []`.
+         *
+         * The cost is one round trip's latency per gameweek instead of two in
+         * parallel, and `api.live(gw)` is shared across every entry in the
+         * session anyway — the second worker to want it gets the memo.
+         */
+        const picks = await api.picks(entryId, gw).catch((e) => {
+          // The one benign 404 there is.
+          if (e instanceof FplApiError && e.status === 404) return null;
+          throw e;
+        });
+        if (picks == null) {
+          done++;
+          onProgress?.(done, total);
+          continue;
+        }
+        const live = await api.live(gw);
         collected.push({ gw, picks, live });
-      } catch {
-        // manager joined late / no picks that GW — leave it out
+      } catch (e) {
+        /*
+         * Everything that reaches here is a failure. The one benign case — a
+         * 404 on PICKS, meaning the manager had no team that gameweek — is
+         * handled above and never throws. A 503 while FPL updates the game, a
+         * dropped connection, or a 404 from the LIVE feed is a gameweek we
+         * could not read, and swallowing it silently removed real points from
+         * the season total with nothing on screen to say so.
+         */
+        void e;
+        missing.push(gw);
       }
       done++;
       onProgress?.(done, total);
@@ -248,5 +297,5 @@ export async function loadSeasonBreakdown(
   await Promise.all(
     Array.from({ length: Math.min(concurrency, Math.max(1, queue.length)) }, worker)
   );
-  return aggregateBreakdown(collected, elements, fixtures);
+  return { ...aggregateBreakdown(collected, elements, fixtures), missing: missing.sort((a, b) => a - b) };
 }

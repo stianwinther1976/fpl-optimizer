@@ -1,5 +1,24 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { fetchPastSeason, fetchRecentForm, rankPercentile, resetSummaryCache, setDemoMode } from "../fpl";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import {
+  api,
+  buildSquadState,
+  entryNotFoundMessage,
+  fetchCacheSize,
+  fetchPastSeason,
+  fetchRecentForm,
+  rankPercentile,
+  resetFetchCache,
+  resetSummaryCache,
+  setDemoMode,
+} from "../fpl";
+import type {
+  Bootstrap,
+  Element,
+  Entry,
+  EntryEventPicks,
+  EntryHistory,
+  Transfer,
+} from "../types";
 
 describe("rankPercentile", () => {
   it("uses more decimals the closer to the top you are", () => {
@@ -51,6 +70,60 @@ describe("fetchRecentForm", () => {
       globalThis.fetch = original;
     };
   }
+
+  it("does not count a fixture that has not been played", async () => {
+    /*
+     * FPL EMITS A HISTORY ROW FROM THE DEADLINE, with `minutes: 0`,
+     * `starts: 0` and `team_h_score: null`, for a match that has not kicked
+     * off. Counted on the 2026-08-21 snapshot with one of ten GW1 fixtures
+     * started: 538 of 600 players carry one. Unfiltered, every one of them was
+     * charged a round he did not play in a match that had not happened — a
+     * one-in-five dilution of `startShare` and `minsPerGame` for the whole
+     * window between the deadline and each kickoff, and BIASED ACROSS CLUBS
+     * within one gameweek, since the Saturday lunchtime club is clean and the
+     * Monday night club is not. The optimizer compares them directly.
+     */
+    const played = rows([90, 90, 90, 90, 90]).map((r) => ({ ...r, team_h_score: 1 }));
+    const pending = { ...rows([0])[0], round: 6, team_h_score: null };
+    const restore = mockApi({ 8100: { history: [...played, pending] } });
+    try {
+      const m = await fetchRecentForm([8100], 5);
+      expect(m.get(8100)).toEqual({ startShare: 1, minsPerGame: 90, minsPerStart: 90 });
+    } finally {
+      restore();
+      resetSummaryCache();
+    }
+  });
+
+  it("keeps counting rows whose payload omits the score at all", async () => {
+    // `!== null`, not `!= null`: an explicit null is FPL's pre-kickoff signal,
+    // while an absent key is a stub or an older reduced record and falls back
+    // to the behaviour this replaces.
+    const restore = mockApi({ 8101: { history: rows([90, 0]) } });
+    try {
+      const m = await fetchRecentForm([8101], 5);
+      expect(m.get(8101)!.startShare).toBe(0.5);
+    } finally {
+      restore();
+      resetSummaryCache();
+    }
+  });
+
+  it("still fills the window from real rounds when a pending one is dropped", async () => {
+    // The filter runs BEFORE the window, so a player gets five real rounds
+    // rather than four and a hole.
+    const played = rows([10, 20, 30, 40, 50, 60]).map((r) => ({ ...r, team_h_score: 0 }));
+    const pending = { ...rows([0])[0], round: 7, team_h_score: null };
+    const restore = mockApi({ 8102: { history: [...played, pending] } });
+    try {
+      const m = await fetchRecentForm([8102], 5);
+      // Rounds 2..6: 20+30+40+50+60 = 200 over five.
+      expect(m.get(8102)!.minsPerGame).toBeCloseTo(40, 9);
+    } finally {
+      restore();
+      resetSummaryCache();
+    }
+  });
 
   it("measures minutes per start over the starts, not over every appearance", async () => {
     // 90, 80, 30, 0, 45 => started two of five (the 90 and the 80), mean 49
@@ -263,5 +336,301 @@ describe("the element-summary layer", () => {
     } finally {
       restore();
     }
+  });
+});
+
+describe("the squad on the pitch versus the squad to optimize from", () => {
+  /*
+   * `buildSquadState` deliberately moves `players` away from what is fielded
+   * this gameweek: it applies transfers already made for `nextEvent`, and
+   * `loadTeamData` hands it the PREVIOUS gameweek's picks during a Free Hit.
+   * Both are right for the optimizer and wrong for anything rendering this
+   * gameweek's live scores, which the live pitch and the Live tab were doing.
+   */
+  const el = (id: number): Element =>
+    ({
+      id,
+      element_type: ((id % 4) + 1) as 1 | 2 | 3 | 4,
+      team: (id % 20) + 1,
+      now_cost: 50,
+      web_name: `P${id}`,
+    }) as Element;
+
+  const bootstrap = {
+    elements: Array.from({ length: 40 }, (_, i) => el(i + 1)),
+    events: Array.from({ length: 38 }, (_, i) => ({
+      id: i + 1,
+      is_current: i + 1 === 20,
+      is_next: i + 1 === 21,
+      finished: i + 1 < 20,
+    })),
+    teams: [],
+  } as unknown as Bootstrap;
+
+  const picksFor = (ids: number[], capAt = 3, viceAt = 4): EntryEventPicks =>
+    ({
+      active_chip: null,
+      entry_history: { event: 20, bank: 5, value: 1000, event_transfers: 0, event_transfers_cost: 0 },
+      picks: ids.map((element, i) => ({
+        element,
+        position: i + 1,
+        multiplier: i + 1 === capAt ? 2 : i < 11 ? 1 : 0,
+        is_captain: i + 1 === capAt,
+        is_vice_captain: i + 1 === viceAt,
+      })),
+    }) as unknown as EntryEventPicks;
+
+  const history = { current: [], chips: [] } as unknown as EntryHistory;
+  const base = Array.from({ length: 15 }, (_, i) => i + 1);
+  const build = (transfers: Transfer[], opts?: Parameters<typeof buildSquadState>[5]) =>
+    buildSquadState(bootstrap, {} as Entry, picksFor(base), history, transfers, opts);
+
+  const transferAt = (event: number, out: number, inn: number): Transfer =>
+    ({
+      event,
+      element_in: inn,
+      element_out: out,
+      element_in_cost: 50,
+      element_out_cost: 50,
+      time: "2026-01-01T00:00:00Z",
+    }) as unknown as Transfer;
+
+  it("keeps this gameweek's fifteen when a transfer is already made for next", () => {
+    /*
+     * FPL publishes GW n `is_current` alongside GW n+1 `is_next` while GW n's
+     * matches are still being played, so this is routine. The outgoing player
+     * played this week and vanished from the pitch; the incoming player was
+     * drawn with points he scored for somebody else.
+     */
+    const s = build([transferAt(21, 5, 20)]);
+    expect(s.players.map((p) => p.element.id)).toContain(20);
+    expect(s.players.map((p) => p.element.id)).not.toContain(5);
+    expect(s.currentPlayers.map((p) => p.element.id)).toEqual(base);
+    // Fifteen either way — the pitch's ten-and-five split came from mixing them.
+    expect(s.currentPlayers).toHaveLength(15);
+  });
+
+  it("fields the Free Hit team, not the squad it replaced", () => {
+    const fh = Array.from({ length: 15 }, (_, i) => i + 21);
+    const s = buildSquadState(bootstrap, {} as Entry, picksFor(base), history, [], {
+      currentPicks: picksFor(fh),
+      activeChip: "freehit",
+    });
+    expect(s.players.map((p) => p.element.id)).toEqual(base);
+    expect(s.currentPlayers.map((p) => p.element.id)).toEqual(fh);
+  });
+
+  it("leaves exactly one captain and one vice when a transfer takes an armband", () => {
+    /*
+     * Probed before the fix: transferring the vice out left NO vice at all,
+     * and transferring the captain out left one man wearing both. With no vice
+     * the takeover path is dead for the week and no V badge is drawn; with one
+     * man wearing both it cannot fire either, because captain and vice resolve
+     * to the same element.
+     */
+    for (const [out, label] of [
+      [4, "the vice"],
+      [3, "the captain"],
+    ] as const) {
+      const s = build([transferAt(21, out, 20)]);
+      const caps = s.players.filter((p) => p.isCaptain);
+      const vices = s.players.filter((p) => p.isViceCaptain);
+      expect(caps, `${label}: captains`).toHaveLength(1);
+      expect(vices, `${label}: vices`).toHaveLength(1);
+      expect(caps[0].element.id, `${label}: same man wears both`).not.toBe(vices[0].element.id);
+    }
+  });
+
+  it("leaves an untouched squad's armbands exactly where they were", () => {
+    const s = build([]);
+    expect(s.players.find((p) => p.isCaptain)!.element.id).toBe(3);
+    expect(s.players.find((p) => p.isViceCaptain)!.element.id).toBe(4);
+    expect(s.players.filter((p) => p.isCaptain)).toHaveLength(1);
+    expect(s.players.filter((p) => p.isViceCaptain)).toHaveLength(1);
+  });
+});
+
+describe("the in-memory memo does not grow for the life of the page", () => {
+  /*
+   * `fetchCache` never evicted. That was fine when the keys were a fixed
+   * handful per reader and is not any more: the gameweek time machine fetches
+   * `event/{gw}/live/` and a picks payload for every week it is pointed at — up
+   * to thirty-eight of each — and the mini-league fetches four payloads per
+   * rival card opened. A gameweek's live feed is around 100 KB for a
+   * three-hundred-player universe, so the ceiling was tens of megabytes of JSON
+   * nobody would look at twice.
+   */
+  beforeEach(() => {
+    resetFetchCache();
+    globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({}) })) as unknown as typeof fetch;
+  });
+
+  it("drops entries whose TTL has passed, on the next write", async () => {
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(1_000_000);
+      for (let gw = 1; gw <= 10; gw++) await api.live(gw);
+      expect(fetchCacheSize()).toBe(10);
+      // Still inside the 25s live TTL: nothing is dropped.
+      now.mockReturnValue(1_000_000 + 20_000);
+      await api.live(11);
+      expect(fetchCacheSize()).toBe(11);
+      // Past it: the write that triggers the sweep is the only one left.
+      now.mockReturnValue(1_000_000 + 60_000);
+      await api.live(12);
+      expect(fetchCacheSize()).toBe(1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("keeps entries that are still live, whatever their TTL", async () => {
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(2_000_000);
+      await api.live(1); // 25s
+      await api.bootstrap(); // 300s
+      await api.history(7); // 300s
+      expect(fetchCacheSize()).toBe(3);
+      // Past the live TTL and well inside the other two.
+      now.mockReturnValue(2_000_000 + 30_000);
+      await api.live(2);
+      expect(fetchCacheSize()).toBe(3); // bootstrap, history, and the new live
+    } finally {
+      now.mockRestore();
+    }
+  });
+});
+
+describe("what a 404 on an entry means depends on the month", () => {
+  /*
+   * "The season has started" IS ABOUT MATCHES, and the check asked `finished`,
+   * which per CLAUDE.md means bonus confirmed. The two live snapshots straddle
+   * the transition and show how far apart those are:
+   *
+   *                          GW1 is_current   GW1 finished
+   *   2026-08-19 (pre)           false            false
+   *   2026-08-21 (playing)       true             false
+   *
+   * So for the whole opening weekend a mistyped ID was answered with the
+   * summer-reset explanation, to a manager whose squad was on the pitch.
+   */
+  const ev = (over: Partial<Bootstrap["events"][number]>) => ({
+    id: 1,
+    name: "Gameweek 1",
+    deadline_time: "2026-08-21T17:30:00Z",
+    finished: false,
+    is_current: false,
+    is_next: false,
+    is_previous: false,
+    average_entry_score: 0,
+    highest_score: null,
+    ...over,
+  });
+
+  const withEvents = async (events: unknown[]) => {
+    const original = globalThis.fetch;
+    resetFetchCache();
+    globalThis.fetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ events, teams: [], elements: [] }),
+    })) as unknown as typeof fetch;
+    try {
+      return await entryNotFoundMessage();
+    } finally {
+      globalThis.fetch = original;
+      resetFetchCache();
+    }
+  };
+
+  it("explains the summer reset only while no gameweek has begun", async () => {
+    const msg = await withEvents([ev({ is_next: true })]);
+    expect(msg).toMatch(/pre-season/);
+  });
+
+  it("does not call it pre-season once GW1 is being played", async () => {
+    // GW1 current, bonus days away — the state on 2026-08-21.
+    const msg = await withEvents([ev({ is_current: true }), ev({ id: 2, is_next: true })]);
+    expect(msg).not.toMatch(/pre-season/);
+    expect(msg).toMatch(/check that the FPL ID is correct/);
+  });
+
+  it("still knows the season is running between gameweeks", async () => {
+    const msg = await withEvents([
+      ev({ id: 1, finished: true, is_previous: true }),
+      ev({ id: 2, is_current: true }),
+    ]);
+    expect(msg).not.toMatch(/pre-season/);
+  });
+});
+
+describe("Refresh now has to reach the origin, not just skip the memo", () => {
+  /*
+   * `force` skipped the in-memory map and then asked for the IDENTICAL URL, so
+   * a CDN holding a copy answered from it — `cache: "no-store"` binds the
+   * browser's own cache and says nothing to a shared one. On the live feeds
+   * that is exactly the window the reader presses the button in: the scores
+   * look wrong, they tap "Refresh now", and the edge hands back the body it
+   * just gave them.
+   *
+   * The proxy rebuilds the FPL URL canonically from the path and drops every
+   * query parameter it does not understand, so the buster costs nothing
+   * upstream — `route.test.ts` pins that half.
+   */
+  const seen: string[] = [];
+  const withSpy = async (fn: () => Promise<unknown>) => {
+    const original = globalThis.fetch;
+    seen.length = 0;
+    resetFetchCache();
+    globalThis.fetch = (async (u: string) => {
+      seen.push(String(u));
+      return { ok: true, status: 200, json: async () => ({}) } as Response;
+    }) as unknown as typeof fetch;
+    try {
+      await fn();
+    } finally {
+      globalThis.fetch = original;
+      resetFetchCache();
+    }
+  };
+
+  it("asks for a different URL when forced", async () => {
+    await withSpy(async () => {
+      await api.fixtures();
+      await api.fixtures(true);
+    });
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).not.toMatch(/[?&]_=/);
+    expect(seen[1]).toMatch(/[?&]_=\d+/);
+    // Same endpoint either way — only the cache key differs.
+    expect(seen[1].split("?")[0]).toBe(seen[0]);
+  });
+
+  it("leaves an unforced read on the plain URL, so the memo still works", async () => {
+    await withSpy(async () => {
+      await api.live(3);
+      await api.live(3);
+    });
+    // Second call served from the memo: one round trip, no buster.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toMatch(/[?&]_=/);
+  });
+
+  it("keys the memo on the clean URL, so a forced read still fills it", async () => {
+    await withSpy(async () => {
+      await api.live(4, true);
+      await api.live(4);
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatch(/[?&]_=\d+/);
+  });
+
+  it("appends with & when the path already carries a query", async () => {
+    await withSpy(async () => {
+      await api.league(314, 2);
+    });
+    expect(seen[0]).toContain("page_standings=2");
+    expect(seen[0]).not.toMatch(/\?_=/);
   });
 });

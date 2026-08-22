@@ -10,6 +10,7 @@ import type {
   LeagueStandings,
   OwnedPlayer,
   PastSeasonStats,
+  Pick,
   RecentForm,
   SquadState,
   Transfer,
@@ -70,7 +71,31 @@ const fetchCache = new Map<string, { promise: Promise<unknown>; at: number }>();
  */
 export const isLiveFeed = (path: string) => path.startsWith("fixtures") || /^event\/\d+\/live\//.test(path);
 
-const feedUrl = (path: string) => `${demoMode ? "/api/demo" : "/api/fpl"}/${path}`;
+/*
+ * NO TRAILING SLASH ON THE URL WE REQUEST, though every `path` here carries one.
+ *
+ * FPL's own endpoints all end in `/` and this file spells them that way, which
+ * is right — it is what the proxy forwards. But Next's default
+ * `trailingSlash: false` answers OUR route with a 308 to the slash-less form, so
+ * every single API call was paying a redirect. Measured on the dev server:
+ *
+ *     GET /api/fpl/fixtures/   308 -> /api/fpl/fixtures
+ *     GET /api/fpl/fixtures    200
+ *
+ * Seven of the fifteen requests on one dashboard load, and the browser does not
+ * cache a 308 here, so it is paid again on every load. The launch draft is
+ * around 420 `element-summary/{id}/` fetches — 420 extra round trips against
+ * the very API whose rate limit `staleSeconds` is written around.
+ *
+ * The handler appends a `/` before matching its allowlist, so stripping it here
+ * changes nothing about which paths are allowed or what is forwarded upstream.
+ */
+const feedUrl = (path: string) =>
+  // The strip has to survive a QUERY STRING, and anchored at end-of-string it
+  // did not: `leagues-classic/{id}/standings/?page_standings=1` ends in a
+  // digit, so it kept its slash and kept its 308. Measured in Chromium — one
+  // redirect left on a dashboard load, and it was the mini-league's.
+  `${demoMode ? "/api/demo" : "/api/fpl"}/${path.replace(/\/+(?=\?|$)/, "")}`;
 
 /**
  * One round trip, no retention. Used directly by the element-summary layer
@@ -96,6 +121,37 @@ async function fetchJson<T>(url: string, signal?: AbortSignal, noStore = false):
 }
 
 /**
+ * Drop entries whose TTL has passed.
+ *
+ * This map used to hold every payload for the life of the page, which was fine
+ * when the keys were a fixed handful per reader. They are not any more: the
+ * gameweek time machine fetches `event/{gw}/live/` and
+ * `entry/{id}/event/{gw}/picks/` for every week it is pointed at — up to
+ * thirty-eight of each — and the mini-league fetches an entry, a history, a
+ * transfer list and a picks payload per rival card opened, plus a standings
+ * page per page turned. A gameweek's live feed is around 100 KB for a
+ * three-hundred-player universe and more for a real one, so the ceiling was
+ * tens of megabytes of JSON nobody would look at twice.
+ *
+ * Expiry, not capacity: an entry past its TTL is already unusable — `get`
+ * bypasses it on read — so this deletes nothing a caller could still have had.
+ * That makes it strictly a memory fix and not a behaviour change, which is the
+ * only kind of eviction worth adding without a measurement behind it.
+ *
+ * Called on write rather than on a timer: the map only grows when something is
+ * written to it, so that is the only moment it can need trimming, and it keeps
+ * this off the polling path entirely.
+ */
+function evictExpired(): void {
+  const now = Date.now();
+  for (const [url, entry] of fetchCache) {
+    // The path is what `cacheTtl` keys on; strip the feed prefix back off.
+    const path = url.replace(/^\/api\/(?:demo|fpl)\//, "");
+    if (now - entry.at >= cacheTtl(path)) fetchCache.delete(url);
+  }
+}
+
+/**
  * @param force skip the in-memory memo below. For a control the reader pressed
  *   — "Refresh now" — which otherwise returns the same promise for up to 25
  *   seconds and looks like a button that does nothing.
@@ -106,8 +162,26 @@ async function get<T>(path: string, force = false): Promise<T> {
   if (!force && cached && Date.now() - cached.at < cacheTtl(path)) {
     return cached.promise as Promise<T>;
   }
-  const promise = fetchJson<T>(url, undefined, isLiveFeed(path));
+  /*
+   * A FORCED READ HAS TO GET PAST THE EDGE, NOT JUST PAST THIS MAP.
+   *
+   * `force` skipped the memo above and then asked for the identical URL, so a
+   * CDN holding a copy answered from it — `cache: "no-store"` binds the
+   * BROWSER's cache and says nothing to a shared one. On the live feeds that is
+   * exactly the window the reader presses the button in: the scores look wrong,
+   * they tap "Refresh now", and the edge hands back the same body it just gave
+   * them. A control labelled "now" that cannot reach the origin.
+   *
+   * A unique parameter makes it a different cache key. It costs nothing
+   * upstream: the proxy rebuilds the FPL URL canonically from the path and
+   * drops every query parameter it does not itself understand, so FPL sees the
+   * same clean request either way. It does leave one edge entry per press —
+   * bounded by how fast a person can tap, which is not a cache-key explosion.
+   */
+  const wire = force ? `${url}${url.includes("?") ? "&" : "?"}_=${Date.now()}` : url;
+  const promise = fetchJson<T>(wire, undefined, isLiveFeed(path));
   fetchCache.set(url, { promise, at: Date.now() });
+  evictExpired();
   // Failed requests must not be cached, or a retry could never succeed.
   promise.catch(() => {
     if (fetchCache.get(url)?.promise === promise) fetchCache.delete(url);
@@ -124,6 +198,26 @@ export interface ElementSummary {
     total_points: number;
     opponent_team: number;
     was_home: boolean;
+    /**
+     * Null until the match has a score — which is how a row for a fixture that
+     * has NOT BEEN PLAYED is told apart from one the player sat out.
+     *
+     * FPL emits a history row from the DEADLINE, with `minutes: 0` and
+     * `starts: 0`, for a match that has not kicked off. Counted on the
+     * 2026-08-21 snapshot: 538 of 600 players carry one. Without this field
+     * there is nothing on the row to distinguish "he was an unused substitute"
+     * from "the game is on Monday". See `fetchRecentForm`.
+     */
+    team_h_score?: number | null;
+    /*
+     * The per-round figures the season summary needs. FPL sends all four on
+     * every history row; they were not modelled, so `PlayerModal` had nothing
+     * to build a season-to-date from and printed today's `element` totals
+     * under the time machine's past heading instead.
+     */
+    goals_scored?: number;
+    assists?: number;
+    expected_goal_involvements?: string;
   }[];
   history_past?: {
     season_name: string;
@@ -142,6 +236,20 @@ export interface ElementSummary {
 }
 
 export type PastSeason = PastSeasonStats;
+
+/**
+ * How many payloads the in-memory memo is holding, and a way to empty it.
+ *
+ * Exported for tests only, like `resetSummaryCache` below. `evictExpired` is
+ * otherwise unobservable — it deletes entries that were already unusable — and
+ * an unobservable fix is one nobody can pin.
+ */
+export function fetchCacheSize(): number {
+  return fetchCache.size;
+}
+export function resetFetchCache(): void {
+  fetchCache.clear();
+}
 
 export const api = {
   bootstrap: () => get<Bootstrap>("bootstrap-static/"),
@@ -186,6 +294,8 @@ interface SummaryRounds {
   round: number;
   minutes: number;
   starts?: number;
+  /** False for a fixture that has not been played — see `fetchRecentForm`. */
+  played: boolean;
 }
 
 interface ReducedSummary {
@@ -283,6 +393,16 @@ async function fetchSummaries(
             round: r.round,
             minutes: r.minutes,
             starts: r.starts,
+            /*
+             * A score is the only thing on the row that says the match
+             * happened. `!== null` rather than `!= null`: FPL sends the key
+             * with an explicit `null` before kickoff and a number after, so
+             * null is the signal — while a payload that omits the key
+             * altogether (a stub, an older reduced record) falls back to
+             * counting the row, which is the behaviour this replaces and the
+             * conservative direction for a shape nobody has seen.
+             */
+            played: r.team_h_score !== null,
           })),
         };
         summaryCache.set(keyFor(id), rec);
@@ -326,7 +446,28 @@ export async function fetchRecentForm(
     // `lastN` is applied HERE, not at fetch time. The rounds are cached whole
     // so that a caller asking for a different window does not have to re-fetch
     // a document the session already holds.
-    const rows = rec.rounds.slice(-lastN);
+    /*
+     * ROUNDS THAT HAVE ACTUALLY BEEN PLAYED, WHICH IS NOT ALL OF THEM.
+     *
+     * FPL emits a history row from the DEADLINE — `minutes: 0`, `starts: 0`,
+     * and no score — for a fixture that has not kicked off. Counted on the
+     * 2026-08-21 snapshot, with one of ten GW1 fixtures started: 538 of 600
+     * players carry such a row. Taking the last five rows unfiltered therefore
+     * charged every one of them a round they did not play in a match that had
+     * not happened.
+     *
+     * Mid-season that is a one-in-five dilution of BOTH `startShare` and
+     * `minsPerGame` for the whole window between the deadline and each kickoff
+     * — and it is biased ACROSS CLUBS within one gameweek, since the Saturday
+     * lunchtime club is clean while the Monday night club is diluted, and the
+     * optimizer compares them directly. Measured through `projectAll` at ten
+     * team games: a nailed ever-present goes from pStart 0.965 and 3.848 xP to
+     * 0.835 and 3.574, a 7.1% cut for the crime of playing later in the week.
+     *
+     * The filter is applied BEFORE the window, so a player still gets five real
+     * rounds rather than four and a hole.
+     */
+    const rows = rec.rounds.filter((r) => r.played).slice(-lastN);
     if (rows.length === 0 || !rows.some((r) => r.starts != null)) continue;
     const started = rows.filter((r) => (r.starts ?? 0) > 0);
     const startMins = started.reduce((a, r) => a + (r.minutes ?? 0), 0);
@@ -500,6 +641,9 @@ export async function loadTeamData(id: number): Promise<TeamData> {
     ? buildSquadState(bootstrap, entry, basePicks, history, transfers, {
         displayEvent: picks?.entry_history.event ?? basePicks.entry_history.event,
         activeChip: picks?.active_chip ?? null,
+        // The team ACTUALLY on the pitch this gameweek, which in a Free Hit
+        // week is `picks` and not `basePicks`. See `SquadState.currentPlayers`.
+        currentPicks: picks ?? undefined,
       })
     : null;
   return { bootstrap, fixtures, entry, picks, history, transfers, squad };
@@ -511,7 +655,7 @@ export function buildSquadState(
   picks: EntryEventPicks,
   history: EntryHistory,
   transfers: Transfer[],
-  opts?: { displayEvent?: number; activeChip?: string | null }
+  opts?: { displayEvent?: number; activeChip?: string | null; currentPicks?: EntryEventPicks }
 ): SquadState {
   const elementById = new Map(bootstrap.elements.map((e) => [e.id, e]));
   const chipEvents = new Map(history.chips.map((c) => [c.event, c.name]));
@@ -530,33 +674,94 @@ export function buildSquadState(
   for (const t of pending) {
     const slot = squadIds.find((p) => p.element === t.element_out);
     if (!slot) continue; // already replaced or data mismatch
-    const wasCaptain = slot.is_captain;
-    const wasVice = slot.is_vice_captain;
     slot.element = t.element_in;
     slot.is_captain = false;
     slot.is_vice_captain = false;
     bank += t.element_out_cost - t.element_in_cost;
-    if (wasCaptain || wasVice) {
-      // Reassign the armband to the first remaining original pick that has one.
-      const holder = squadIds.find((p) => (wasCaptain ? p.is_vice_captain : p.is_captain));
-      if (holder && wasCaptain) holder.is_captain = true;
+  }
+  /*
+   * EXACTLY ONE CAPTAIN AND EXACTLY ONE VICE, AND NOT THE SAME MAN.
+   *
+   * Transferring out an armband holder used to be handled inside the loop, and
+   * it got both cases wrong. Probed with captain = pick 3, vice = pick 4:
+   *
+   *   transfer out the vice     -> captains [3]  vices []    no vice at all
+   *   transfer out the captain  -> captains [4]  vices [4]   one man wears both
+   *
+   * WHAT IT DOES NOT AFFECT, since an audit found this note claiming otherwise:
+   * the vice-takeover in `Dashboard` and `LiveTab`. Both read `currentPlayers`,
+   * which is built from the RAW picks and never passes through here. Grep for
+   * `isCaptain` across `src/` and no shipped consumer reads the armband off
+   * `players` at all — the optimizer picks its own captain on xP.
+   *
+   * So this is a correctness fix on a field nothing currently renders, kept
+   * because a `SquadState` that hands out two captains or none is a trap laid
+   * for the next consumer, and because the same normalisation is what makes the
+   * pending-transfer path safe to extend.
+   *
+   * Restated after the loop rather than patched inside it, because two
+   * transfers in one gameweek can take both holders and only the final state is
+   * a fact. Which player inherits is a guess whatever happens — the reader
+   * re-picks the armband before the deadline and FPL publishes nothing until
+   * then — so the guess is the cheap, conventional one: the vice steps up, and
+   * the highest remaining pick takes the vice band.
+   */
+  if (squadIds.length > 0) {
+    let captain = squadIds.find((p) => p.is_captain);
+    if (!captain) {
+      captain = squadIds.find((p) => p.is_vice_captain) ?? squadIds[0];
+      captain.is_captain = true;
+    }
+    captain.is_vice_captain = false;
+    const vice = squadIds.find((p) => p.is_vice_captain && p !== captain);
+    if (!vice) {
+      const next = squadIds.find((p) => p !== captain);
+      if (next) next.is_vice_captain = true;
+    }
+    for (const p of squadIds) {
+      if (p !== captain) p.is_captain = false;
     }
   }
 
-  const players: OwnedPlayer[] = [];
-  for (const p of squadIds) {
-    const el = elementById.get(p.element);
-    if (!el) continue;
-    const purchase = purchasePriceFor(el, transfers, chipEvents);
-    players.push({
-      element: el,
-      purchasePrice: purchase,
-      sellPrice: sellingPrice(purchase, el.now_cost),
-      pickPosition: p.position,
-      isCaptain: p.is_captain,
-      isViceCaptain: p.is_vice_captain,
-    });
-  }
+  const toOwned = (list: Pick[]): OwnedPlayer[] => {
+    const out: OwnedPlayer[] = [];
+    for (const p of list) {
+      const el = elementById.get(p.element);
+      if (!el) continue;
+      const purchase = purchasePriceFor(el, transfers, chipEvents);
+      out.push({
+        element: el,
+        purchasePrice: purchase,
+        sellPrice: sellingPrice(purchase, el.now_cost),
+        pickPosition: p.position,
+        isCaptain: p.is_captain,
+        isViceCaptain: p.is_vice_captain,
+      });
+    }
+    return out;
+  };
+  const players = toOwned(squadIds);
+  /*
+   * THE FIFTEEN ACTUALLY FIELDED THIS GAMEWEEK, which `players` is not.
+   *
+   * `players` is the squad to OPTIMIZE FROM, and this function deliberately
+   * moves it away from what is on the pitch in two ways: it applies transfers
+   * already made for `nextEvent`, and `loadTeamData` hands it the PREVIOUS
+   * gameweek's picks during a Free Hit. Both are right for the optimizer and
+   * both are wrong for anything rendering this gameweek's live scores — and the
+   * live pitch and the Live tab were rendering exactly that list against
+   * current-gameweek points.
+   *
+   * The pending-transfer case is not a corner: FPL publishes GW n as
+   * `is_current` and GW n+1 as `is_next` while GW n's matches are still being
+   * played (confirmed on the 2026-08-21 snapshot, GW1 current and GW2 next), so
+   * any manager who does next week's transfer early hits it. A transferred-out
+   * player who played this week vanishes from the pitch and the incoming player
+   * is drawn with points he scored for somebody else. Worse, `effectiveXiIds`
+   * is computed from the real picks, so the two sets disagree and the pitch
+   * renders an illegal ten-and-five with a corner total over the wrong eleven.
+   */
+  const currentPlayers = toOwned(opts?.currentPicks?.picks ?? picks.picks);
 
   // FTs: banked from played GWs, minus any already spent on pending transfers
   // (unless a wildcard/free-hit is queued for the upcoming GW).
@@ -568,6 +773,7 @@ export function buildSquadState(
 
   return {
     players,
+    currentPlayers,
     bank,
     freeTransfers,
     usedChips: history.chips.map((c) => c.name),
@@ -585,7 +791,31 @@ export function buildSquadState(
 export async function entryNotFoundMessage(): Promise<string> {
   try {
     const b = await api.bootstrap();
-    const seasonStarted = b.events.some((e) => e.finished);
+    /*
+     * "STARTED" IS ABOUT MATCHES, NOT ABOUT BONUS — and this asked `finished`,
+     * which per CLAUDE.md means bonus confirmed. Those are three days apart at
+     * the one moment it matters. Read off the two live snapshots that straddle
+     * the transition:
+     *
+     *                          GW1 is_current   GW1 finished
+     *   2026-08-19 (pre)           false            false
+     *   2026-08-21 (playing)       true             false
+     *
+     * So through the whole of the opening weekend — the busiest the app will
+     * ever be — a mistyped ID was answered with "that's normal in pre-season:
+     * FPL retires ALL team IDs over the summer. Register your squad for the new
+     * season", to a manager whose squad was on the pitch. `is_current` flips at
+     * the GW1 deadline, which is exactly the line being drawn, and `finished`
+     * covers the end-of-season window before FPL rolls the bootstrap over.
+     *
+     * `is_previous` IS NOT PINNED BY A TEST AND NOTHING OBSERVED REACHES IT.
+     * FPL moves it onto the last completed gameweek, which by then is also
+     * `finished`, so removing it leaves the suite green — it is kept only for
+     * the rescheduling case where a gameweek's bonus is still unconfirmed when
+     * the next one becomes current. Read it as defence, not as a measured
+     * requirement.
+     */
+    const seasonStarted = b.events.some((e) => e.finished || e.is_current || e.is_previous);
     if (!seasonStarted) {
       return (
         "That ID isn't in FPL's system right now — and that's normal in pre-season: " +

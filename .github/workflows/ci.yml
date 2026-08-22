@@ -15,6 +15,17 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx eslint src --max-warnings 0
+      # `eslint src` was narrower than `npm run lint`, which is a bare `eslint`
+      # over the whole project — so a lint error in `scripts/` passed CI and
+      # failed for whoever ran the documented command locally. Run the command
+      # CLAUDE.md tells contributors to run.
+      - run: npm run lint -- --max-warnings 0
       - run: npx vitest run
+      # THE CHECK CLAUDE.md SAYS IS EASY TO FORGET, AND WAS. `scripts/` has its
+      # own tsconfig, so neither `next build` nor the main suite compiles the
+      # measurement harnesses — vitest.config.ts's `include` does not reach
+      # them. They sat with eight type errors, two of them real bugs, until
+      # somebody ran this by hand. Being easy to forget is exactly what CI is
+      # for, and it was the one command CI did not run.
+      - run: npm run typecheck:scripts
       - run: npm run build

@@ -13,7 +13,7 @@ entry id.
 ```bash
 npm run dev               # local dev server
 npm run build             # production build — run before claiming anything is done
-npm test                  # vitest run — the main suite (~457 tests)
+npm test                  # vitest run — the main suite (~791 tests)
 npm run lint              # eslint
 npx tsc --noEmit          # typecheck the app
 npm run typecheck:scripts # typecheck scripts/ — a separate tsconfig
@@ -90,6 +90,27 @@ revert the change and confirm the new test goes red. A test that cannot fail on
 the thing it was written for is worse than no test, and this repo has caught that
 mistake more than once.
 
+3. **Re-audit the fix, not just the bug.** A night of parallel audits found
+   real defects and shipped fixes for all of them; a second pass pointed at
+   those fixes found that **four of them were themselves wrong** — a
+   `Cache-Control` directive that did the reverse of what its own comment
+   claimed, a guard that never fired for any install that exists, a focus trap
+   that fought itself when two sheets were open, and a fallback that
+   reintroduced the bug it replaced.
+
+   Every one had passing tests. Three of the four passed because the test
+   asserted the same thing the code did — the header STRING rather than its
+   semantics, the token rather than the behaviour. That is the mutation-testing
+   rule above failing in a way mutation testing cannot catch: the mutation goes
+   red and the fix is still wrong, because the test and the code share a
+   misunderstanding.
+
+   The only thing that caught them was reading the spec (RFC 9111 for the
+   header) and asking "what state is every existing user actually in?" for the
+   guard. When a fix turns on how something OUTSIDE this repo behaves — an HTTP
+   cache, a browser, FPL's API — the test can only pin what you already believe.
+   Go and check the belief.
+
 ## Testing setup
 
 `vitest.config.ts` is `include: ["src/**/*.test.ts"]`, `environment: "node"`.
@@ -148,6 +169,18 @@ starting or benched, and `projectAll` applies it last. Two things about it:
   calibration that the MODEL over-rates defenders — a real correction, applied
   globally, sourced from somebody else's mistake.
 
+  That exception is for the READER's opinion and nothing else. Everything the
+  model itself consumes — last season's record, recent line-ups — must be in the
+  graded run, or the calibration is grading a projection the app does not ship.
+  That failure has now happened twice, once per input.
+- **It expires with its gameweek.** The stored payload carries the gameweek it
+  was made for (`squad.nextEvent`, the same anchor `projectAll` calls offset 0)
+  and is dropped once that gameweek is behind. Nothing expired it before, and
+  the round that scoped the override to offset 0 made that sharper rather than
+  milder: it now lands entirely on ONE gameweek, so if that gameweek is the
+  wrong one there is nothing left to dilute it — a median 0.94 and up to 2.85
+  off `next` on the 2026-08-21 snapshot.
+
 ## FPL data conventions worth knowing
 
 - `history.current[].points` is **gross**, with `event_transfers_cost` beside it.
@@ -178,18 +211,78 @@ half time — measured 6 minutes fast at the death — while `minutes` sat in th
 payload unread. Then full time was read off the wrong flag while
 `finished_provisional` sat beside it, also unread.
 
-Before writing an estimator for anything, dump the actual payload and look. The
-snapshot on the `fpl-snapshot-out` branch is there precisely so you can.
+**Provisional bonus is read at FULL TIME and not before.** The gate was
+`started && !finished`, so bonus was projected from the first minute of a
+match — and at minute two the BPS table holds a couple of completed passes, so
+whoever tops it is awarded points of pure noise. Reported from a live match:
+B.Fernandes captained, one appearance point, a projected 2 on top, doubled for
+the armband, and the app showed 6 where FPL showed 2. `finished_provisional` is
+the one state where the ladder is FINAL and only confirmation is outstanding,
+and it is the only one that has been measured. Seven tests passed throughout,
+because they built their fixtures the way the code read them.
+
+**It has now happened a third time.** `provisionalBonus` abstained from every
+double gameweek on the stated premise that "FPL publishes BPS only as a gameweek
+total". It does not: `fixtures/` carries a per-fixture `stats` array with a `bps`
+row for every player who appeared, split home and away, on the very objects that
+function was already being handed. Read off the snapshot — GW1 fixture 1, 30 rows
+for the 30 players who appeared, −8 to 41, and the top three are exactly the
+three the `bonus` rows pay 3, 2 and 1.
+
+Three for three, and the tests never help: in each case the suite asserted the
+same belief the code held. Before writing an estimator, an abstention, or a
+fallback for anything, **dump the actual payload and look.** The snapshot on the
+`fpl-snapshot-out` branch is there precisely so you can, and `fixtures.json` is
+worth re-reading in full whenever something in `live.ts` says the API does not
+send something.
+
+Two related habits that follow:
+
+- `SquadState.players` is the squad to OPTIMIZE FROM — pending transfers
+  applied, and in a Free Hit week the pre-Free-Hit fifteen. It is not what is on
+  the pitch. Anything rendering this gameweek's scores wants `currentPlayers`.
+- `live.elements[].stats` is a GAMEWEEK TOTAL. For anything about one match, use
+  `fixtureLines` in `live.ts`, which reads `explain[].fixture` and the fixture's
+  own `stats`.
 
 ### Live data must not be cached by the browser
 
-`Cache-Control` on the proxy carries `max-age=0` as well as `s-maxage`. This is
-load-bearing and was missing: `s-maxage` binds shared caches only, so with
-`public` and no `max-age` a browser is given no freshness lifetime, falls back to
-heuristic caching and picks its own — iOS Safari picked minutes. The 30-second
-live poll was answered from the phone's own store while `updatedAt` was stamped
-"now" on every hit, so the app reported refreshing and had not. The client sends
-`cache: "no-store"` for `fixtures/` and `event/{id}/live/` as the second belt.
+`Cache-Control` on the proxy carries `no-cache` as well as `s-maxage`, and the
+CDN gets its own `CDN-Cache-Control` (RFC 9213) because the two layers want
+opposite things and one header cannot say both. The browser half was missing and
+took four attempts: `s-maxage` binds shared caches only, so with `public` and no
+`max-age` a browser is given no freshness lifetime, falls back to heuristic
+caching and picks its own — iOS Safari picked minutes. The 30-second live poll
+was answered from the phone's own store while `updatedAt` was stamped "now" on
+every hit, so the app reported refreshing and had not. `max-age=0` did not
+finish the job either, because `stale-while-revalidate` binds private caches
+too; `proxy-revalidate` was backwards on both counts (RFC 9111 §5.2.2.9). The
+client sends `cache: "no-store"` for `fixtures/` and `event/{id}/live/` as the
+second belt.
+
+**The live feeds get a freshness budget shorter than one poll.** `fixtures/`
+and `event/{gw}/live/` are `s-maxage=10, stale-while-revalidate=20`, so an edge
+may serve at most 30 seconds of staleness against a 30-second UI poll. They used
+to take `cacheSeconds * 2` off a 25-second window — a 75-second entitlement,
+plus up to 30 more before the next poll — which is the arithmetic behind two
+separate reports of the clock and the scores lagging during a match. `fixtures/`
+counts as live because `matchMinute` reads `minutes` off it, so it carries the
+clock. The 75 is arithmetic on the header, not a measurement: no CDN runs in the
+sandbox, so what a given edge does with `stale-while-revalidate` is unverified
+here.
+
+**The origin does not cache at all any more, deliberately.** The upstream fetch
+carries `cache: "no-store"` rather than `next: { revalidate }`, because Next
+awaits its own background revalidation before completing the request
+(`withExecuteRevalidates` in `next/dist/server/revalidation-utils.js`) while
+`patch-fetch` has stripped the caller's abort signal from it. Measured against a
+stub that accepts the connection and never answers: a cold miss returned 502 at
+10.01s and a STALE entry was still open at 120s. All caching is therefore at the
+edge, where `stale-while-revalidate` serves a reader through an origin failure
+without holding anyone's response open. The one thing the Data Cache did that is
+worth keeping — folding concurrent readers of the same path into one upstream
+fetch — is an explicit in-flight map in the route; 20 concurrent identical
+requests produce exactly one upstream fetch.
 
 A "Refresh now" control must also bypass the in-memory memo in `fpl.ts`
 (`get(path, force)`), or it returns the promise the caller already had — a
@@ -225,6 +318,39 @@ always render at 58'. `makeDemoUniverse(NOW)` builds it; tests use
   measured for `buildSquadWithinBudget` and was worse on the live model; see the
   note at `src/lib/optimizer.ts:419`. No equivalent has been measured for
   `pickBestXi` itself.
+- **The in-season minutes model has no shrinkage.** `pStart` is `starts /
+  teamGames` at face value, so after one round a player is 1.000 or 0.000 with
+  no confidence scaling at any `teamGames` — while the pre-season branch shrinks
+  toward a prior with 6 pseudo-games. `buildStrengths` counts finished fixtures
+  PER CLUB, so at GW1 the two regimes are live simultaneously: two clubs scored
+  on one game against eighteen on the pre-season prior. Fixing it means a sweep
+  on `../fpl-data`, which no sandbox scoped to this repository can fetch —
+  `.github/workflows/measure.yml` is the route.
+- **`buildStrengths.usable` may be permanently false on the live feed.** All
+  four `strength_attack_*`/`strength_defence_*` are 0 on every snapshot taken so
+  far, including one with a gameweek in progress, and `strength_overall_*` are
+  now integers on a 1-5 scale rather than the ~1000-1400 the `spread > 40`
+  threshold assumes. So the Poisson opponent branch does not run in production,
+  and `demo.ts` builds its clubs on the old scale — meaning the tests exercise a
+  branch production may never reach. Take a mid-season snapshot and look before
+  concluding either way.
+- **The price predictor has never been observed firing on real data.** Counted
+  on both live snapshots, all 600 elements: `price_change_percent` is the
+  string `"0"`, `price_change_hourly_rate` 0, `price_change_locked_until` null,
+  `price_change_calibrating` false, and all three `price_change_projections`
+  rows `{projected_percent: "0", likelihood: 0}` — FPL freezes prices until
+  after the GW1 deadline. So `priceChange.ts`'s thresholds have only ever been
+  exercised on the demo, which generates its own values. The four extra fields
+  are now in `types.ts` (the file's header used to say the API published none
+  of them, and reasoned from that); `likelihood` is exactly the confidence
+  `NOTABLE` and `imminent` approximate. Take a mid-season snapshot with prices
+  moving and look before building on any of it.
+
+- **`dcPer90` divides by an arbitrarily small denominator.** Every other rate in
+  `playerRates` goes through `shrunk90`; this one does not, so 5 defensive
+  contributions in 20 minutes reads as 22.5 per 90. Low impact today because the
+  players it reaches have low `pStart`, but it is the same shape as the bug
+  `shrunk90` exists to prevent.
 ## Chip timing: two registers that must not mix
 
 `src/lib/chips.ts` reasons about chips over the rest of the season. **Structure
@@ -263,9 +389,22 @@ Two rules the tests pin, both of which produce actively wrong advice if broken:
   null for both, so an expired chip came back as *unknown* and the advisor said
   nothing instead of saying it had expired.
 
-Note also that `wcGain` is `max(0, bestSquadWithinValue − keepSquad)` — bounded
-below by zero, and a fresh squad beats a held one over *any* window. It is the
-size of a gap, not a reason to play the chip, and the copy says so.
+`wcGain` is the best of three things minus keeping: the greedily-built squad
+within team value, the squad itself, and every squad the transfer beam already
+evaluated (a wildcard can make those moves without the hit). It is therefore
+bounded below by zero and by the best transfer plan on screen — which it was
+NOT before, because the builder maximises the sum of `totalDiscounted` over all
+fifteen while `horizonScore` counts only the best XI, so its squad is a local
+optimum of the wrong objective. Measured on the demo, unclamped: 0.269 / 3.164
+/ 0.663 / 0.690 / 5.440 at horizons 1/2/3/5/8, against a best single transfer
+of 0.375 / 1.199 / 1.143 / 1.283 / 2.663 — the chip losing to one free transfer
+at three of the five. The floor removes the contradiction; it does not repair
+the objective mismatch, which is the "known gap" above. It remains the size of
+a gap, not a reason to play the chip, and the copy says so. Both `wcGain` and
+the transfer card are PLAIN points: while the floor was decayed and the card was
+not, the wildcard came out below a plan the same panel recommends in 43 of 96
+swept configurations (horizons 1-8 x free transfers {1,2,3,5} x bank {0,5,20}),
+by up to 4.56 points. It is 0 of 96 now.
 
 Pre-season there are no blanks or doubles at all: the opening calendar is 380
 fixtures, one per club per gameweek. They appear later as cup runs and

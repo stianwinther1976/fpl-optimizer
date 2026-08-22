@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { markNavigation } from "@/lib/nav";
 import { api, entryNotFoundMessage, FplApiError, DEMO_ENTRY_ID, setDemoMode } from "@/lib/fpl";
 import type { Entry } from "@/lib/types";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -16,6 +17,16 @@ const FEATURES: [string, string, string, string][] = [
 
 export default function Home() {
   const router = useRouter();
+  /*
+   * Every route push goes through here, so `nav.ts` sees the step and the
+   * dashboard's back control knows there is a screen to return to. Pushing
+   * directly from a call site is how one of them ends up unrecorded, and the
+   * button then ejects the reader from the app.
+   */
+  const goTo = (href: string) => {
+    markNavigation();
+    router.push(href);
+  };
   const inputRef = useRef<HTMLInputElement>(null);
   const [id, setId] = useState("");
   const [checking, setChecking] = useState(false);
@@ -48,10 +59,19 @@ export default function Home() {
   }
 
   useEffect(() => {
-    const saved = localStorage.getItem("fpl-id");
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring persisted input on mount
-    if (saved) setId(saved);
-     
+    /*
+     * WRAPPED, LIKE EVERY OTHER STORAGE ACCESS IN THIS TREE. The ACCESSOR
+     * itself throws where site data is blocked — Safari's "Block All Cookies",
+     * some embedded webviews — not just the write. Unguarded, this effect threw
+     * before `setRecent` ran, so the recent-teams list never rendered and the
+     * mount errored. It was the only bare `localStorage` call in the repo; the
+     * `removeItem` five lines up is already inside a `try`.
+     */
+    try {
+      const saved = localStorage.getItem("fpl-id");
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring persisted input on mount
+      if (saved) setId(saved);
+    } catch {}
     setRecent(getRecentTeams());
   }, []);
 
@@ -68,7 +88,16 @@ export default function Home() {
       setDemoMode(num === DEMO_ENTRY_ID);
       const e = await api.entry(num);
       setEntry(e);
-      localStorage.setItem("fpl-id", String(num));
+      /*
+       * Its own `try`, because it is inside the fetch's. A `QuotaExceededError`
+       * here — after the team has already loaded and rendered — fell into the
+       * catch below and put "Something went wrong. Please try again." beside a
+       * team that came back perfectly. Remembering the id is a convenience; it
+       * is not worth reporting the lookup as failed.
+       */
+      try {
+        localStorage.setItem("fpl-id", String(num));
+      } catch {}
     } catch (err) {
       if (err instanceof FplApiError && err.status === 404) {
         setError(await entryNotFoundMessage());
@@ -85,7 +114,7 @@ export default function Home() {
   function openFeature(tab: string) {
     const num = parseInt(id, 10);
     if (num > 0) {
-      router.push(`/team/${num}?tab=${tab}`);
+      goTo(`/team/${num}?tab=${tab}`);
     } else {
       inputRef.current?.focus();
       setError("Enter your FPL ID first — then this opens straight in the dashboard.");
@@ -117,7 +146,7 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => setEditing((v) => !v)}
-                  className="rounded px-2 py-1 text-xs font-semibold text-muted hover:text-accent"
+                  className="min-h-11 rounded px-3 py-1 text-xs font-semibold text-muted hover:text-accent"
                 >
                   {editing ? "Done" : "Edit"}
                 </button>
@@ -145,7 +174,7 @@ export default function Home() {
                   >
                     <button
                       type="button"
-                      onClick={() => router.push(`/team/${t.id}`)}
+                      onClick={() => goTo(`/team/${t.id}`)}
                       disabled={editing}
                       className="flex items-center gap-2 rounded-full px-3 py-2 hover:bg-accent/20 active:bg-accent/20 disabled:cursor-default disabled:opacity-70 disabled:hover:bg-transparent"
                       title={`${t.manager} · ID ${t.id}`}
@@ -157,7 +186,7 @@ export default function Home() {
                         type="button"
                         onClick={() => removeTeam(t.id)}
                         aria-label={`Remove ${t.name} from your teams`}
-                        className="ml-0.5 flex h-9 w-9 items-center justify-center rounded-full text-base text-muted hover:bg-warn/20 hover:text-warn active:bg-warn/20"
+                        className="ml-0.5 flex h-11 w-11 items-center justify-center rounded-full text-base text-muted hover:bg-warn/20 hover:text-warn active:bg-warn/20"
                       >
                         ✕
                       </button>
@@ -193,7 +222,7 @@ export default function Home() {
             Find it at fantasy.premierleague.com → “Points” — the number in the URL
             (…/entry/<b>1234567</b>/event/…).{" "}
             <button
-              onClick={() => router.push(`/team/${DEMO_ENTRY_ID}`)}
+              onClick={() => goTo(`/team/${DEMO_ENTRY_ID}`)}
               className="font-medium text-accent hover:underline"
             >
               Or try the mid-season demo →
@@ -217,7 +246,7 @@ export default function Home() {
                   ` · rank ${entry.summary_overall_rank.toLocaleString("en-GB")}`}
               </div>
               <button
-                onClick={() => router.push(`/team/${entry.id}`)}
+                onClick={() => goTo(`/team/${entry.id}`)}
                 className="btn-primary mt-3 w-full rounded-lg px-4 py-2.5"
               >
                 Open dashboard →

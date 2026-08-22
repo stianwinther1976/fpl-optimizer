@@ -283,3 +283,230 @@ export function kickoffLabel(
   const when = fmt(f.kickoff_time);
   return f.provisional_start_time ? `${when} (TBC)` : when;
 }
+
+/**
+ * Where a player sits on the bench once auto-substitutions have been applied.
+ *
+ * After a sub the bench is "everyone not in the effective eleven", and that set
+ * contains the STARTER WHO CAME OFF as well as the three subs who never came
+ * on. Sorted by FPL's pick order he lands at the front — pick position 3 sorts
+ * ahead of bench slot 12 — so the card captioned "Bench (in order)" opened with
+ * the player who had just been substituted OUT, badged "1" as if he were the
+ * next man on. He is not in the queue at all.
+ *
+ * So: the bench proper keeps FPL's order, and anyone who came off the eleven
+ * goes after all of it. `Number.MAX_SAFE_INTEGER` is not needed — a demoted
+ * starter's pick position is at most 11 and a bench slot at least 12 — but
+ * adding a constant keeps demoted starters in pick order among themselves,
+ * which matters under Bench Boost's zero subs only in that it never fires.
+ */
+export function benchSortKey(pickPosition: number): number {
+  return pickPosition > 11 ? pickPosition : pickPosition + 100;
+}
+
+/**
+ * The sub-priority badge for a bench card: `null` for a demoted starter.
+ *
+ * Returned rather than folded into `benchSortKey` because `Pitch` treats
+ * `undefined` as "number it by list position" and `null` as "no number at all",
+ * and those are genuinely different answers. Only the second case is a claim
+ * this function is qualified to make.
+ */
+export function benchBadgeFor(pickPosition: number): number | null | undefined {
+  return pickPosition > 11 ? undefined : null;
+}
+
+
+
+/**
+ * The bench figure to print beside a finished gameweek.
+ *
+ * FPL REPORTS `points_on_bench` AS ZERO IN A BENCH BOOST WEEK, because none of
+ * those points sat on the bench — they counted. Printed literally, the caption
+ * read `GW15: 61 pts · bench 0 pts` directly beneath four bench cards showing
+ * 8, 10, 2 and 1. Worse, the zero is the one number that would let a reader
+ * reconcile the corner with the eleven cards above it: the XI summed to 40, the
+ * bench to 21, and the corner said 61.
+ *
+ * So in a Bench Boost week the figure comes from the cards on screen and is
+ * labelled as having counted. Every other week `points_on_bench` is exactly
+ * right and is used unchanged — FPL's own number, not a re-derivation of it.
+ */
+export function benchSummary(
+  reported: number,
+  cards: readonly { points: number }[],
+  benchBoost: boolean
+): string {
+  if (!benchBoost) return `bench ${reported} pts`;
+  let total = 0;
+  for (const c of cards) total += c.points;
+  return `bench ${total} pts (counted — Bench Boost)`;
+}
+
+/**
+ * The captain's xP as a pitch card should print it.
+ *
+ * `${(xp * 2).toFixed(1)} xp ×2` was rendering the ALREADY-DOUBLED figure with
+ * a "×2" after it, so a 6.5 xp captain read `13.0 xp ×2` — which a reader
+ * multiplies to 26 — while the captaincy list on the very same panel showed him
+ * at 6.5. Writing the multiplier in front states both quantities and leaves
+ * nothing to multiply twice.
+ */
+export function captainXpLabel(xp: number, isCaptain: boolean, multiplier = 2): string {
+  return isCaptain ? `${multiplier}×${xp.toFixed(1)} xp` : `${xp.toFixed(1)} xp`;
+}
+
+/**
+ * The sentence under the live pitch, when a hit makes the corner disagree with
+ * the cards above it.
+ *
+ * The corner total is NET of the gameweek's transfer cost and the player cards
+ * are not, so a −4 week put 48 in the corner over eleven cards summing to 52
+ * with nothing on the tab to explain the gap — the word "hit" appeared nowhere
+ * on it. The historic view of the same pitch already discloses this, and so
+ * does the Live tab; only the live Team pitch did not.
+ */
+export function liveCornerNote(gross: number, hit: number): string | null {
+  if (hit <= 0) return null;
+  return `The eleven on the pitch have scored ${gross}; the corner shows ${gross - hit} after a −${hit} hit.`;
+}
+
+/**
+ * FPL's own average score for a gameweek — or null while it has not published
+ * one.
+ *
+ * ZERO MEANS "NOT PUBLISHED", AND WAS BEING PRINTED AS A SCORE. FPL leaves
+ * `average_entry_score` at 0 until a gameweek's scores are in; it does not
+ * track it live. Measured on the 2026-08-21 snapshot, taken with GW1 current
+ * and its opening fixture fully played — 90 minutes, `finished_provisional`,
+ * real points awarded to nine million squads — `average_entry_score` was still
+ * exactly 0.
+ *
+ * Three screens read it and all three took the 0 at face value:
+ *
+ *  - The Live tab printed "GW average: 0 pts (+34)" beside a live total,
+ *    which is the tab's headline comparison and it was against nothing.
+ *  - Its safety score falls back to the average when the rank-band sample is
+ *    unavailable, so it told a reader they needed 0 points to hold their rank
+ *    and were "on course to climb".
+ *  - The season chart plots the average as a line, so mid-season it ran along
+ *    at fifty and then dropped to the axis on the gameweek in progress —
+ *    exactly the point the reader is looking at, on the chart whose whole job
+ *    is "did I beat the average".
+ *
+ * `> 0` is the whole test and needs no second field: an average of exactly
+ * zero is impossible for a gameweek in which any football has been played, so
+ * "published" and "positive" are the same question. It also stays right for a
+ * gameweek that has not kicked off, where 0 is true and useless.
+ */
+export function publishedAverage(
+  ev: { average_entry_score: number } | null | undefined
+): number | null {
+  const v = ev?.average_entry_score;
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
+}
+
+
+/**
+ * A kick-off that has come and gone while FPL still says the match has not
+ * started.
+ *
+ * WHY THE READER NEEDS THIS SPELLED OUT. The fixture card shows a score and a
+ * clock once `started` is true, and the kick-off time before that. There is a
+ * third state and it looked identical to the second: the match is under way on
+ * television and FPL has not flipped the flag yet. A card reading "HUL v MUN /
+ * Sat 13:30" two minutes after the whistle is indistinguishable from an app
+ * that has stopped fetching, and the reader's reasonable conclusion — "live
+ * doesn't work" — is one the screen gives them no way to check.
+ *
+ * So the card says which it is. It is not a guess about the match: it is the
+ * arithmetic the reader is already doing, stated by the app instead of left to
+ * them.
+ *
+ * The grace period exists because FPL is routinely a minute or so behind the
+ * whistle, and a card that flips to "awaiting" on the stroke of kick-off would
+ * cry wolf at every match. `provisional_start_time` is excluded outright — a
+ * time FPL has itself marked TBC is not a time to measure lateness against.
+ */
+export function kickOffPassed(
+  f: {
+    kickoff_time: string | null;
+    started?: boolean;
+    provisional_start_time?: boolean;
+  },
+  now: number,
+  graceMs = 60_000
+): boolean {
+  if (f.started || !f.kickoff_time || f.provisional_start_time) return false;
+  const at = Date.parse(f.kickoff_time);
+  if (!Number.isFinite(at)) return false;
+  return now - at > graceMs;
+}
+
+/**
+ * How old the numbers on screen are, in whole minutes, or null while current.
+ *
+ * `updatedAt` advances only on a SUCCESSFUL refresh, so this is the age of the
+ * data and not the age of the last attempt — which is the distinction the Live
+ * tab had no way to draw. A reader watched a match reach the hour mark with
+ * the card still reading 2', beside a stamp that said "Updated" with the
+ * current time and "Auto-refresh every 30s". Every one of those was true about
+ * the REQUEST and none of them was true about the DATA.
+ *
+ * The threshold is two and a half poll intervals: one missed poll is a dropped
+ * packet, three in a row is a feed that has stopped answering, and only the
+ * second is worth telling anyone about.
+ *
+ * Whole minutes, floored, so it never claims precision it does not have — and
+ * it is deliberately allowed to read "0 min" for the window between the
+ * threshold and sixty seconds, because "0 min old" alongside a visible warning
+ * still says the right thing: not moving.
+ */
+export function liveStaleMinutes(
+  updatedAt: Date | null,
+  now: number,
+  pollMs: number
+): number | null {
+  if (!updatedAt) return null;
+  const age = now - updatedAt.getTime();
+  if (!Number.isFinite(age) || age < pollMs * 2.5) return null;
+  return Math.floor(age / 60_000);
+}
+
+/**
+ * A manager's overall total DURING a gameweek in play, built from the live
+ * score rather than from FPL's stored summary.
+ *
+ * WHY THE TWO DISAGREE ON ONE SCREEN, which is the thing this fixes. The
+ * header's "Total points" reads `entry.summary_overall_points` — FPL's stored
+ * cumulative figure, which they refresh on their own schedule during a live
+ * gameweek and which never carries provisional bonus. The Live tab computes
+ * from `event/{gw}/live/`, which is about ninety seconds fresh and does. So
+ * the app showed 3 and 7 for the same quantity, at the same moment, two
+ * headings apart, and both were "right" about different sources.
+ *
+ * The cumulative half comes from the LAST COMPLETED gameweek, never from the
+ * current row. `history.current[].total_points` for a gameweek in play already
+ * holds FPL's partial live figure, so adding the live score to it would count
+ * the same points twice — at GW1, where no earlier row exists at all, that
+ * would have doubled the whole total.
+ *
+ * `total_points` is cumulative NET, and `liveNet` is expected net of its own
+ * hit (which is what `liveEntryScore` returns), so the two compose directly.
+ */
+export function liveOverallPoints(
+  rows: { event: number; total_points: number }[],
+  currentEvent: number,
+  liveNet: number
+): number {
+  let before = 0;
+  let bestEvent = -Infinity;
+  for (const r of rows) {
+    if (r.event >= currentEvent) continue;
+    if (r.event > bestEvent) {
+      bestEvent = r.event;
+      before = r.total_points;
+    }
+  }
+  return before + liveNet;
+}

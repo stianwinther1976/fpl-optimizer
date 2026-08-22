@@ -12,10 +12,14 @@ type SortKey = "xp" | "total_points" | "form" | "now_cost" | "selected" | "xgi";
 /** Stable identity, so the row memo below does not rebuild on every render. */
 const NO_XP: Map<number, PlayerXp> = new Map();
 
+/** How many rows the table draws. Named so the caption can quote it. */
+const ROW_LIMIT = 60;
+
 export default function StatsTable({
   data,
   onSelect,
   xp: sharedXp,
+  recentFormApplied = false,
 }: {
   data: TeamData;
   onSelect?: (el: import("@/lib/types").Element) => void;
@@ -40,9 +44,32 @@ export default function StatsTable({
    * caller's business to decide, not this table's to guess around.
    */
   xp: Map<number, PlayerXp> | null;
+  /**
+   * True once the app has fetched recent line-ups and the projection above is
+   * built with them.
+   *
+   * THE NUMBER IN THIS COLUMN CHANGES MID-SESSION AND NOTHING SAID SO. Recent
+   * form is fetched by `OptimizePanel`, published to `recentFormStore`, and
+   * picked up by the Dashboard's projection — so a reader who looks at Stats,
+   * presses Optimize, and comes back sees a different xP for the same player
+   * in one page load (measured on the demo: ARS Back 3, 19.5 then 19.4). The
+   * convergence is the point — the two tabs used to disagree permanently — but
+   * an unannounced change to a number the reader is comparing players on is
+   * its own defect.
+   */
+  recentFormApplied?: boolean;
 }) {
   const [posFilter, setPosFilter] = useState<0 | ElementType>(0);
   const [sortKey, setSortKey] = useState<SortKey>("xp");
+  /*
+   * SORTING WAS DESCENDING-ONLY, on the one screen built for finding budget
+   * enablers. `setSortKey(key)` never toggled, `aria-sort` was hard-coded
+   * "descending", and a second click on the active header was a verified
+   * no-op — so there was no way to ask for the cheapest player, and at
+   * `Max price: £5.0m` the 59 cheapest were the ones the top-sixty cut threw
+   * away.
+   */
+  const [sortAsc, setSortAsc] = useState(false);
   // Slider max tracks the actual priciest player, so record-price premiums
   // (e.g. Haaland at £15.5m) are never cut off. null = show everyone.
   const priceCeiling = useMemo(() => {
@@ -62,18 +89,26 @@ export default function StatsTable({
 
   // Pre-season everyone is on 0 minutes/points — don't hide the whole game then.
   const playedGws = data.bootstrap.events.filter((e) => e.finished).length;
-  const rows = useMemo(() => {
+  const view = useMemo(() => {
     let els = data.bootstrap.elements.filter((e) => e.element_type >= 1 && e.element_type <= 4);
     if (playedGws > 0) els = els.filter((e) => e.minutes > 0 || e.total_points > 0);
     if (posFilter !== 0) els = els.filter((e) => e.element_type === posFilter);
     els = els.filter((e) => e.now_cost <= effMaxPrice);
     if (search) {
+      // ALSO THE CLUB CODE, WHICH IS THE ONE THE TABLE PRINTS. Every row shows
+      // `short_name` ("BOU", "NFO") while the filter matched only `web_name`
+      // and the full `name`, so typing the exact token visible in the column
+      // returned nothing. Invisible on the demo, whose `web_name`s embed the
+      // code ("NFO Striker 1"), which is why it survived.
       const q = search.toLowerCase();
-      els = els.filter(
-        (e) =>
+      els = els.filter((e) => {
+        const t = teams.get(e.team);
+        return (
           e.web_name.toLowerCase().includes(q) ||
-          teams.get(e.team)?.name.toLowerCase().includes(q)
-      );
+          t?.name.toLowerCase().includes(q) ||
+          t?.short_name.toLowerCase().includes(q)
+        );
+      });
     }
     const val = (e: (typeof els)[number]): number => {
       switch (sortKey) {
@@ -91,21 +126,32 @@ export default function StatsTable({
           return parseFloat(e.expected_goal_involvements) || 0;
       }
     };
-    return els.sort((a, b) => val(b) - val(a)).slice(0, 60);
-  }, [data, posFilter, sortKey, effMaxPrice, playedGws, search, teams, xp]);
+    const ordered = els.sort((a, b) => (sortAsc ? val(a) - val(b) : val(b) - val(a)));
+    // The count is returned beside the rows so the caption can say what was
+    // cut. It read the top sixty with nothing on screen to say so — with DEF
+    // selected, 100 qualify and 60 render.
+    return { rows: ordered.slice(0, ROW_LIMIT), total: ordered.length };
+  }, [data, posFilter, sortKey, sortAsc, effMaxPrice, playedGws, search, teams, xp]);
+  const rows = view.rows;
 
   const th = (key: SortKey, label: string) => (
     <th
       className="px-2 py-2 text-right"
-      aria-sort={sortKey === key ? "descending" : undefined}
+      aria-sort={sortKey === key ? (sortAsc ? "ascending" : "descending") : undefined}
     >
       <button
         type="button"
-        onClick={() => setSortKey(key)}
-        className={`-m-1 p-1 uppercase hover:text-accent active:text-accent ${sortKey === key ? "text-accent" : ""}`}
+        onClick={() => {
+          if (sortKey === key) setSortAsc((v) => !v);
+          else {
+            setSortKey(key);
+            setSortAsc(false);
+          }
+        }}
+        className={`-m-1 min-h-11 p-1 uppercase hover:text-accent active:text-accent ${sortKey === key ? "text-accent" : ""}`}
       >
         {label}
-        {sortKey === key ? " ↓" : ""}
+        {sortKey === key ? (sortAsc ? " ↑" : " ↓") : ""}
       </button>
     </th>
   );
@@ -118,14 +164,19 @@ export default function StatsTable({
             <button
               key={t}
               onClick={() => setPosFilter(t)}
-              className={`rounded-md px-3 py-1.5 ${posFilter === t ? "btn-primary" : "text-muted"}`}
+              className={`min-h-11 rounded-md px-3 py-1.5 ${posFilter === t ? "btn-primary" : "text-muted"}`}
             >
               {t === 0 ? "All" : POSITION_NAMES[t]}
             </button>
           ))}
         </div>
-        <label className="flex items-center gap-2 text-muted">
+        <label className="flex min-h-11 items-center gap-2 text-muted">
           Max price: £{fmtPrice(effMaxPrice)}m
+          {/*
+            `h-11` on a range input gives the TRACK a 44px hit area — the thumb
+            is drawn centred in it, so the whole strip is draggable rather than
+            the 16px the control defaults to on a phone.
+          */}
           <input
             type="range"
             min={40}
@@ -133,7 +184,7 @@ export default function StatsTable({
             step={5}
             value={effMaxPrice}
             onChange={(e) => setMaxPrice(parseInt(e.target.value))}
-            className="accent-[var(--accent)]"
+            className="h-11 accent-[var(--accent)]"
           />
         </label>
         <input
@@ -141,11 +192,16 @@ export default function StatsTable({
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search player/club…"
           aria-label="Search players or clubs"
-          className="ml-auto rounded-lg bg-panel-2 border border-border-c px-3 py-2"
+          className="ml-auto min-h-11 rounded-lg bg-panel-2 border border-border-c px-3 py-2"
         />
       </div>
 
-      <div className="card overflow-x-auto">
+      <div
+        className="card overflow-x-auto"
+        tabIndex={0}
+        role="region"
+        aria-label="Player statistics, scrollable"
+      >
         <table className="w-full min-w-[640px] text-sm">
           <thead className="border-b border-border-c text-xs uppercase text-muted">
             <tr>
@@ -229,6 +285,22 @@ export default function StatsTable({
           </tbody>
         </table>
       </div>
+      {/*
+        SAY WHAT WAS CUT. The table drew the top sixty with nothing on screen to
+        say so — with DEF selected, 100 players qualify and 60 render, and at
+        `Max price: £5.0m` the 59 cheapest were exactly the ones thrown away, on
+        the screen built for finding budget enablers.
+      */}
+      <p className="text-xs text-muted" role="status">
+        {view.total === 0
+          ? "No players match these filters."
+          : view.total > rows.length
+            ? `Showing ${rows.length} of ${view.total} — narrow the filters, or sort by the column you care about.`
+            : `Showing all ${view.total}.`}{" "}
+        {recentFormApplied
+          ? "xP includes recent line-ups, so it matches the Optimize tab exactly."
+          : "xP sharpens once you run Optimize, which fetches recent line-ups for the players it considers."}
+      </p>
     </div>
   );
 }

@@ -5,7 +5,7 @@ import type { Element, Fixture, Team } from "@/lib/types";
 import { fmtPrice } from "@/lib/rules";
 import { teamFixtures } from "@/lib/xp";
 import { playerPhotoUrl } from "@/lib/fpl";
-import { scoreTier, type ScoreTier } from "@/lib/display";
+import { captainXpLabel, scoreTier, type ScoreTier } from "@/lib/display";
 
 export interface PitchPlayer {
   element: Element;
@@ -20,6 +20,18 @@ export interface PitchPlayer {
    * for the running total beside the gameweek.
    */
   live?: { points: number; final: boolean };
+  /**
+   * The sub-priority badge on a bench card, or `null` for "this player has no
+   * sub priority". Omit it and the badge is the card's position in the list.
+   *
+   * THE POSITION IS NOT ALWAYS THE PRIORITY. Once auto-substitutions are
+   * applied the bench is "everyone not in the effective eleven", which includes
+   * the starter who was subbed OFF — and he is not first in the queue to come
+   * on, he is not in the queue at all. Numbering by list position labelled him
+   * "1", i.e. the very next player to be brought on, under a heading that says
+   * "in order". `null` is the only honest badge there, so it gets one.
+   */
+  benchOrder?: number | null;
 }
 
 /*
@@ -173,19 +185,14 @@ function PlayerCard({
               <>£{fmtPrice(el.now_cost)}m</>
             )}
             {p.xp != null && !p.live && (
-              <span className="text-[#00ff87]">
-                {" "}
-                · {(p.xp * (p.isCaptain ? 2 : 1)).toFixed(1)}xp{p.isCaptain ? "×2" : ""}
-              </span>
+              <span className="text-[#00ff87]"> · {captainXpLabel(p.xp, !!p.isCaptain)}</span>
             )}
           </>
         )}
         {info === "price" && <>£{fmtPrice(el.now_cost)}m</>}
         {info === "xp" && (
           <span className="text-[#00ff87]">
-            {p.xp != null
-              ? `${(p.xp * (p.isCaptain ? 2 : 1)).toFixed(1)} xp${p.isCaptain ? " ×2" : ""}`
-              : "–"}
+            {p.xp != null ? captainXpLabel(p.xp, !!p.isCaptain) : "–"}
           </span>
         )}
         {info === "form" && <>Form {el.form}</>}
@@ -227,6 +234,11 @@ function PlayerCard({
       )}
     </Tag>
   );
+}
+
+/** The number on a bench card: the caller's, or the card's place in the list. */
+function benchBadge(p: PitchPlayer, i: number): number | null {
+  return p.benchOrder === undefined ? i + 1 : p.benchOrder;
 }
 
 export default function Pitch({
@@ -307,6 +319,15 @@ export default function Pitch({
               key={v}
               type="button"
               onClick={() => changeLayout(v)}
+              /*
+               * WHICH ONE IS SELECTED WAS ENCODED IN THE BACKGROUND COLOUR AND
+               * NOWHERE ELSE. The two buttons differ only by `btn-primary`
+               * versus `text-muted`, so in the accessibility tree they were
+               * indistinguishable — a screen reader announced two buttons and
+               * no state, and the app's own rule elsewhere is that colour is
+               * never the only encoding of meaning.
+               */
+              aria-pressed={layout === v}
               // min-h-11: measured 28px at 390px, under any usable tap target,
               // and it sits directly above the pitch it controls.
               className={`min-h-11 rounded-md px-3 py-1.5 ${layout === v ? "btn-primary" : "text-muted"}`}
@@ -367,9 +388,11 @@ export default function Pitch({
               <div className="grid grid-cols-4 gap-1 sm:flex sm:justify-start sm:gap-6">
                 {bench.map((p, i) => (
                   <div key={p.element.id} className="relative min-w-0">
-                    <span className="absolute -top-1 left-0 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-[9px] font-bold text-white">
-                      {i + 1}
-                    </span>
+                    {benchBadge(p, i) != null && (
+                      <span className="absolute -top-1 left-0 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-[9px] font-bold text-white">
+                        {benchBadge(p, i)}
+                      </span>
+                    )}
                     <PlayerCard p={p} teams={teams} fixtures={fixtures} nextEvent={nextEvent} onSelect={onSelect} info={info} />
                   </div>
                 ))}
@@ -437,9 +460,7 @@ function ListView({
     if (info === "xp")
       return (
         <span className="text-accent">
-          {p.xp != null
-            ? `${(p.xp * (p.isCaptain ? 2 : 1)).toFixed(1)} xp${p.isCaptain ? " ×2" : ""}`
-            : "–"}
+          {p.xp != null ? captainXpLabel(p.xp, !!p.isCaptain) : "–"}
         </span>
       );
     if (info === "form") return <>{el.form}</>;
@@ -473,9 +494,7 @@ function ListView({
       <span>
         £{fmtPrice(el.now_cost)}m
         {p.xp != null && (
-          <span className="ml-1 text-accent">
-            · {(p.xp * (p.isCaptain ? 2 : 1)).toFixed(1)}xp{p.isCaptain ? "×2" : ""}
-          </span>
+          <span className="ml-1 text-accent"> · {captainXpLabel(p.xp, !!p.isCaptain)}</span>
         )}
       </span>
     );
@@ -501,7 +520,7 @@ function ListView({
    * to module level would also work but means threading `teams`, `metric`,
    * `fixtureStr` and `onSelect` through props for no gain.
    */
-  const row = (p: PitchPlayer, benchNo?: number) => {
+  const row = (p: PitchPlayer, benchNo?: number | null) => {
     const el = p.element;
     const flag = statusFlag(el);
     const fx = fixtureStr(el);
@@ -574,7 +593,7 @@ function ListView({
             Bench {POS.length ? "(in order)" : ""}
           </div>
           <div className="divide-y divide-border-c/60">
-            {bench.map((p, i) => row(p, i + 1))}
+            {bench.map((p, i) => row(p, benchBadge(p, i)))}
           </div>
         </div>
       )}

@@ -57,7 +57,8 @@ import type { Element } from "./types";
  * The wait is the real cost. `Dashboard` is honest about it — it renders and
  * projects without the record and sharpens when it lands — but `OptimizePanel`
  * AWAITS the whole fetch before it shows a squad, so doubling the quota doubled
- * a blocking wait, from roughly 21 rounds of 10 to 42. A progress counter is not
+ * a blocking wait, from roughly 21 rounds of 10 to 40 — the note on
+ * `LAUNCH_QUOTA` explains why it is 40 and not the 42 this used to say. A progress counter is not
  * the same thing as not blocking, and an earlier draft of this comment claimed
  * it was. The fix is two-pass: draft on a first tranche and keep fetching the
  * remainder in the background. That needs `pastSeasonStore` to merge rather than
@@ -73,6 +74,22 @@ import type { Element } from "./types";
  * Exported and overridable so the sweep in the doc comment can be reproduced
  * without hand-editing this file, which is how the recorded numbers went stale
  * against the code once already.
+ *
+ * THE FORWARD QUOTA IS UNREACHABLE, AND THE POOL IS 396 RATHER THAN 420. There
+ * are not 88 selectable forwards in the game: measured on both live snapshots,
+ * 64 pre-season and 64 with a gameweek played, out of 71 and 72 in the game at
+ * all. `Math.min(quota[pos], inPos.length)` therefore caps at 64 and every
+ * forward who can be picked is already in — the four interleaved rankings do
+ * nothing at that position. Picked per position, both snapshots:
+ * `{GK 32, DEF 140, MID 160, FWD 64}`.
+ *
+ * That does not change the judgement above, which was about breadth in defence
+ * and midfield and is unaffected. What it does mean is that the sweep's "420"
+ * row and the "315 -> 420 is 105 more requests" arithmetic describe a pool size
+ * the real feed cannot produce, and that the true blocking wait is 40 rounds of
+ * ten rather than 42. Left at 88 deliberately: it is a ceiling, FPL's forward
+ * count moves between windows, and lowering it to today's 64 would be fitting
+ * the constant to one afternoon's squad lists.
  */
 export const LAUNCH_QUOTA: Record<number, number> = { 1: 32, 2: 140, 3: 160, 4: 88 };
 
@@ -127,7 +144,23 @@ export function launchPool(all: Element[], quota: Record<number, number> = LAUNC
     });
     // `now_cost` always varies, so this is belt and braces rather than a real path.
     const active = live.length > 0 ? live : rankings.slice(0, 1);
-    // Break ties on ownership, then price — never on player id.
+    // Break ties on ownership, then price — never on player id DIRECTLY.
+    //
+    // THE RESIDUAL IS STILL CLUB ORDER, and saying so is the honest version of
+    // that first line. Three keys resolve a tie and when all three are equal
+    // `Array#sort` stability leaves the input order, which is `bootstrap.elements`
+    // — FPL serves that grouped by club ascending. Measured: reversing the input
+    // array changes 11 of the 396 picks on both live snapshots, and over the tie
+    // blocks that straddle the pool boundary the picked side has a mean club id
+    // of 8.2 against 15.4 rejected. So the alphabetically-early clubs still win
+    // the last few slots, exactly as the paragraphs below describe for the
+    // pre-tie-break state.
+    //
+    // Not fixed here, because every remaining fix is worse: a hash of the id is
+    // arbitrary dressed as fair, and a fourth real key would have to be a
+    // ranking, which is what the tie says there is no evidence for. What the
+    // tie-break did buy is that the residual is now reached only by players
+    // equal on ownership AND price, rather than by a whole flat ranking.
     //
     // The variance filter above only catches a ranking that is PERFECTLY flat,
     // and that is the pre-season state, not the general one. Mid-season the two

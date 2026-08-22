@@ -20,7 +20,7 @@ import {
   type CaptainRead,
   type FieldSplit,
 } from "./field";
-import { chipTiming, type ChipScoring, type ChipTiming } from "./chips";
+import { chipTiming, chipWindow, type ChipScoring, type ChipTiming } from "./chips";
 
 export interface XiSlot {
   element: Element;
@@ -55,9 +55,36 @@ export interface TransferMove {
 export interface TransferPlan {
   transfers: TransferMove[];
   hitCost: number;
-  grossXp: number; // horizon xP of resulting best XIs
-  netXp: number; // grossXp - hitCost
-  gainVsKeep: number; // netXp - keep-team xP
+  grossXp: number; // horizon xP of resulting best XIs, DECAYED (the ranking key)
+  netXp: number; // grossXp - hitCost, decayed
+  /**
+   * The same XIs summed without the gameweek decay, net of the hit — and the
+   * number `gainVsKeep` is built from.
+   *
+   * THE GAIN WAS DISCOUNTED AND THE HIT WAS NOT. `horizonScore` weights
+   * gameweek `i` by `gwDecay ** i` (0.88); `hitCost` is a flat 4. So the
+   * benefit was shrunk and the cost charged at face value, and the ratio
+   * `keepHorizonXp / keepHorizonPlainXp` is what a −4 really cost the reader:
+   *
+   *   horizon        1      3      5      8
+   *   ratio        1.000  0.885  0.787  0.668
+   *   a −4 hit     4.00   4.52   5.08   5.99   plain points
+   *
+   * At the eight-gameweek horizon a two-transfer move had to gain 6.0 before
+   * the "⚠️ the hit doesn't pay off" warning cleared, when FPL charges 4. That
+   * is a constant nobody chose and no sweep supports — it fell out of mixing
+   * two units — which is precisely what CLAUDE.md's second convention forbids.
+   * Measured on the demo at horizon 8, the two-transfer plan showed −1.04 while
+   * its own per-player figures, which are plain sums, swing +4.8 against the
+   * −4.
+   *
+   * So the hit arithmetic is done in plain points, where FPL's 4 means 4. The
+   * decay keeps the job it was introduced for — preferring near-term certainty
+   * when the beam chooses WHICH players to move — and loses the one it acquired
+   * by accident.
+   */
+  plainNetXp: number;
+  gainVsKeep: number; // plainNetXp - keep-team plain xP
   bankAfter: number;
   nextXi: BestXi;
 }
@@ -148,11 +175,34 @@ export function pickBestXi(
    * the builder, which must keep returning short for that caller to filter.
    */
   if (!best) {
+    /*
+     * THREE FAILURES, NOT TWO. Branching on the count alone reported "no
+     * projected fixtures in the horizon" for a squad that is short AND has no
+     * goalkeeper — and the missing keeper is the one thing that is definitely
+     * not a horizon problem, because pool starvation empties every position
+     * together. Measured: 11 players with no keeper, and 14 with no keeper,
+     * both came back blaming the horizon.
+     */
+    const missing: string[] = [];
+    if (squad.filter((e) => e.element_type === 1).length < 1) missing.push("no goalkeeper");
+    for (const [type, need, name] of [
+      [2, 3, "defenders"],
+      [3, 2, "midfielders"],
+      [4, 1, "forward"],
+    ] as const) {
+      const have = squad.filter((e) => e.element_type === type).length;
+      if (have < need) missing.push(`only ${have} ${name}`);
+    }
     throw new Error(
-      squad.length < SQUAD_SIZE
-        ? `Cannot pick an XI from ${squad.length} of ${SQUAD_SIZE} players — ` +
-          `no projected fixtures in the horizon is the usual cause.`
-        : "No valid formation for this squad"
+      // `squad.length > 0`, because an EMPTY squad is the pool-starvation case
+      // the horizon message was written for — it is missing every position at
+      // once, and listing them all buries the one sentence that says why.
+      missing.length > 0 && squad.length > 0
+        ? `Cannot pick an XI from these ${squad.length} players — ${missing.join(", ")}.`
+        : squad.length < SQUAD_SIZE
+          ? `Cannot pick an XI from ${squad.length} of ${SQUAD_SIZE} players — ` +
+            `no projected fixtures in the horizon is the usual cause.`
+          : "No valid formation for this squad"
     );
   }
   const ranked = [...best.starters].sort((a, b) => b.xp - a.xp);
@@ -236,6 +286,16 @@ export interface OptimizerInput {
    */
   pastSeason?: Map<number, PastSeasonStats>;
   /**
+   * Chips already played, with the gameweek each was played in — `history.chips`
+   * verbatim.
+   *
+   * Since 2025/26 there are two of each chip, one per half, so which window a
+   * reader is still reasoning about depends on which copies they have spent.
+   * Without this the advisor hands out timing advice for a window they have no
+   * chip left for, and says nothing about the one they do. See `chipWindow`.
+   */
+  usedChips?: { name: string; event: number }[];
+  /**
    * How many projected points the reader will trade for a pick the field is
    * not on, when choosing a captain. Zero — the default — means "do not ask",
    * and leaves every ordering here exactly as it was.
@@ -250,6 +310,29 @@ export interface OptimizerResult {
   xp: Map<number, PlayerXp>;
   keepXi: BestXi; // best XI with 0 transfers, next GW
   keepHorizonXp: number;
+  /**
+   * The same XIs, summed WITHOUT the gameweek decay.
+   *
+   * `keepHorizonXp` is the ranking key: `horizonScore` weights gameweek `i` by
+   * `gwDecay ** i` (0.88), which is what makes the planner prefer near-term
+   * certainty. That is a modelling choice and it stays. What it must not do is
+   * appear on screen as a points total, and it did — the card read
+   * "Transfer plans (next 8 GWs) … best XI projects 61.1 xp in GW21 … 327.0 xp",
+   * which is 40.9 a week against a stated 61.1 for the first one, with no
+   * falling fixtures to explain it and nothing in the UI mentioning weighting.
+   * Measured on the demo, keep-the-team, same XIs both ways:
+   *
+   *   horizon   card showed   undiscounted   low by
+   *      1          61.1          61.1          0%
+   *      3         163.1         184.3         11%
+   *      5         241.9         307.3         21%
+   *      8         327.0         489.4         33%
+   *
+   * So this is the number to print and `keepHorizonXp` is the number to rank
+   * on, and the two are given different names so a later reader cannot confuse
+   * them again.
+   */
+  keepHorizonPlainXp: number;
   plans: TransferPlan[]; // for 1..maxTransfers transfers (best per count)
   captainRanking: XiSlot[]; // top of current squad by next-GW xp
   /**
@@ -271,6 +354,12 @@ export interface OptimizerResult {
    * Exposure, not edge — see `FieldSplit`.
    */
   fieldSplit: FieldSplit;
+  /**
+   * True when `fieldSplit` describes the post-transfer eleven rather than the
+   * one you hold now — see the note at the `splitByField` call. The copy has to
+   * say which, because the pitch below it is switchable.
+   */
+  fieldXiIsPlan: boolean;
   chipAdvice: ChipAdvice[];
   dreamTeam: BestXi;
   dreamSquad: Element[];
@@ -309,6 +398,11 @@ export function optimize(input: OptimizerInput): OptimizerResult {
   // --- Keep-team baseline ---
   const keepXi = pickBestXi(squadEls, (id) => xp.get(id)?.next ?? 0);
   const keepHorizonXp = horizonScore(squadEls, xp, gws);
+  // Undiscounted, for display — see `keepHorizonPlainXp`.
+  let keepHorizonPlainXp = 0;
+  for (const gw of gws) {
+    keepHorizonPlainXp += pickBestXi(squadEls, (id) => xp.get(id)?.perGw.get(gw) ?? 0).totalXp;
+  }
 
   // --- Candidate pool: top N per position by horizon xP (available players only) ---
   const candidates = new Map<ElementType, Element[]>();
@@ -391,12 +485,20 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     const hitCost = Math.max(0, count - freeTransfers) * TRANSFER_HIT;
     const netXp = score - hitCost;
     const els = s.players.map((p) => p.element);
+    // Undiscounted, so the hit is charged in the currency FPL charges it in —
+    // see `TransferPlan.plainNetXp`.
+    let plainXp = 0;
+    for (const gw of gws) {
+      plainXp += pickBestXi(els, (id) => xp.get(id)?.perGw.get(gw) ?? 0).totalXp;
+    }
+    const plainNetXp = plainXp - hitCost;
     plans.push({
       transfers: s.moves,
       hitCost,
       grossXp: score,
       netXp,
-      gainVsKeep: netXp - keepHorizonXp,
+      plainNetXp,
+      gainVsKeep: plainNetXp - keepHorizonPlainXp,
       bankAfter: s.bank,
       nextXi: pickBestXi(els, (id) => xp.get(id)?.next ?? 0),
     });
@@ -419,9 +521,42 @@ export function optimize(input: OptimizerInput): OptimizerResult {
   const captainReads = new Map(
     readCaptains(captainRanking, bootstrap).map((r) => [r.element.id, r])
   );
+  /*
+   * THE XI THE PANEL ACTUALLY SHOWS, WHICH WAS NOT THE ONE THIS DESCRIBED.
+   *
+   * `keepXi` is the no-transfer eleven. The Line-up section below the "Against
+   * the field" card defaults to "Best plan" — the post-transfer eleven — so on
+   * the demo the number read 50.2 above a pitch whose eleven summed to 50.4,
+   * differing by one player: ARS Back 3 (9.7% owned) in the figure, BOU Back 3
+   * (6.3%) on the pitch. The one number on the page whose entire subject is
+   * ownership exposure ignored the transfer the app had just recommended —
+   * which in that case made the reader MORE differential, so the card
+   * understated the very thing it exists to report.
+   *
+   * The recommendation is the same one the panel makes: the best plan when it
+   * gains anything, otherwise keeping. The reader can still switch the pitch to
+   * "No transfers" or "Dream £100m", so the copy names which eleven this is.
+   */
+  /*
+   * `plainNetXp`, NOT `netXp` — the same quantity the panel badges and prints.
+   *
+   * Moving `gainVsKeep` to plain points moved the Recommended badge with it and
+   * left this sort and the Line-up pitch's on the decayed one. The two rankings
+   * differ over a real band: with `p = keepHorizonXp / keepHorizonPlainXp` they
+   * disagree whenever the extra transfer's plain gain is between 4 and 4/p —
+   * 4 to 4.52 at horizon 3, 4 to 5.08 at 5, 4 to 5.99 at 8. Inside it the
+   * reader saw "Recommended" on the two-transfer card while the pitch below and
+   * this ownership figure both described the one-transfer eleven. That is
+   * exactly the defect the note below was written to remove, reintroduced by
+   * the metric change.
+   */
+  const bestPlan = [...plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
+  const fieldXi =
+    bestPlan && bestPlan.gainVsKeep > 0.05 ? bestPlan.nextXi : keepXi;
   const fieldSplit = splitByField(
-    keepXi.starters.map((s) => ({ element: s.element, xp: s.xp }))
+    fieldXi.starters.map((s) => ({ element: s.element, xp: s.xp }))
   );
+  const fieldXiIsPlan = fieldXi !== keepXi;
 
   // --- Dream team (ignore current squad, £100m) ---
   const { squad: dreamSquad } = buildDreamSquad(bootstrap.elements, xp);
@@ -449,31 +584,86 @@ export function optimize(input: OptimizerInput): OptimizerResult {
   const xiAt = (squad: Element[], gw: number) =>
     pickBestXi(squad, (id) => xp.get(id)?.perGw.get(gw) ?? 0);
 
+  /*
+   * EVERY ARGMAX BELOW RUNS OVER THE CHIP'S OWN WINDOW, NOT OVER THE HORIZON.
+   *
+   * `chipTiming` clips correctly, and that made this look handled: it does the
+   * clipping for the TIMING NOTE. The headline the reader sees first was an
+   * argmax over `gws` — `nextEvent … nextEvent + horizon - 1` — with no
+   * reference to `bootstrap.chips` at all. Since 2025/26 each chip has two
+   * windows and each expires, so any horizon that crosses an expiry produced a
+   * card naming a gameweek the chip cannot be played in.
+   *
+   * Reproduced on the demo with the windows closing at GW22, read at
+   * `nextEvent = 21` with `horizon = 5` (an offered setting; the selector has
+   * 1/2/3/5/8):
+   *
+   *     Bench Boost   Best in GW25: your bench projects 14.6 pts that week.
+   *                   The projection already covers the rest of this chip's
+   *                   window (to GW22).
+   *
+   * Two lines, contradicting each other, with the wrong one on top. CLAUDE.md's
+   * rule for chips is that suggesting a gameweek outside the window is worse
+   * than silence — this was that, in the register read first.
+   *
+   * A null `gw` means the window and the horizon do not overlap at all: the
+   * chip has expired, or it does not open until after the horizon ends. Naming
+   * no gameweek is the honest answer to both, and `timing` says which.
+   *
+   * The Wildcard is deliberately not clipped. It is not a one-week chip: it
+   * rebuilds the squad for the rest of the season, so the horizon it is judged
+   * over is not the window it must be played in. `wcGain` names no gameweek,
+   * so there is nothing here for it to get wrong.
+   */
+  const inChipWindow = (chip: string): ((gw: number) => boolean) => {
+    const w = chipWindow(chip, bootstrap.chips, nextEvent, input.usedChips);
+    // No published window is not "every gameweek is fine", but it is the only
+    // honest reading left: `chipWindow` returns null precisely when the game
+    // has said nothing, and every caller then declines to constrain.
+    return w ? (gw: number) => gw >= w.start && gw <= w.stop : () => true;
+  };
+  const bbIn = inChipWindow("bboost");
+  const tcIn = inChipWindow("3xc");
+  const fhIn = inChipWindow("freehit");
+
   // Bench Boost: GW where the bench of the best XI scores the most.
-  let bbBest = { gw: nextEvent, gain: 0 };
+  let bbBest: { gw: number | null; gain: number } = { gw: null, gain: 0 };
   // Triple Captain: GW + player with the highest single-GW xP (the chip adds 1x).
-  let tcBest = { gw: nextEvent, gain: 0, name: keepXi.captain?.element.web_name ?? "Your captain" };
+  let tcBest: { gw: number | null; gain: number; name: string } = {
+    gw: null,
+    gain: 0,
+    name: keepXi.captain?.element.web_name ?? "Your captain",
+  };
   // Free Hit: GW where a one-week optimal squad beats your own XI the most.
   const fhBudget = totalValue(owned, bank);
-  let fhBest = { gw: nextEvent, gain: 0 };
+  let fhBest: { gw: number | null; gain: number } = { gw: null, gain: 0 };
   for (const gw of gws) {
-    const ownXi = xiAt(squadEls, gw);
-    const benchXp = ownXi.bench.reduce((s, p) => s + p.xp, 0);
-    if (benchXp > bbBest.gain) bbBest = { gw, gain: benchXp };
-    for (const e of squadEls) {
-      const v = xp.get(e.id)?.perGw.get(gw) ?? 0;
-      if (v > tcBest.gain) tcBest = { gw, gain: v, name: e.web_name };
+    const bb = bbIn(gw);
+    const fh = fhIn(gw);
+    if (!bb && !fh && !tcIn(gw)) continue;
+    const ownXi = bb || fh ? xiAt(squadEls, gw) : null;
+    if (bb && ownXi) {
+      const benchXp = ownXi.bench.reduce((s, p) => s + p.xp, 0);
+      if (bbBest.gw == null || benchXp > bbBest.gain) bbBest = { gw, gain: benchXp };
     }
-    // Free Hit is a one-week chip — build the squad optimal for THIS gw (so a
-    // double gameweek picks the players with two fixtures), not a horizon squad.
-    const fhSquad = buildSquadWithinBudget(
-      bootstrap.elements,
-      xp,
-      fhBudget,
-      (id) => xp.get(id)?.perGw.get(gw) ?? 0
-    ).squad;
-    const fhGwGain = xiAt(fhSquad, gw).totalXp - ownXi.totalXp;
-    if (fhGwGain > fhBest.gain) fhBest = { gw, gain: fhGwGain };
+    if (tcIn(gw)) {
+      for (const e of squadEls) {
+        const v = xp.get(e.id)?.perGw.get(gw) ?? 0;
+        if (tcBest.gw == null || v > tcBest.gain) tcBest = { gw, gain: v, name: e.web_name };
+      }
+    }
+    if (fh && ownXi) {
+      // Free Hit is a one-week chip — build the squad optimal for THIS gw (so a
+      // double gameweek picks the players with two fixtures), not a horizon squad.
+      const fhSquad = buildSquadWithinBudget(
+        bootstrap.elements,
+        xp,
+        fhBudget,
+        (id) => xp.get(id)?.perGw.get(gw) ?? 0
+      ).squad;
+      const fhGwGain = xiAt(fhSquad, gw).totalXp - ownXi.totalXp;
+      if (fhBest.gw == null || fhGwGain > fhBest.gain) fhBest = { gw, gain: fhGwGain };
+    }
   }
   const horizonEnd = gws.length > 0 ? gws[gws.length - 1] : nextEvent;
   const leagueTeamIds = bootstrap.teams.map((t) => t.id);
@@ -556,28 +746,114 @@ export function optimize(input: OptimizerInput): OptimizerResult {
       lastEvent,
       bootstrap.chips,
       horizonEnd,
-      scoringFor(chip)
+      scoringFor(chip),
+      input.usedChips
     );
 
+  // "over the next 1 gameweeks" was on screen at horizon 1.
+  const gwCount = (n: number) => `${n} gameweek${n === 1 ? "" : "s"}`;
   chipAdvice.push({
     chip: "bboost",
     label: "Bench Boost",
     projectedGain: bbBest.gain,
-    detail: `Best in GW${bbBest.gw}${gwNote(bbBest.gw)}: your bench projects ${bbBest.gain.toFixed(1)} pts that week.`,
+    detail:
+      bbBest.gw == null
+        ? `No gameweek in the next ${gwCount(gws.length)} is inside this chip's window.`
+        : `Best in GW${bbBest.gw}${gwNote(bbBest.gw)}: your bench projects ${bbBest.gain.toFixed(1)} pts that week.`,
     timing: timingFor("bboost"),
   });
   chipAdvice.push({
     chip: "3xc",
     label: "Triple Captain",
     projectedGain: tcBest.gain,
-    detail: `Best in GW${tcBest.gw}${gwNote(tcBest.gw)}: ${tcBest.name} would add ~${tcBest.gain.toFixed(1)} extra points (3x instead of 2x).`,
+    detail:
+      tcBest.gw == null
+        ? `No gameweek in the next ${gwCount(gws.length)} is inside this chip's window.`
+        : `Best in GW${tcBest.gw}${gwNote(tcBest.gw)}: ${tcBest.name} would add ~${tcBest.gain.toFixed(1)} extra points (3x instead of 2x).`,
     timing: timingFor("3xc"),
   });
-  const wcGain = Math.max(
-    0,
-    horizonScore(dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank)), xp, gws, scoreCache) -
-      keepHorizonXp
+  /*
+   * THE WILDCARD CANNOT BE WORSE THAN ONE TRANSFER, AND IT WAS.
+   *
+   * `dreamSquadWithinValue` maximises the sum of `totalDiscounted` over all
+   * FIFTEEN at par, while `horizonScore` counts only the best XI — two
+   * objectives, so the squad it hands back is a local optimum of the wrong one.
+   * The signature is a gain that is not monotone in the horizon and that the
+   * app's own single transfer beats. Measured on the demo, same squad, same
+   * week, unclamped:
+   *
+   *   horizon      1       2       3       5       8
+   *   wildcard   0.269   3.164   0.663   0.690   5.440
+   *   1 transfer 0.375   1.199   1.143   1.283   2.663
+   *
+   * At horizons 1, 3 and 5 the "best squad your money can buy" is worth less
+   * than a move the app recommends making with one free transfer — which
+   * cannot be true, because a wildcard can make that move too. Rendered
+   * through `Math.max(0, ...)` the reader saw "your squad is ~0.7 points
+   * behind an optimal one", i.e. all but optimal, on the same panel as
+   * "+1.3 xp vs keeping".
+   *
+   * The floor is the fix, and it is free: every squad the beam search already
+   * evaluated is reachable on a wildcard WITHOUT the hit, so `grossXp` — the
+   * plan's score before its hit is deducted — is a lower bound on what the
+   * chip can reach. Keeping the squad is another. This does not repair the
+   * builder's objective mismatch, which is a real and separate defect noted in
+   * CLAUDE.md's "known gaps"; it stops the number contradicting the card next
+   * to it.
+   */
+  /*
+   * AND SCORED FROM WHEN THE CHIP CAN BE PLAYED, matching `chipScenario`. A
+   * rebuild cannot pay in a gameweek before the window opens; the tail is left
+   * alone because the squad lasts past the window's close. When the window is
+   * already open — the ordinary case, and the only one in which the transfer
+   * plans below cover the same gameweeks — this is the whole horizon and
+   * nothing changes.
+   *
+   * The plans are a floor only in that case, for the same reason: those moves
+   * happen NOW, so their scores are over `gws`, and comparing them against a
+   * gap measured over a later sub-window would be the unit mismatch this file
+   * has already been caught making twice.
+   *
+   * The floor and the card are in the SAME currency now — see the note below on
+   * why `wcGain` became plain. Swept on the demo over horizons 1-8 x free
+   * transfers {1,2,3,5} x bank {0,5,20}: 43 of 96 configurations had the
+   * wildcard coming out below a plan the same panel recommends while the two
+   * were in different currencies, and 0 of 96 do now.
+   */
+  const wcWin = chipWindow("wildcard", bootstrap.chips, nextEvent, input.usedChips);
+  const wcGws = wcWin ? gws.filter((g) => g >= wcWin.start) : gws;
+  const wcOpenNow = wcGws.length === gws.length;
+  /*
+   * PLAIN POINTS, because the copy says "points" and the card beside it is
+   * plain. This was `horizonScore` on both sides — decayed — under copy reading
+   * "~X points behind an optimal one ... over the next N gameweeks", which is
+   * the same mislabelling `keepHorizonPlainXp` was introduced to fix two rows
+   * above, with the same profile. Measured on the 2026-08-21 snapshot, £100.0m
+   * squad, GW2 next:
+   *
+   *   horizon        1      3      5      8
+   *   card said     5.0   11.8   16.5   22.1
+   *   plain gap     5.04  13.37  21.06  32.96
+   *   low by          0%    12%    22%    33%
+   *
+   * And it broke the floor this block exists for. With the floor decayed and
+   * the transfer card plain, the wildcard came out BELOW a plan the same panel
+   * recommends: swept on the demo over horizons 1-8 x free transfers {1,2,3,5}
+   * x bank {0,5,20}, 43 of 96 configurations, by up to 4.56 points. Free
+   * transfers of 2 or more is the ordinary state from GW3 on, and the demo only
+   * ever shows 1, which is why one spot-check looked fine.
+   */
+  const plainScore = (els: Element[]) =>
+    wcGws.reduce((s, gw) => s + pickBestXi(els, (id) => xp.get(id)?.perGw.get(gw) ?? 0).totalXp, 0);
+  const wcKeep = plainScore(squadEls);
+  const wcBase = Math.max(
+    plainScore(dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank))),
+    wcKeep,
+    // Every squad the beam evaluated is reachable on the chip without its hit,
+    // so its plain total before the hit is a floor — in the same currency now.
+    ...(wcOpenNow ? plans.map((p) => p.plainNetXp + p.hitCost) : [])
   );
+  const wcGain = wcBase - wcKeep;
   chipAdvice.push({
     chip: "wildcard",
     label: "Wildcard",
@@ -585,23 +861,28 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     /*
      * SAY WHAT THIS NUMBER IS, BECAUSE IT IS NOT WHAT IT LOOKS LIKE.
      *
-     * `wcGain` is `max(0, bestSquadWithinValue - keepSquad)` over the horizon.
-     * It is bounded below by zero and a freshly optimised squad beats a held one
-     * over ANY window, so it is almost always comfortably positive — and the
-     * card then sorts to the top of the advisor and reads as "play this now".
+     * `wcGain` is the best reachable squad minus keeping, in plain points over
+     * the horizon — see `wcBase` above for the three things it takes the best
+     * of. It is bounded below by zero and by the best transfer plan on the same
+     * panel, in the same units the panel prints, so it is
+     * almost always comfortably positive — and the card then sorts to the top
+     * of the advisor and reads as "play this now".
      * It is not that. It is the gap between your squad and the best one your
      * money can buy, which is a statement about your squad and says nothing
      * about whether this week is the week. The timing note beside it is what
      * addresses that, and the copy now stops short of implying otherwise.
      */
-    detail: `Your squad is ~${wcGain.toFixed(1)} points behind an optimal one within your team value, over the next ${gws.length} gameweeks. That is the size of the gap, not a reason to play the chip this week.`,
+    detail: `Your squad is ~${wcGain.toFixed(1)} points behind an optimal one within your team value, over the next ${gwCount(gws.length)}. That is the size of the gap, not a reason to play the chip this week.`,
     timing: timingFor("wildcard"),
   });
   chipAdvice.push({
     chip: "freehit",
     label: "Free Hit",
     projectedGain: Math.max(0, fhBest.gain),
-    detail: `Best in GW${fhBest.gw}${gwNote(fhBest.gw)}: an optimal one-week squad projects ~${Math.max(0, fhBest.gain).toFixed(1)} pts more than your team that week.`,
+    detail:
+      fhBest.gw == null
+        ? `No gameweek in the next ${gwCount(gws.length)} is inside this chip's window.`
+        : `Best in GW${fhBest.gw}${gwNote(fhBest.gw)}: an optimal one-week squad projects ~${Math.max(0, fhBest.gain).toFixed(1)} pts more than your team that week.`,
     timing: timingFor("freehit"),
   });
   chipAdvice.sort((a, b) => b.projectedGain - a.projectedGain);
@@ -610,10 +891,12 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     xp,
     keepXi,
     keepHorizonXp,
+    keepHorizonPlainXp,
     plans,
     captainRanking,
     captainReads,
     fieldSplit,
+    fieldXiIsPlan,
     chipAdvice,
     dreamTeam,
     dreamSquad,
@@ -899,9 +1182,24 @@ export function benchAwareScore(squad: Element[], scoreOf: (id: number) => numbe
  * property that makes it correct can be asserted directly: the CHEAPEST
  * eligible player at each position must be reachable. A pool of "the best 40"
  * is the natural thing to write and is exactly wrong here — on real data the
- * cheapest keeper is somewhere past rank 60, so a search restricted to the
- * best 40 cannot build a cheap bench and would return the greedy draft while
- * looking like it had tried.
+ * cheapest player at a position can rank far below 40 on score, so a search
+ * restricted to the best 40 cannot build a cheap bench and would return the
+ * greedy draft while looking like it had tried.
+ *
+ * THE KEEPER IS THE ONE POSITION THIS IS FALSE OF, and this paragraph used to
+ * name him. Re-measured on the 2026-08-19 snapshot (595 elements, launch pool,
+ * with last season's record), score-ranked by `totalDiscounted`:
+ *
+ *   pos  eligible  floor price  at the floor  best score-rank at the floor  in top 40
+ *   GK       59       £4.0m          16                   22                   7
+ *   DEF     183       £4.0m          45                   69                   0
+ *   MID     250       £4.5m          24                  118                   0
+ *   FWD      63       £4.5m           9                   35                   1
+ *
+ * There are only 59 keepers in the whole pool, so "past rank 60" is not
+ * something a keeper can be, and the cheapest ones are comfortably inside 40.
+ * The union with `byPrice` is genuinely load-bearing — for DEFENDERS and
+ * MIDFIELDERS, where not one floor-priced player is in the best 40.
  */
 export function benchAwarePool(
   elements: Element[],
@@ -1049,13 +1347,22 @@ export interface LaunchVariant {
    *
    * THIS EXISTS BECAUSE `xi.totalXp` RANKS THE DRAFTS THE OTHER WAY ROUND.
    * That field is next-GW only, and the card used to show it as the draft's
-   * headline number. Measured on the 2026-08-07 snapshot:
+   * headline number. Re-measured on the 2026-08-19 snapshot (595 elements, with
+   * last season's record); the 2026-08-07 figures this table used to carry are
+   * in the history, and the two annotations attached to them had drifted onto
+   * the wrong rows:
    *
    *   draft       GW1 XI    XI summed over GW1-5
-   *   value        46.31          217.98   <- best on GW1, worst on the horizon
-   *   balanced     45.94          219.70
+   *   value        46.18          218.63   <- worst on the horizon
+   *   balanced     46.31          220.47   <- best on GW1
    *   strongxi     47.10          222.99
-   *   stars        44.87          223.00   <- worst on GW1, best on the horizon
+   *   stars        44.80          222.72   <- worst on GW1
+   *
+   * The orderings are still close to reversed, which is the point the table
+   * exists to make: GW1 runs strongxi > balanced > value > stars and the
+   * horizon runs strongxi > stars > balanced > value. What has changed is that
+   * the same draft no longer tops both ends — strongxi now leads on the horizon
+   * as well, and `value` is no longer best on GW1.
    *
    * A reader picking the biggest number on screen was picking the draft that
    * scores least over the period they will actually hold it. The note above
@@ -1099,6 +1406,12 @@ export interface LaunchRanking {
  * WHY A TIE RULE AT ALL, AND WHY IT IS THE PRINTED PRECISION.
  * On the 2026-08-07 snapshot the top two drafts came out at 223.00 (stars) and
  * 222.99 (strongxi): 0.01 points over five gameweeks, i.e. 0.002 a week. The
+ * ILLUSTRATION NO LONGER REPRODUCES — on 2026-08-19 the same two are 222.99
+ * (strongxi) and 222.72 (stars), which prints as 223.0 against 222.7 and is not
+ * a tie. The rule is unchanged and should stay: a gap that was 0.01 one week
+ * and 0.27 the next is exactly the instability it exists to absorb, and
+ * re-deriving the tie threshold from whichever snapshot is to hand is how noise
+ * gets shipped. The
  * card printed both as "223 xp/5gw" and hung a BEST badge on one of them, so
  * the badge contradicted the number printed an inch to its right. A reader can
  * only read that as the app knowing something it is not showing them, and it
@@ -1154,20 +1467,26 @@ export const VALUE_CAP = 85;
  * dearest pick falls to £8.5m or below — the two builds then come out
  * byte-identical, `buildLaunchVariants` dedupes one away, and the manager is
  * shown three cards where four were promised, with nothing failing anywhere.
- * That is not hypothetical, but it is narrower than it first looks: on the
- * 2026-27 pool the balanced draft's dearest pick is £12.0m when last season's
- * minutes are available and £8.0m when they are not, so the bug bites only on
- * the fallback path `OptimizePanel` takes when the per-player history could
- * not be fetched — which is the path a manager hits when the FPL API is flaky,
- * i.e. the one nobody tests by hand.
+ * That is not hypothetical, AND IT IS NOT CONFINED TO THE FALLBACK PATH, which
+ * is what this paragraph used to claim. Re-measured on the 2026-08-19 snapshot,
+ * the balanced draft's dearest pick is £8.5m on BOTH paths — with last season's
+ * minutes and without. At £8.5m the guard `dearest > VALUE_CAP` is `85 > 85`,
+ * which is false, so the conditional fires on the normal path too. It is
+ * load-bearing there: with history, a fixed £8.5m cap builds a squad sharing
+ * 15 of 15 with balanced, so the two cards would be byte-identical, one would
+ * be deduped away, and the manager would be shown three where four were
+ * promised. The code is right; the evidence recorded for why was stale and
+ * pointed at the wrong path.
  *
  * But deriving the cap from the balanced draft ALONE is worse, for a reason
- * that is easy to get backwards — I did. On the normal path the balanced
- * draft's dearest player is £12.0m, so a pure "one tier below" rule gives an
- * £11.5m cap. Measured, that cap produces a squad BYTE-IDENTICAL to the one
- * the £8.5m cap produces (both share 12 of 15 with balanced, both top out at
- * £8.5m): the greedy build simply never wanted anyone between £8.5m and
- * £11.5m. So the derived cap costs nothing in squad terms — the damage is
+ * that is easy to get backwards — I did. When the balanced draft's dearest
+ * player is a premium, a pure "one tier below" rule gives a cap just under it,
+ * and measured against a fixed £8.5m that produced a BYTE-IDENTICAL squad: the
+ * greedy build simply never wanted anyone in between. (On 2026-08-19 the
+ * balanced draft tops out at £8.5m itself, so the derived cap and the fixed one
+ * coincide and the comparison is degenerate — the argument stands on the case
+ * where they differ, which is why it is stated as a rule and not as a table.)
+ * So the derived cap costs nothing in squad terms — the damage is
  * entirely in the card, which would announce an £11.5m ceiling for a draft
  * whose dearest player is £8.5m, and would move that headline number around
  * from season to season for no reason a manager could act on.
@@ -1301,12 +1620,12 @@ export function buildLaunchVariants(
       "Balanced",
       // Names the metric it wins on, deliberately. Each card also shows its
       // starting XI's projected points, and "Strong XI" beats this one on that
-      // number — 47.9 against 49.9 on the current pool. Measured, not by
-      // construction: `benchAwareScore` maximises discounted xP over five
+      // number — 46.31 against 47.10 on the 2026-08-19 snapshot. Measured, not
+      // by construction: `benchAwareScore` maximises discounted xP over five
       // gameweeks with no captain term, while the card prints next-GW xP with
       // the captain doubled, so the two are not the same objective and nothing
       // guarantees the ordering. It just happens to hold on both real-pool
-      // paths (42.6 against 45.0 on the no-history fallback). A card
+      // paths (43.81 against 45.68 on the no-history fallback). A card
       // that called itself "the model's single best draft", which this one
       // did, was therefore contradicted by the figure printed beside it.
       "Highest projected points across all fifteen — best on the squad total, not on the eleven alone.",
@@ -1413,7 +1732,18 @@ export interface GwPlanStep {
 
 export interface SeasonPlan {
   steps: GwPlanStep[];
-  totalXp: number; // discounted XI xp over the horizon, hits subtracted
+  totalXp: number; // discounted XI xp over the horizon, hits subtracted (search key)
+  /**
+   * The same plan summed WITHOUT the decay, hits subtracted — the number the
+   * panel prints as "Plan value".
+   *
+   * `totalXp` is the beam's key and is a decayed quantity; printing it as
+   * points had the same problem the single-week card had, and worse, because
+   * the decay here is indexed by the gameweek a transfer is made in.
+   */
+  plainTotalXp: number;
+  /** `keepXp` without the decay. */
+  plainKeepXp: number;
   totalHits: number;
   keepXp: number; // same score for doing nothing all horizon
   gainVsKeep: number;
@@ -1537,8 +1867,7 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
 
   for (let gi = 0; gi < gws.length; gi++) {
     const gw = gws[gi];
-    const next: { s: PlanState; rank: number }[] = [];
-    const seen = new Set<string>();
+    const byKey = new Map<string, { s: PlanState; rank: number }>();
 
     for (const state of beam) {
       // Candidate single moves for THIS state, ranked by remaining-horizon gain.
@@ -1583,14 +1912,29 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
           (hit > 0 ? 0 : Math.max(0, state.ft - used)) + 1
         );
         const xi = xiAt(applied.players, gw);
-        const gwScore = xi.totalXp * decayAt(gw) - hit;
+        /*
+         * THE HIT IS DISCOUNTED WITH THE GAMEWEEK IT IS PAID IN, and it was
+         * not. `xi.totalXp * decayAt(gw) - hit` weighted the benefit by
+         * `0.88 ** offset` and charged the cost at face value — and here the
+         * index is WHEN THE TRANSFER IS MADE, not the horizon, so the penalty
+         * grew the further out the planner looked:
+         *
+         *   hit taken at offset   0      2      4      5
+         *   gain weight         1.000  0.774  0.600  0.527
+         *   what a −4 cost      4.00   5.17   6.67   7.59   plain points
+         *
+         * So the six-gameweek planner refused a −4 in GW+5 that gained 7 plain
+         * points, on the section whose own copy advertises "when a −4 actually
+         * pays for itself". Weighting both sides by the same factor makes the
+         * trade offset-independent, which is what the decay was for: a
+         * preference over TIME, not a surcharge on patience.
+         */
+        const gwScore = (xi.totalXp - hit) * decayAt(gw);
         const key =
           applied.players
             .map((p) => p.element.id)
             .sort((a, b) => a - b)
             .join(",") + `|${state.ft}-${used}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
         const s: PlanState = {
           players: applied.players,
           bank: applied.bank,
@@ -1601,10 +1945,39 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
             { gw, moves, ftBefore: state.ft, hit, bankAfter: applied.bank },
           ],
         };
-        next.push({ s, rank: s.score + futureScore(applied.players, gi + 1) });
+        /*
+         * KEEP THE BEST STATE PER KEY, NOT THE FIRST ONE SEEN.
+         *
+         * `PlanState.score` is PATH-DEPENDENT: which gameweek a transfer was
+         * made in changes the accumulated score even when the resulting fifteen,
+         * the free transfers before and the number used are all identical. The
+         * dedupe was first-come-first-served in beam order, so of two parents
+         * converging on the same squad the one kept was whichever had the
+         * higher-ranked PARENT — not the higher score of its own.
+         *
+         * That is not ordinary beam pruning, and no beam width fixes it.
+         * Measured over 120 constructed two-gameweek universes (15 owned plus
+         * three candidates, all one price so the bank never binds), at beam
+         * width 400 — wide enough that pruning is not the constraint:
+         *
+         *     keep-best better in  34 of 120
+         *     first-seen better in  0 of 120
+         *     largest gain        13.20 discounted xP
+         *
+         * Never worse, which is what you would expect: keeping the higher score
+         * of two interchangeable states cannot lose.
+         *
+         * `optimize`'s own dedupe is sound and must not be "fixed" to match:
+         * there the score is `horizonScore` of the element set, a pure function
+         * of the final squad, so same-key states really are interchangeable.
+         */
+        const rank = s.score + futureScore(applied.players, gi + 1);
+        const held = byKey.get(key);
+        if (!held || rank > held.rank) byKey.set(key, { s, rank });
       }
     }
 
+    const next = [...byKey.values()];
     next.sort((a, b) => b.rank - a.rank);
     beam = next.slice(0, beamWidth).map((n) => n.s);
     if (beam.length === 0) break;
@@ -1637,11 +2010,55 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
     };
   });
   const totalHits = steps.reduce((s, st) => s + st.hit, 0);
+  /*
+   * Undiscounted, for display — see `SeasonPlan.plainTotalXp`. The plan's own
+   * XIs are already reconstructed above, so this is a sum over `steps`; the
+   * baseline is the held squad over the same gameweeks.
+   */
+  const plainTotalXp = steps.reduce((s, st) => s + st.xi.totalXp, 0) - totalHits;
+  /*
+   * `heldSquad`, NOT `beam[0].players`.
+   *
+   * `keepXp` above uses `beam[0].players` and is correct, because it is
+   * computed BEFORE the search loop, while `beam` still holds the single
+   * starting state. This line runs AFTER it, where `beam` is the search
+   * frontier — so the "never transferring" baseline was the squad the plan ends
+   * with, transfers and all. Copying the idiom without noticing it is
+   * position-dependent.
+   *
+   * On the real 2026-08-21 snapshot at GW2, six gameweeks: it printed 240.1
+   * against a plan of 227.8, so the card told the reader that doing nothing
+   * beats the plan the panel had just built, by 12.3 points. Refutable from the
+   * same screen — "Keep the team" reads 167.5 over GW2-GW6, about 33.5 a week,
+   * and 240.1 over six would need GW7 alone to be 72.6. The demo hides it: 368.3
+   * against a true 369.32, so the plan still looks better there.
+   */
+  const heldSquad = owned.map((o) => ({ element: o.element }));
+  const plainKeepXp = gws.reduce((s, gw) => s + xiAt(heldSquad, gw).totalXp, 0);
   return {
     steps,
     totalXp: best.score,
+    plainTotalXp,
+    plainKeepXp,
     totalHits,
     keepXp,
+    /*
+     * DECAYED, AND DELIBERATELY. The single-week card's hit arithmetic moved to
+     * plain points because mixing units there created an effective hit cost
+     * nobody chose. Here the mixing is gone — `gwScore` now discounts the hit
+     * with the gameweek it is paid in — so the objective is internally
+     * consistent, and this stays the quantity the beam actually maximises.
+     *
+     * Making it plain was tried and reverted in the same sitting: the beam
+     * searches on the decayed score, so a plain gain can come out NEGATIVE on a
+     * plan the planner has just chosen — measured at −2.97 on the demo at
+     * horizon 6 — which breaks "the plan never scores worse than doing
+     * nothing" and would put a minus sign on the app's own recommendation.
+     * Reporting one number while optimising another is the defect this round
+     * was fixing, not a fix for it. `plainTotalXp` and `plainKeepXp` are what
+     * the panel prints, side by side, so the reader still has figures they can
+     * add up.
+     */
     gainVsKeep: best.score - keepXp,
   };
 }
@@ -1671,7 +2088,24 @@ function reconstructSquad(
 export interface ChipScenario {
   chip: string;
   label: string;
-  bestGw: number; // GW where the chip pays most
+  /**
+   * The gameweek the chip pays most in — or null when none of the gameweeks in
+   * the horizon is inside the chip's own window.
+   *
+   * IT WAS NOT CLIPPED, AND THE CARD BESIDE IT WAS. `optimize` runs every chip
+   * argmax through `inChipWindow` with a long note saying that naming a
+   * gameweek outside the window is worse than silence; `chipScenario`, which
+   * draws the sheet you open FROM that card, looped from `nextEvent` and never
+   * read `bootstrap.chips` at all. Reproduced on the demo with the real 2026/27
+   * window shape (first-half chips GW2-19), `nextEvent: 16`, horizon 5:
+   *
+   *   CARD   Triple Captain — window to GW19
+   *   SHEET  Triple Captain — Best in GW20, gain 6.89
+   *
+   * GW20 is past the chip's expiry, and any reader in GW15-GW19 on the five-
+   * or eight-gameweek horizon was in that state.
+   */
+  bestGw: number | null; // GW where the chip pays most
   gain: number; // projected extra points from playing it
   note?: string; // e.g. "double gameweek for 3 of your players"
   squad?: Element[]; // Wildcard / Free Hit: the squad to field
@@ -1698,8 +2132,33 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
     });
   const lastEvent =
     bootstrap.events.length > 0 ? bootstrap.events[bootstrap.events.length - 1].id : 38;
-  const gws: number[] = [];
-  for (let g = nextEvent; g < nextEvent + horizon && g <= lastEvent; g++) gws.push(g);
+  /*
+   * Clipped to THIS chip's own window, exactly as `optimize` clips its cards —
+   * see the note on `ChipScenario.bestGw` for what the two disagreeing looked
+   * like. A null window means the game has published none, and the only honest
+   * reading left is not to constrain; that matches `inChipWindow`.
+   */
+  const win = chipWindow(chip, bootstrap.chips, nextEvent, input.usedChips);
+  const allGws: number[] = [];
+  for (let g = nextEvent; g < nextEvent + horizon && g <= lastEvent; g++) allGws.push(g);
+  /*
+   * `gws` is where the chip may be PLAYED. `allGws` is the horizon it is judged
+   * over, and for the one-week chips those are the same thing — you play it in
+   * the week it pays.
+   *
+   * The Wildcard is the exception, and an earlier version of this note got the
+   * exception half right: it kept the FULL horizon, on the argument that the
+   * rebuild lasts the rest of the season so clipping would charge the chip for
+   * a restriction it does not have. True at the tail, false at the head — the
+   * new squad cannot score in a gameweek before the chip opens. Measured on the
+   * mock at `nextEvent: 11`, horizon 5, window GW14-20: the sheet reported the
+   * same 37.267 as with no window at all, of which 13.849 came from GW11-13,
+   * three gameweeks the reader cannot have that squad in. So the head is
+   * clipped and the tail is not.
+   */
+  const gws = win ? allGws.filter((g) => g >= win.start && g <= win.stop) : allGws;
+  /** The Wildcard's scoring horizon: from when it can be played, to the end. */
+  const wcGws = win ? allGws.filter((g) => g >= win.start) : allGws;
   const squadEls = owned.map((o) => o.element);
   const teamValue = owned.reduce((s, o) => s + o.sellPrice, 0) + bank;
   const label =
@@ -1710,6 +2169,15 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
         : chip === "bboost"
           ? "Bench Boost"
           : "Triple Captain";
+
+  /*
+   * Nothing playable anywhere in the horizon — expired, or not open yet. Every
+   * branch below would otherwise return a number about gameweeks the reader
+   * cannot use the chip in, and the Wildcard is not an exception here even
+   * though its SCORING horizon is: a gap measured over GW11-15 is not the gain
+   * from playing a chip that does not open until GW20.
+   */
+  if (gws.length === 0) return { chip, label, bestGw: null, gain: 0, horizon };
 
   const fxIndex = makeFixtureIndex(fixtures);
   const squadTeams = new Set(squadEls.map((e) => e.team));
@@ -1733,26 +2201,51 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
   if (chip === "wildcard") {
     // Permanent rebuild within team value, judged over the whole horizon.
     const { squad, cost } = buildSquadWithinBudget(bootstrap.elements, xp, teamValue);
-    const gain = Math.max(
-      0,
-      horizonScore(squad, xp, gws) - horizonScore(squadEls, xp, gws)
-    );
+    /*
+     * PLAIN, matching the card — see the note on `wcBase` in `optimize`. The
+     * card moved to plain points and this did not for one commit, which put
+     * 24.81 on the card and 23.42 on the sheet you open from it.
+     */
+    const plainOver = (els: Element[]) =>
+      wcGws.reduce(
+        (s, gw) => s + pickBestXi(els, (id) => xp.get(id)?.perGw.get(gw) ?? 0).totalXp,
+        0
+      );
+    const gain = Math.max(0, plainOver(squad) - plainOver(squadEls));
+    /*
+     * `nextEvent` WAS PRINTED AS "Best in GW{n}" AND IS NOT ALWAYS PLAYABLE.
+     * The Wildcard is not a one-week chip, so there is no argmax here — but the
+     * sheet prints this number under a heading and hands it to the pitch's
+     * fixture ticker, and in 2026/27 the first Wildcard does not open until
+     * GW2. Read at GW1 it named a gameweek the chip cannot be played in. The
+     * earliest playable gameweek is the honest answer: it is the one thing
+     * about timing this scenario actually knows.
+     */
+    /*
+     * DRAWN AT THE GAMEWEEK IN THE HEADING, WHICH IT WAS NOT. `xiAt(squad,
+     * nextEvent)` survived the window fix untouched, so with the chip opening
+     * at GW14 the sheet printed "Best in GW14" over the GW11 eleven — measured
+     * on the mock at 59.113 against the GW14 eleven's 65.149, with different
+     * starters. Exactly the class of defect the commit that added the clipping
+     * was written to remove, left inside it.
+     */
+    const wcGw = gws[0] ?? null;
     return {
       chip,
       label,
-      bestGw: nextEvent,
+      bestGw: wcGw,
       gain,
       squad,
       cost,
       bank: teamValue - cost,
-      xi: xiAt(squad, nextEvent),
+      xi: xiAt(squad, wcGw ?? nextEvent),
       horizon,
     };
   }
 
   if (chip === "freehit") {
     // One-week squad tailored to the single best gameweek in the horizon.
-    let best = { gw: nextEvent, gain: -Infinity, squad: [] as Element[], cost: 0 };
+    let best = { gw: gws[0] ?? null, gain: -Infinity, squad: [] as Element[], cost: 0 };
     for (const gw of gws) {
       const { squad, cost } = buildSquadWithinBudget(
         bootstrap.elements,
@@ -1763,6 +2256,7 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
       const gain = xiAt(squad, gw).totalXp - xiAt(squadEls, gw).totalXp;
       if (gain > best.gain) best = { gw, gain, squad, cost };
     }
+    if (best.gw == null) return { chip, label, bestGw: null, gain: 0, horizon };
     return {
       chip,
       label,
@@ -1778,7 +2272,8 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
   }
 
   if (chip === "bboost") {
-    let best = { gw: nextEvent, gain: 0, xi: xiAt(squadEls, nextEvent) };
+    if (gws.length === 0) return { chip, label, bestGw: null, gain: 0, horizon };
+    let best = { gw: gws[0], gain: -Infinity, xi: xiAt(squadEls, gws[0]) };
     for (const gw of gws) {
       const xi = xiAt(squadEls, gw);
       const benchXp = xi.bench.reduce((s, p) => s + p.xp, 0);
@@ -1797,7 +2292,8 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
   }
 
   // Triple Captain
-  let best = { gw: nextEvent, gain: 0, name: squadEls[0]?.web_name ?? "your captain" };
+  if (gws.length === 0) return { chip, label, bestGw: null, gain: 0, horizon };
+  let best = { gw: gws[0], gain: 0, name: squadEls[0]?.web_name ?? "your captain" };
   for (const gw of gws) {
     for (const e of squadEls) {
       const v = xp.get(e.id)?.perGw.get(gw) ?? 0;

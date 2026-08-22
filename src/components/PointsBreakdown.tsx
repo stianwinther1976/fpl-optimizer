@@ -76,8 +76,16 @@ export default function PointsBreakdown({
         // Archive it: FPL deletes picks and live scoring when the season rolls
         // over, so this snapshot is the only way the breakdown survives into
         // next season's "Past seasons" view.
+        /*
+         * NEVER ARCHIVE AN INCOMPLETE READ. `saveSeasonArchive`'s only guard is
+         * `existing.gwsPlayed > a.gwsPlayed`, so a later run that dropped two
+         * gameweeks to a 503 but covered more of the season overwrites an
+         * earlier complete one, permanently and silently. A run with a hole in
+         * it is not a snapshot of the season; it is a snapshot of what the
+         * network managed that afternoon.
+         */
         const season = currentSeasonName(data.bootstrap.events);
-        if (season && res.gws.length > 0) {
+        if (season && res.gws.length > 0 && res.missing.length === 0) {
           saveSeasonArchive(
             toArchive(entryId, season, res, elementById, data.bootstrap.teams, Date.now())
           );
@@ -149,10 +157,34 @@ export default function PointsBreakdown({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-base font-semibold">Points breakdown</h3>
+          {/*
+            SAY WHICH GAMEWEEKS, BECAUSE IT IS NOT ALL OF THEM. This reads off
+            gameweeks where `finished` is true — bonus confirmed, per the rule in
+            CLAUDE.md — so an in-flight gameweek is deliberately excluded. That
+            is right, and "Every point you've scored" said otherwise: the season
+            total read 918 under a header showing 966, with the chart directly
+            above it plotting the gameweek that makes up the difference.
+          */}
           <p className="text-xs text-muted">
-            Every point you&apos;ve scored, split by player and scoring rule. Captain,
-            Triple Captain, Bench Boost and auto-subs are all applied.
+            {bd.gws.length > 0
+              ? `Every point you've scored in GW${bd.gws[0]}–${bd.gws[bd.gws.length - 1]}, split by player and scoring rule.`
+              : "Split by player and scoring rule."}{" "}
+            Captain, Triple Captain, Bench Boost and auto-subs are all applied. A
+            gameweek joins this once its bonus is confirmed.
           </p>
+          {/*
+            A HOLE IN THE MIDDLE IS OTHERWISE INVISIBLE. The heading above is
+            built from the first and last gameweek that loaded, so a failure in
+            between reads as a complete range — probed at 70 points missing from
+            a five-gameweek total with progress reporting 5 of 5.
+          */}
+          {bd.missing.length > 0 && (
+            <p role="alert" className="mt-1 text-xs text-warn">
+              Couldn&apos;t load GW
+              {bd.missing.join(", GW")} — {bd.missing.length === 1 ? "it is" : "they are"} missing
+              from these totals. Reopen the tab to try again.
+            </p>
+          )}
         </div>
         <select
           aria-label="Filter the breakdown by gameweek"
@@ -160,9 +192,13 @@ export default function PointsBreakdown({
           onChange={(e) =>
             setGwFilter(e.target.value === "all" ? "all" : Number(e.target.value))
           }
-          className="rounded-lg border border-border-c bg-panel-2 px-3 py-2 text-sm"
+          className="min-h-11 rounded-lg border border-border-c bg-panel-2 px-3 py-2 text-sm"
         >
-          <option value="all">Season total</option>
+          <option value="all">
+            {bd.gws.length > 0
+              ? `Total, GW${bd.gws[0]}–${bd.gws[bd.gws.length - 1]}`
+              : "Season total"}
+          </option>
           {[...bd.gws].reverse().map((g) => (
             <option key={g} value={g}>
               Gameweek {g}
@@ -215,7 +251,12 @@ export default function PointsBreakdown({
       </div>
 
       {/* Main table */}
-      <div className="card overflow-x-auto p-0">
+      <div
+        className="card overflow-x-auto p-0"
+        tabIndex={0}
+        role="region"
+        aria-label="Points breakdown, scrollable"
+      >
         <table className="w-full min-w-[640px] text-sm">
           <thead className="border-b border-border-c text-xs uppercase text-muted">
             <tr>
@@ -291,8 +332,26 @@ export default function PointsBreakdown({
               <td className="sticky left-0 z-10 bg-[var(--panel)] px-3 py-2 font-semibold">
                 {gwView ? `GW${gwFilter} total` : "Squad total"}
               </td>
+              {/*
+                THE COLUMN SUM, NOT THE ROW COUNT. Every other cell in this
+                footer sums its column; this one printed `rows.length`. In the
+                season view the header says "Apps" and the number on screen was
+                24 — the number of players — against a true 213, which is
+                19 gameweeks x 11 plus the four bench slots a Bench Boost added
+                in GW15.
+
+                The per-gameweek view counts a different thing on purpose, and
+                an earlier version of this note claimed the two agreed: `apps`
+                counts rows with MINUTES, while `byGw` is set for every player
+                in the effective XI. So they differ whenever someone in the
+                counted set did not play — 10 against 11 for a blanked starter
+                with no legal substitute, 14 against 15 in most Bench Boost
+                weeks. Its header says "Pl" rather than "Apps" for that reason.
+              */}
               <td className="px-2 py-2 text-right font-mono text-muted">
-                {rows.length}
+                {gwView
+                  ? rows.filter((r) => r.byGw.has(gwFilter as number)).length
+                  : rows.reduce((n, r) => n + r.apps, 0)}
               </td>
               {activeCats.map((c) => (
                 <td key={c} className="px-2 py-2 text-right">

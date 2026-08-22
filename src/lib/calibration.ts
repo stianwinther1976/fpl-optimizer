@@ -132,30 +132,54 @@ export function applyGwOutcome(
    * otherwise multiplier = global * byPos double-counts the overall bias.
    */
   const globalRatio = sumPred > 0 ? sumAct / sumPred : 1;
-  const globalTarget = state.factors.global * globalRatio;
+  /*
+   * `byPos` STAYS RELATIVE TO `global`, AND SEPARATELY STOPS INTEGRATING WHEN
+   * `global` CANNOT MOVE.
+   *
+   * An earlier attempt divided by how much `global` actually moved rather than
+   * by the aggregate residual. It fixed the saturation bug below and broke
+   * something worse: `absorbed = 1 + alpha*(r - 1)` equals `globalRatio` only
+   * at r = 1, so in the ORDINARY regime `byPos` picked up part of the aggregate
+   * bias too — exactly the double-count the paragraph above forbids — and the
+   * applied multiplier moved 51% of the way per graded gameweek against a
+   * documented `alpha` of 0.3. Measured on a uniform bias with no positional
+   * deviation at all: byPos came out 0.97835 at r = 0.9 where it should be
+   * exactly 1. That is `CAL_CONFIG.alpha` retuned by accident, which the rules
+   * in CLAUDE.md forbid outright.
+   *
+   * So the division stays `globalRatio`, and saturation is handled where it
+   * actually happens: `global` is computed FIRST, and when the clamp stops it
+   * from taking the residual it was asked to take, the part it refused is
+   * handed to `byPos` instead. In the ordinary regime `headroom` is 1 and this
+   * is byte-for-byte the relative rule; against a bound clamp `byPos` carries
+   * the remainder because nothing else can.
+   *
+   * Without that, probed at 200 gameweeks with r = 0.5 for GK/DEF/MID and 0.2
+   * for forwards: `global` pinned at 0.75 while `byPos` ran to 1.3/1.3/1.3/0.75
+   * — a 30% UPWARD correction on three positions the model over-rates twofold.
+   */
+  const wanted = state.factors.global * globalRatio;
   const global = clamp(
-    (1 - cfg.alpha) * state.factors.global + cfg.alpha * globalTarget,
+    (1 - cfg.alpha) * state.factors.global + cfg.alpha * wanted,
     cfg.factorMin,
     cfg.factorMax
   );
   /*
-   * HOW MUCH OF THE RESIDUAL `global` ACTUALLY TOOK — which is not the same as
-   * how much it was asked to take.
+   * The aggregate residual `global` can EVENTUALLY absorb, given the clamp.
    *
-   * `byPos` divides the aggregate out on the assumption `global` absorbs it.
-   * When the clamp binds, nobody absorbs it, and dividing anyway turns `byPos`
-   * into an integrator pointing the WRONG WAY. Probed at 200 gameweeks with
-   * r = 0.5 for GK/DEF/MID and 0.2 for FWD: `global` pinned at 0.75 and
-   * `byPos` ran to 1.3/1.3/1.3/0.75 — a 30% UPWARD correction on three
-   * positions the model over-rates twofold — for a combined multiplier of
-   * 0.975 where 0.5 was needed. The rule this replaced gave 0.845 there.
-   *
-   * Measuring what `global` moved by, rather than what it was aimed at, makes
-   * `byPos` pick up exactly the remainder: in the ordinary regime the two are
-   * the same number, and against a bound clamp `byPos` carries the whole
-   * correction because it is the only thing that can.
+   * Dividing by `globalRatio` is right because `global` converges on absorbing
+   * the whole aggregate — over several EMA steps, not this one. The saturation
+   * bug is simply that at the clamp it can never get there, so `byPos` goes on
+   * dividing out a correction nobody is applying. Asking what `global` can
+   * REACH answers both: unclamped it is `globalRatio` exactly and this is
+   * byte-for-byte the relative rule, and pinned at the floor it is 1, so
+   * `byPos` picks up the whole position residual because nothing else can.
    */
-  const absorbed = state.factors.global > 0 ? global / state.factors.global : 1;
+  const reachable =
+    state.factors.global > 0
+      ? clamp(state.factors.global * globalRatio, cfg.factorMin, cfg.factorMax) /
+        state.factors.global
+      : 1;
   const byPos = { ...state.factors.byPos };
   for (const pos of [1, 2, 3, 4]) {
     const posEntries = graded.filter((e) => e.pos === pos);
@@ -163,11 +187,11 @@ export function applyGwOutcome(
     const p = posEntries.reduce((s, e) => s + e.pred, 0);
     const a = posEntries.reduce((s, e) => s + e.actual, 0);
     if (p <= 0 || a <= 0) continue;
+    // How much this position deviates BEYOND the global correction the clamp
+    // will actually allow.
+    const ratio = reachable > 0 ? a / p / reachable : 1;
     const prev = byPos[pos] ?? 1;
-    // The factor that would have made THIS position right, given what the
-    // global correction is actually about to do.
-    const target = absorbed > 0 ? (prev * (a / p)) / absorbed : prev;
-    byPos[pos] = clamp((1 - cfg.alpha) * prev + cfg.alpha * target, cfg.factorMin, cfg.factorMax);
+    byPos[pos] = clamp((1 - cfg.alpha) * prev + cfg.alpha * (prev * ratio), cfg.factorMin, cfg.factorMax);
   }
 
   const log = [...state.log, { gw, n: graded.length, mae, bias, at: now }]
@@ -177,6 +201,12 @@ export function applyGwOutcome(
     factors: { global, byPos },
     log,
     reconciled: [...new Set([...state.reconciled, gw])].slice(-30),
+    // Carried through, or the guard in `reconcileFinishedGws` that refuses to
+    // write a null season over a real one has nothing left to fall back to —
+    // and a null stamp is what makes the NEXT load clear `reconciled` and
+    // re-grade the whole season. The early return above already preserved it;
+    // this path did not, so one bad bootstrap during a grading pass was enough.
+    season: state.season,
   };
 }
 
@@ -189,12 +219,88 @@ export function calibrationMultiplier(f: CalibrationFactors, pos: number): numbe
 
 const key = (demo: boolean, k: string) => `${demo ? "demo-" : ""}fpl-${k}`;
 
+/**
+ * Force stored factors back into the range the model is allowed to apply them
+ * in, and drop anything that is not a finite number.
+ *
+ * THE ONLY VALIDATION HERE USED TO BE `s?.factors?.byPos` — an object test,
+ * which `{}`, `{"1": "1.2"}` and `{"1": null}` all pass, and which says nothing
+ * at all about `global`. `calibrationMultiplier` then computes
+ * `clamp(global * byPos, 0.7, 1.35)`, and `Math.max(0.7, Math.min(1.35, NaN))`
+ * is `NaN`: one bad value in `localStorage` turns EVERY projection in the app
+ * into `NaN`, silently, on every load until the reader clears site data.
+ *
+ * That is not hypothetical paranoia about a hand-edited store. This state is
+ * persisted under a fixed key and survives upgrades, so any future change to
+ * the shape of `CalibrationFactors` reaches this function as last version's
+ * JSON — and a release that renames or re-types a field is exactly how a
+ * finite number stops being one.
+ *
+ * Out-of-range is clamped rather than discarded (a factor of 2 saved by some
+ * older rule still means "the model over-rates"), but non-finite is discarded:
+ * there is no value in it to preserve.
+ */
+function sanitiseFactors(f: CalibrationFactors): CalibrationFactors {
+  const num = (v: unknown): number =>
+    typeof v === "number" && Number.isFinite(v) ? clamp(v, CAL_CONFIG.factorMin, CAL_CONFIG.factorMax) : 1;
+  const byPos: Record<number, number> = {};
+  for (const pos of [1, 2, 3, 4]) byPos[pos] = num(f?.byPos?.[pos]);
+  return { global: num(f?.global), byPos };
+}
+
+/**
+ * The same argument, applied to the REST of the stored state — which the first
+ * version of this left out, and that omission was worse than the one it fixed.
+ *
+ * `factors` at least fails softly: a NaN multiplier makes every projection NaN,
+ * which is visible. `reconciled` and `log` are dereferenced OUTSIDE any
+ * try/catch that could absorb it — `reconcileFinishedGws` calls
+ * `state.reconciled.includes(...)` before its per-gameweek `try`, and
+ * `seedDemoCalibration` reads `existing.log.length` — so a `null` there throws
+ * out of the async effect in `Dashboard`, `snapshotPredictions` never runs, and
+ * NO gameweek can ever be graded again. And because the throw happens before
+ * `saveCalibration`, the bad value is never overwritten: it is dead on every
+ * subsequent load, forever, with nothing on screen to say so.
+ *
+ * Verified in Chromium against the demo: with `reconciled: null` in the store,
+ * the page logs `Cannot read properties of null (reading 'includes')` and
+ * writes no `pred-*` key at all.
+ *
+ * `season` NORMALISES TO NULL RATHER THAN TO THE CURRENT SEASON, and the
+ * difference is the whole rollover. Absent is not "this season" — state written
+ * before the field existed carries none, which is exactly the state every
+ * install has — so defaulting it to the season being loaded would make every
+ * one of them match and the reset would never fire for anyone. That was a
+ * shipped bug once already. Null mismatches, which re-grades: the safe
+ * direction.
+ */
+function sanitiseState(s: CalibrationState): CalibrationState {
+  const log = Array.isArray(s?.log)
+    ? s.log.filter(
+        (e) => e != null && typeof e === "object" && typeof (e as { gw?: unknown }).gw === "number"
+      )
+    : [];
+  const reconciled = Array.isArray(s?.reconciled)
+    ? s.reconciled.filter((g): g is number => typeof g === "number" && Number.isFinite(g))
+    : [];
+  return {
+    factors: sanitiseFactors(s?.factors),
+    log,
+    reconciled,
+    season: typeof s?.season === "string" ? s.season : null,
+  };
+}
+
 export function loadCalibration(demo: boolean, season?: string | null): CalibrationState {
   try {
     const raw = localStorage.getItem(key(demo, "calibration"));
     if (raw) {
-      const s = JSON.parse(raw) as CalibrationState;
-      if (s?.factors?.byPos) {
+      const parsed = JSON.parse(raw) as CalibrationState;
+      if (parsed?.factors?.byPos) {
+        // `byPos` being an object is the only thing checked above, and it says
+        // nothing about the numbers inside it or about any other field. See
+        // `sanitiseState`.
+        const s = sanitiseState(parsed);
         /*
          * A NEW SEASON CLEARS WHAT IS SEASON-SHAPED AND KEEPS WHAT IS NOT.
          *
@@ -262,6 +368,20 @@ export function snapshotPredictions(
 }
 
 /**
+ * Do two factor sets produce the same multiplier everywhere?
+ *
+ * Value equality rather than reference, because the baseline is now the ACTIVE
+ * factors and those can be a different object holding identical numbers — a
+ * reload that reads the same stored state back is the ordinary case, and
+ * reporting that as a change would re-project the whole app on every mount.
+ */
+function sameFactors(a: CalibrationFactors, b: CalibrationFactors): boolean {
+  if (a === b) return true;
+  if (a.global !== b.global) return false;
+  return [1, 2, 3, 4].every((pos) => (a.byPos[pos] ?? 1) === (b.byPos[pos] ?? 1));
+}
+
+/**
  * Grade every stored snapshot whose gameweek has finished. Returns true if
  * the calibration changed (callers should re-project).
  */
@@ -272,10 +392,42 @@ export async function reconcileFinishedGws(
 ): Promise<boolean> {
   const season = currentSeasonName(bootstrap.events);
   let state = loadCalibration(demo, season);
-  // The season rollover above is itself a change worth persisting: without
-  // this, the reset is recomputed on every load until something else happens
-  // to save, and any snapshot dropped below stays orphaned in the meantime.
-  let changed = state.season !== loadRawSeason(demo);
+  /*
+   * TWO DIFFERENT QUESTIONS, AND THEY WERE ONE VARIABLE.
+   *
+   * `dirty` is "this must be written back". The season rollover above qualifies
+   * — without it the reset is recomputed on every load until something else
+   * happens to save, and any snapshot dropped below stays orphaned meanwhile —
+   * and so does a dropped or failed snapshot.
+   *
+   * The RETURN VALUE is a different claim: this function's contract is that
+   * callers re-project when it says true, and a re-projection is the most
+   * expensive thing the app does. None of those three moves a factor, so none
+   * of them changes a single number a re-projection would produce.
+   *
+   * Conflating them cost a whole re-projection per load, forever, on any device
+   * where `localStorage.setItem` throws — Safari private browsing, a full
+   * quota. The stamp never lands, so `state.season !== loadRawSeason(demo)` is
+   * true on the next load too, and on every load after that, to re-derive
+   * factors that are still identity.
+   *
+   * THE BASELINE IS WHAT IS CURRENTLY ACTIVE, NOT WHAT WAS JUST LOADED. The
+   * first version compared against the freshly loaded factors, which answers a
+   * question nobody asked: on a first load the stored factors are already
+   * different from the identity the module is running on, so this returned
+   * false while `setActiveCalibration` below moved every projection in the app.
+   * The caller had rendered with identity and was told there was nothing to
+   * re-project. (It was masked in practice — `loadPastSeason` notifies straight
+   * afterwards and the demo forces it — which is exactly how an invariant like
+   * this survives.) `activeCalibration()` is what a re-projection would read,
+   * so it is the only baseline that makes the answer mean anything.
+   *
+   * `factors` is otherwise replaced only by `applyGwOutcome`, so this stays
+   * conservative in the safe direction: it can report a change when a graded
+   * week happened to move nothing, never the other way round.
+   */
+  const factorsBefore = activeCalibration();
+  let dirty = state.season !== loadRawSeason(demo);
   const posOf = new Map(bootstrap.elements.map((e) => [e.id, e.element_type]));
   const drop = (gw: number) => {
     try {
@@ -305,7 +457,7 @@ export async function reconcileFinishedGws(
       if (season != null && snap.season != null && snap.season !== season) {
         drop(ev.id);
         state = { ...state, reconciled: [...state.reconciled, ev.id] };
-        changed = true;
+        dirty = true;
         continue;
       }
       const actuals = await getActuals(ev.id);
@@ -314,12 +466,12 @@ export async function reconcileFinishedGws(
         return { pos: posOf.get(id) ?? 3, pred, actual: actuals.get(id) ?? 0 };
       });
       state = applyGwOutcome(state, ev.id, entries, Date.now());
-      changed = true;
+      dirty = true;
       drop(ev.id);
     } catch {
       /*
        * Grading failed (live data gone, malformed snapshot) — skip this GW
-       * permanently. `changed` MUST be set, and the key MUST go.
+       * permanently. `dirty` MUST be set, and the key MUST go.
        *
        * Neither used to happen. If this was the only gameweek in the pass,
        * nothing saved, so every later page load re-fetched the same dead
@@ -328,7 +480,7 @@ export async function reconcileFinishedGws(
        * that becomes next season's poison above.
        */
       state = { ...state, reconciled: [...state.reconciled, ev.id] };
-      changed = true;
+      dirty = true;
       drop(ev.id);
     }
   }
@@ -338,9 +490,9 @@ export async function reconcileFinishedGws(
    * next load see a season mismatch — which would clear `reconciled` and
    * re-grade the whole season, permanently, from one bad bootstrap.
    */
-  if (changed) saveCalibration(demo, { ...state, season: season ?? state.season ?? null });
+  if (dirty) saveCalibration(demo, { ...state, season: season ?? state.season ?? null });
   setActiveCalibration(state.factors);
-  return changed;
+  return !sameFactors(state.factors, factorsBefore);
 }
 
 /** Demo mode: seed a plausible learning history so the feature is visible. */

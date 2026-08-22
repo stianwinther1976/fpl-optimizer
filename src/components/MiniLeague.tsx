@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { markNavigation } from "@/lib/nav";
 import { api, DEMO_ENTRY_ID, fmtNum, type TeamData } from "@/lib/fpl";
 import type { EventLive, LeagueStandings } from "@/lib/types";
 import { CHIP_LABELS } from "@/lib/rules";
-import { projectAutoSubs } from "@/lib/live";
+import { liveEntryScore, provisionalBonus, squadMatchState } from "@/lib/live";
 import { ErrorBox, Skeleton } from "./ui";
 
 const MAX_RIVAL_DETAILS = 20;
@@ -16,6 +17,9 @@ interface RivalDetail {
   chip: string | null;
   livePoints: number | null; // incl. hits (net)
   hits: number;
+  /** Counting players whose match is running, and whose has not kicked off. */
+  inPlay: number;
+  toStart: number;
 }
 
 interface LeagueOwnership {
@@ -26,6 +30,12 @@ interface LeagueOwnership {
 
 export default function MiniLeague({ data, entryId }: { data: TeamData; entryId: number }) {
   const router = useRouter();
+  // Recorded, so the rival's own back control returns to this table rather
+  // than to the landing page — see `nav.ts`.
+  const goToTeam = (id: number) => {
+    markNavigation();
+    router.push(`/team/${id}`);
+  };
   // Rival dashboards only work with real FPL data, not the demo universe.
   const canOpenRivals = entryId !== DEMO_ENTRY_ID;
   const [leagueId, setLeagueId] = useState("");
@@ -147,7 +157,21 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
     try {
       const rivals = s.standings.results.slice(0, MAX_RIVAL_DETAILS);
       const live: EventLive = await api.live(currentEvent);
-      const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
+      /*
+       * THE SAME SCORE AS THE OTHER TWO TABS. This loop had neither the
+       * provisional bonus nor the vice-captain takeover, so between the final
+       * whistle and bonus confirmation — hours, after a Saturday — the reader's
+       * own row here disagreed with the Live tab by the bonus, and with both
+       * tabs by the vice's entire raw score whenever a captain blanked.
+       * `liveEntryScore` is now the one definition; see its note for the three
+       * numbers this produced.
+       */
+      const bonus = provisionalBonus(data.bootstrap, data.fixtures, live, currentEvent);
+      const ev = data.bootstrap.events.find((e) => e.id === currentEvent);
+      const gwDone =
+        (ev?.finished ?? false) ||
+        (data.fixtures.some((f) => f.event === currentEvent) &&
+          data.fixtures.filter((f) => f.event === currentEvent).every((f) => f.finished));
       const eoCount = new Map<number, number>();
       let eoSample = 0;
       const results = await Promise.all(
@@ -155,15 +179,17 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
           try {
             const picks = await api.picks(r.entry, currentEvent);
             const bboost = picks.active_chip === "bboost";
-            // Auto-subs projected so live scores match what FPL will process.
-            const subs = projectAutoSubs(picks.picks, elementById, live, data.fixtures, currentEvent);
-            const effXi = new Set(subs.effectiveXi);
-            let pts = 0;
-            for (const p of picks.picks) {
-              if (!bboost && !effXi.has(p.element)) continue;
-              const mult = p.multiplier > 1 ? p.multiplier : 1;
-              pts += (pointsOf.get(p.element) ?? 0) * mult;
-            }
+            // Auto-subs, provisional bonus and the vice-captain takeover all
+            // live in `liveEntryScore`, which returns the score NET of the hit.
+            const net = liveEntryScore(
+              picks,
+              elementById,
+              live,
+              data.fixtures,
+              currentEvent,
+              bonus.byElement,
+              gwDone
+            );
             const hits = picks.entry_history.event_transfers_cost;
             const cap = picks.picks.find((p) => p.is_captain);
             const vice = picks.picks.find((p) => p.is_vice_captain);
@@ -180,8 +206,9 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               captain: cap ? (elementName.get(cap.element) ?? null) : null,
               viceCaptain: vice ? (elementName.get(vice.element) ?? null) : null,
               chip: picks.active_chip,
-              livePoints: pts - hits,
+              livePoints: net,
               hits,
+              ...squadMatchState(picks, elementById, live, data.fixtures, currentEvent),
             };
             return [r.entry, detail] as const;
           } catch {
@@ -228,7 +255,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                       setLeagueId(String(l.id));
                       load(String(l.id));
                     }}
-                    className={`rounded-full border px-3 py-1.5 text-sm ${
+                    className={`min-h-11 rounded-full border px-3 py-1.5 text-sm ${
                       String(l.id) === leagueId
                         ? "border-accent bg-accent/15 font-semibold text-accent"
                         : "border-border-c bg-panel-2 hover:border-accent"
@@ -255,7 +282,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                     load(e.target.value);
                   }
                 }}
-                className="mt-2 w-full rounded-lg border border-border-c bg-panel-2 px-3 py-2 text-sm sm:w-auto"
+                className="mt-2 min-h-11 w-full rounded-lg border border-border-c bg-panel-2 px-3 py-2 text-sm sm:w-auto"
               >
                 <option value="">Public leagues (Overall, country, club …)</option>
                 {myLeagues
@@ -275,7 +302,9 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
           </div>
         )}
         <details className="text-xs text-muted">
-          <summary className="cursor-pointer hover:text-accent">Enter a league ID manually</summary>
+          <summary className="flex min-h-11 cursor-pointer items-center hover:text-accent">
+            Enter a league ID manually
+          </summary>
           <div className="mt-2 flex gap-2">
             <input
               value={leagueId}
@@ -283,12 +312,12 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               onKeyDown={(e) => e.key === "Enter" && load()}
               placeholder="League ID (classic league)"
               aria-label="Classic league ID"
-              className="min-w-0 flex-1 rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
+              className="min-h-11 min-w-0 flex-1 rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
             />
             <button
               onClick={() => load()}
               disabled={loading}
-              className="btn-primary shrink-0 rounded-lg px-4 py-2 text-sm disabled:opacity-50"
+              className="btn-primary min-h-11 shrink-0 rounded-lg px-4 py-2 text-sm disabled:opacity-50"
             >
               {loading ? "Loading…" : "Load"}
             </button>
@@ -345,7 +374,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                   <tr
                     key={r.entry}
                     className={`${mine ? "bg-accent/10" : "hover:bg-panel-2/60 active:bg-panel-2"} ${clickable ? "cursor-pointer" : ""}`}
-                    onClick={clickable ? () => router.push(`/team/${r.entry}`) : undefined}
+                    onClick={clickable ? () => goToTeam(r.entry) : undefined}
                     tabIndex={clickable ? 0 : undefined}
                     aria-label={clickable ? `${r.entry_name} — open this team` : undefined}
                     onKeyDown={
@@ -353,7 +382,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                         ? (ev) => {
                             if (ev.key === "Enter" || ev.key === " ") {
                               ev.preventDefault();
-                              router.push(`/team/${r.entry}`);
+                              goToTeam(r.entry);
                             }
                           }
                         : undefined
@@ -391,6 +420,27 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                       {d && d.hits > 0 && (
                         <div className="text-[10px] leading-tight text-danger">−{d.hits}</div>
                       )}
+                      {/*
+                        WHAT THE SCORE ON ITS OWN CANNOT SAY. Two points ahead
+                        with five still to kick off is a different position from
+                        two points ahead with none left. See `squadMatchState`.
+                        Zeroes are omitted rather than printed: a finished
+                        gameweek should go quiet here, not render "0 · 0" on
+                        every row.
+                      */}
+                      {d && (d.inPlay > 0 || d.toStart > 0) && (
+                        <div className="text-[10px] leading-tight text-muted">
+                          {d.inPlay > 0 && (
+                            <span className="text-accent" title={`${d.inPlay} playing now`}>
+                              ●{d.inPlay}
+                            </span>
+                          )}
+                          {d.inPlay > 0 && d.toStart > 0 && " "}
+                          {d.toStart > 0 && (
+                            <span title={`${d.toStart} yet to kick off`}>▸{d.toStart}</span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono font-bold">{fmtNum(r.total)}</td>
                   </tr>
@@ -400,7 +450,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
           </table>
           {standings.standings.results.length > MAX_RIVAL_DETAILS && (
             <div className="border-t border-border-c px-4 py-2 text-xs text-muted">
-              Captain/chip/live details shown for the top {MAX_RIVAL_DETAILS} teams.
+              Captain/chip/live details shown for the top {MAX_RIVAL_DETAILS} teams. ● playing now, ▸ yet to kick off.
             </div>
           )}
         </div>
@@ -410,12 +460,62 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
           your rank (shields), and where you differ (differentials). */}
       {ownership && data.squad && !loading && (
         (() => {
-          const myIds = new Set(data.squad.players.map((p) => p.element.id));
+          /*
+           * MY SIDE OF THE COMPARISON HAS TO BE COUNTED THE WAY THE FIELD'S IS.
+           *
+           * `eoCount` above credits a rival's player only when `position <= 11`
+           * or Bench Boost is on, so effective ownership is a statement about
+           * STARTING elevens. This set was all fifteen, and `diffs` below was a
+           * third rule again (`pickPosition <= 11`, with no Bench Boost case).
+           *
+           * The consequence is not a rounding difference, it is a sign error. A
+           * 60%-owned player sitting on my bench scores the field and not me —
+           * the single worst place he can be — and he was excluded from
+           * "Threats" for being mine and then listed under "Shields — they
+           * protect your rank". He protects nothing; he is the threat.
+           */
+          const benchBoosted = data.squad.activeChip === "bboost";
+          const inMyXi = (p: { pickPosition: number }) => p.pickPosition <= 11 || benchBoosted;
+          /*
+           * `currentPlayers`, BECAUSE THIS COMPARES AGAINST THIS GAMEWEEK.
+           *
+           * `eoCount` above is built from `api.picks(rival, currentEvent)` —
+           * the teams the rivals are actually fielding. `players` is the squad
+           * to optimize from: next gameweek's transfers applied, and in a Free
+           * Hit week the fifteen the Free Hit replaced. So a transfer made
+           * early listed the man still scoring for the reader as a Threat and
+           * counted the incoming player as his, and a Free Hit week compared
+           * the whole panel against a team he is not fielding. The chip flag
+           * two lines up was already this gameweek's, so the file was mixing
+           * one gameweek's chip with another's squad.
+           */
+          const myIds = new Set(
+            data.squad.currentPlayers.filter(inMyXi).map((p) => p.element.id)
+          );
+          /*
+           * OWNING HIM AND FIELDING HIM ARE DIFFERENT FACTS, AND THERE ARE
+           * THREE STATES, NOT TWO.
+           *
+           * Narrowing `myIds` to the XI above fixed the shield inversion and
+           * then handed the benched player the OTHER wrong label: he is not in
+           * `myIds`, so he satisfied `!myIds.has(id)` and was printed under a
+           * heading asserting you do not own him — which also made the empty
+           * state ("No high-ownership player is missing from your team") false
+           * in the same case, and, because the column is `slice(0, 5)`, pushed
+           * out players the reader can actually go and buy.
+           *
+           * So the column is what it always meant: the field is scoring these
+           * players and you are not. For most of them the move is a transfer;
+           * for one already in your fifteen it is to start him. Saying which is
+           * the difference between advice and a list.
+           */
+          const mySquadIds = new Set(data.squad.currentPlayers.map((p) => p.element.id));
           const pct = (v: number) => `${Math.round(v * 100)}%`;
           const ranked = [...ownership.eo.entries()].sort((a, b) => b[1] - a[1]);
           const threats = ranked
             .filter(([id, v]) => !myIds.has(id) && v >= 0.4)
-            .slice(0, 5);
+            .slice(0, 5)
+            .map(([id, v]) => ({ id, v, benched: mySquadIds.has(id) }));
           /*
            * A SHIELD AND A DIFFERENTIAL CANNOT BE THE SAME PLAYER.
            * Threats need `>= 0.4` and differentials `<= 0.2`, but shields were
@@ -429,12 +529,15 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
            * you are protected by holding, and the same number decides both.
            */
           const shields = ranked.filter(([id, v]) => myIds.has(id) && v >= 0.4).slice(0, 5);
-          const diffs = data.squad.players
-            .filter((p) => p.pickPosition <= 11 && (ownership.eo.get(p.element.id) ?? 0) <= 0.2)
+          const diffs = data.squad.currentPlayers
+            .filter((p) => inMyXi(p) && (ownership.eo.get(p.element.id) ?? 0) <= 0.2)
             .slice(0, 5);
-          const Item = ({ id, v }: { id: number; v: number }) => (
+          const Item = ({ id, v, note }: { id: number; v: number; note?: string }) => (
             <li className="flex items-center justify-between gap-2">
-              <span className="truncate">{elementName.get(id) ?? `#${id}`}</span>
+              <span className="truncate">
+                {elementName.get(id) ?? `#${id}`}
+                {note && <span className="ml-1 text-xs text-muted">{note}</span>}
+              </span>
               <span className="shrink-0 font-mono text-xs text-muted">{pct(v)} EO</span>
             </li>
           );
@@ -445,11 +548,22 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               </div>
               <div className="mt-3 grid gap-4 text-sm sm:grid-cols-3">
                 <div>
-                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-danger">⚔️ Threats — they own, you don&apos;t</div>
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-danger">⚔️ Threats — scoring the league, not you</div>
                   {threats.length > 0 ? (
-                    <ul className="space-y-1">{threats.map(([id, v]) => <Item key={id} id={id} v={v} />)}</ul>
+                    <ul className="space-y-1">
+                      {threats.map((t) => (
+                        <Item
+                          key={t.id}
+                          id={t.id}
+                          v={t.v}
+                          note={t.benched ? "(on your bench)" : undefined}
+                        />
+                      ))}
+                    </ul>
                   ) : (
-                    <div className="text-xs text-muted">No high-ownership player is missing from your team. 💪</div>
+                    <div className="text-xs text-muted">
+                      Every widely-owned player here is in your starting XI. 💪
+                    </div>
                   )}
                 </div>
                 <div>

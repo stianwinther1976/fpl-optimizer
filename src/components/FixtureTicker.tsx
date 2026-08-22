@@ -68,7 +68,22 @@ export default function FixtureTicker({
   }
 
   return (
-    <div className="card overflow-x-auto">
+    /*
+      A SCROLLER NOBODY CAN REACH BY KEYBOARD IS A COLUMN NOBODY CAN READ.
+      Measured at 420px: scrollWidth 562 against clientWidth 386, and every
+      focusable element inside (the club buttons) sits in the leftmost column —
+      so tabbing 45 stops through the panel left `scrollLeft` at 0 and the last
+      two gameweeks and the average-difficulty column were unreachable without a
+      pointer. `tabIndex` makes the container itself focusable so the arrow keys
+      scroll it, and the role and label are what make that discoverable rather
+      than a surprise.
+    */
+    <div
+      className="card overflow-x-auto"
+      tabIndex={0}
+      role="region"
+      aria-label="Upcoming fixtures by club, scrollable"
+    >
       <table className="w-full min-w-[560px] text-sm">
         <thead className="border-b border-border-c text-xs uppercase text-muted">
           <tr>
@@ -89,7 +104,7 @@ export default function FixtureTicker({
               <td className="sticky left-0 z-10 bg-[var(--panel)] px-3 py-2 font-medium">
                 <button
                   onClick={() => setClubOpen(team)}
-                  className="hover:text-accent"
+                  className="min-h-11 text-left hover:text-accent"
                   title="Club details and top FPL assets"
                 >
                   {team.name} <span className="text-xs text-muted">›</span>

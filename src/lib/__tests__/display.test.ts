@@ -1,19 +1,28 @@
 import { describe, it, expect } from "vitest";
 import {
-  autoSubView,
-  benchPoints,
-  netEventPoints,
-  netGwPoints,
-  netGwDelta,
-  averageFdr,
-  fdrSortKey,
-  signedPrice,
-  scoreTier,
   RETURN_THRESHOLD,
-  teamValue,
-  valueDelta,
-  type BenchRow,
+  autoSubView,
+  averageFdr,
+  benchBadgeFor,
+  benchPoints,
+  benchSortKey,
+  benchSummary,
+  captainXpLabel,
+  fdrSortKey,
   kickoffLabel,
+  liveCornerNote,
+  publishedAverage,
+  kickOffPassed,
+  liveStaleMinutes,
+  liveOverallPoints,
+  netEventPoints,
+  netGwDelta,
+  netGwPoints,
+  scoreTier,
+  signedPrice,
+  teamValue,
+  type BenchRow,
+  valueDelta,
 } from "../display";
 
 /**
@@ -440,5 +449,242 @@ describe("kickoffLabel", () => {
   it("says TBC when there is no time at all", () => {
     expect(kickoffLabel({ kickoff_time: null }, fmt)).toBe("TBC");
     expect(kickoffLabel({ kickoff_time: null, provisional_start_time: true }, fmt)).toBe("TBC");
+  });
+});
+
+describe("the bench, once auto-substitutions have been applied", () => {
+  /**
+   * The set the pitch renders as "the bench" is everyone NOT in the effective
+   * eleven, which after a sub includes the starter who came off. Sorting that
+   * set by FPL's pick order puts him first — pick position 3 sorts ahead of
+   * bench slot 12 — under a heading that reads "Bench (in order)", badged as
+   * the next man on.
+   */
+  const order = (positions: number[]) =>
+    [...positions].sort((a, b) => benchSortKey(a) - benchSortKey(b));
+
+  it("keeps FPL's order when nobody was substituted", () => {
+    expect(order([15, 12, 14, 13])).toEqual([12, 13, 14, 15]);
+  });
+
+  it("puts a demoted starter after the whole bench, not in front of it", () => {
+    expect(order([13, 3, 14, 15])).toEqual([13, 14, 15, 3]);
+    // Every bench slot beats every starting position, at both extremes.
+    expect(benchSortKey(12)).toBeLessThan(benchSortKey(11));
+    expect(benchSortKey(15)).toBeLessThan(benchSortKey(1));
+  });
+
+  it("keeps two demoted starters in pick order among themselves", () => {
+    expect(order([9, 12, 2])).toEqual([12, 2, 9]);
+  });
+
+  it("gives a demoted starter no sub-priority badge, and leaves the bench's alone", () => {
+    // `undefined` is "number it by list position" and `null` is "no number".
+    // Only the second is a claim about sub priority, so only it is stated.
+    expect(benchBadgeFor(12)).toBeUndefined();
+    expect(benchBadgeFor(15)).toBeUndefined();
+    expect(benchBadgeFor(11)).toBeNull();
+    expect(benchBadgeFor(1)).toBeNull();
+  });
+});
+
+describe("the bench figure beside a finished gameweek", () => {
+  const cards = [{ points: 8 }, { points: 10 }, { points: 2 }, { points: 1 }];
+
+  it("uses FPL's own number in an ordinary week", () => {
+    expect(benchSummary(9, cards, false)).toBe("bench 9 pts");
+    // Even when FPL's number and the cards disagree — `points_on_bench` is the
+    // authority there, and an auto-sub is exactly why they can differ.
+    expect(benchSummary(0, cards, false)).toBe("bench 0 pts");
+  });
+
+  it("sums the cards in a Bench Boost week, and says they counted", () => {
+    /*
+     * FPL reports `points_on_bench` as 0 under Bench Boost because none of
+     * those points sat on the bench — they counted. Printed literally the
+     * caption read `GW15: 61 pts · bench 0 pts` above four cards showing
+     * 8, 10, 2 and 1, and that zero was the one number that would have let a
+     * reader reconcile the corner (61) with the eleven cards above it (40).
+     */
+    expect(benchSummary(0, cards, true)).toBe("bench 21 pts (counted — Bench Boost)");
+  });
+});
+
+describe("a captain's projected points on a card", () => {
+  it("puts the multiplier in front of the figure, not after it", () => {
+    /*
+     * `${(xp * 2).toFixed(1)} xp ×2` printed the already-doubled number with a
+     * "×2" after it, so a 6.5 xp captain read "13.0 xp ×2" — which multiplies
+     * to 26 — while the captaincy list on the same panel showed him at 6.5.
+     */
+    expect(captainXpLabel(6.5, true)).toBe("2×6.5 xp");
+    expect(captainXpLabel(6.5, false)).toBe("6.5 xp");
+    expect(captainXpLabel(6.5, true, 3)).toBe("3×6.5 xp");
+  });
+});
+
+describe("the live pitch's corner note", () => {
+  it("explains the gap a hit opens between the corner and the cards", () => {
+    // The corner is net and the cards are not: 48 over eleven cards summing to
+    // 52, with the word "hit" nowhere on the tab.
+    expect(liveCornerNote(52, 4)).toBe(
+      "The eleven on the pitch have scored 52; the corner shows 48 after a −4 hit."
+    );
+  });
+
+  it("says nothing when there is no hit, rather than saying zero", () => {
+    expect(liveCornerNote(52, 0)).toBeNull();
+    expect(liveCornerNote(0, 0)).toBeNull();
+  });
+});
+
+describe("FPL's gameweek average is not published while the gameweek runs", () => {
+  /*
+   * Measured on the 2026-08-21 snapshot, taken with GW1 current and its
+   * opening fixture fully played — 90 minutes, `finished_provisional`, real
+   * points awarded — `average_entry_score` was still exactly 0. Three screens
+   * read it and all three printed the 0 as a score: the Live tab's headline
+   * comparison, its safety score ("you need 0 pts to hold your rank"), and the
+   * season chart, whose average line dropped to the axis on the gameweek in
+   * progress.
+   */
+  it("reads a zero as unpublished rather than as a score", () => {
+    expect(publishedAverage({ average_entry_score: 0 })).toBeNull();
+    expect(publishedAverage({ average_entry_score: 51 })).toBe(51);
+  });
+
+  it("has nothing to say about a gameweek it was not given", () => {
+    expect(publishedAverage(undefined)).toBeNull();
+    expect(publishedAverage(null)).toBeNull();
+  });
+
+  it("refuses a value that is not a finite number", () => {
+    // It arrives from the network. `NaN > 0` is false, but so is every
+    // comparison, so saying so explicitly is cheaper than reasoning about it.
+    expect(publishedAverage({ average_entry_score: NaN })).toBeNull();
+    expect(publishedAverage({ average_entry_score: -3 })).toBeNull();
+  });
+});
+
+describe("a kick-off that has passed while FPL still says not started", () => {
+  /*
+   * The fixture card had two states and the reader needed three. "HUL v MUN /
+   * Sat 13:30" two minutes after the whistle is indistinguishable from an app
+   * that has stopped fetching, and "live doesn't work" is the reasonable
+   * conclusion the screen gave no way to check.
+   */
+  const at = (iso: string) => Date.parse(iso);
+  const KO = "2026-08-22T12:30:00Z";
+  const f = (over: Record<string, unknown> = {}) => ({
+    kickoff_time: KO,
+    started: false,
+    ...over,
+  });
+
+  it("says nothing before kick-off", () => {
+    expect(kickOffPassed(f(), at(KO) - 60_000)).toBe(false);
+  });
+
+  it("says nothing inside the grace period", () => {
+    // FPL is routinely a minute or so behind the whistle; flipping on the
+    // stroke of kick-off would cry wolf at every match.
+    expect(kickOffPassed(f(), at(KO) + 1_000)).toBe(false);
+    expect(kickOffPassed(f(), at(KO) + 60_000)).toBe(false);
+  });
+
+  it("says so once the grace has gone", () => {
+    expect(kickOffPassed(f(), at(KO) + 61_000)).toBe(true);
+    expect(kickOffPassed(f(), at(KO) + 120_000)).toBe(true);
+  });
+
+  it("says nothing once FPL has flagged the match", () => {
+    // Then the card has a clock and a score to show instead.
+    expect(kickOffPassed(f({ started: true }), at(KO) + 600_000)).toBe(false);
+  });
+
+  it("refuses to measure lateness against a time FPL calls provisional", () => {
+    expect(kickOffPassed(f({ provisional_start_time: true }), at(KO) + 600_000)).toBe(false);
+  });
+
+  it("says nothing when there is no kick-off time at all", () => {
+    expect(kickOffPassed(f({ kickoff_time: null }), at(KO) + 600_000)).toBe(false);
+    expect(kickOffPassed(f({ kickoff_time: "not a date" }), at(KO) + 600_000)).toBe(false);
+  });
+});
+
+describe("liveStaleMinutes", () => {
+  const POLL = 30_000;
+  const t = (ms: number) => new Date(1_700_000_000_000 + ms);
+  const NOW = 1_700_000_000_000;
+
+  it("is null before it has ever refreshed", () => {
+    expect(liveStaleMinutes(null, NOW, POLL)).toBeNull();
+  });
+
+  it("is null while polls are landing", () => {
+    // One missed poll is a dropped packet, not a dead feed.
+    expect(liveStaleMinutes(t(-29_000), NOW, POLL)).toBeNull();
+    expect(liveStaleMinutes(t(-60_000), NOW, POLL)).toBeNull();
+    expect(liveStaleMinutes(t(-74_999), NOW, POLL)).toBeNull();
+  });
+
+  it("fires at two and a half poll intervals", () => {
+    expect(liveStaleMinutes(t(-75_000), NOW, POLL)).toBe(1);
+  });
+
+  it("floors to whole minutes and never claims more precision", () => {
+    expect(liveStaleMinutes(t(-119_999), NOW, POLL)).toBe(1);
+    expect(liveStaleMinutes(t(-120_000), NOW, POLL)).toBe(2);
+    // The reader's case: a match at the hour mark, the card still on 2'.
+    expect(liveStaleMinutes(t(-58 * 60_000), NOW, POLL)).toBe(58);
+  });
+
+  it("scales with the poll interval rather than a hardcoded window", () => {
+    // A 10s poll must call it stale far sooner than a 30s one does.
+    expect(liveStaleMinutes(t(-30_000), NOW, 10_000)).toBe(0);
+    expect(liveStaleMinutes(t(-30_000), NOW, 30_000)).toBeNull();
+  });
+
+  it("does not report staleness from a clock that ran backwards", () => {
+    expect(liveStaleMinutes(t(60_000), NOW, POLL)).toBeNull();
+  });
+});
+
+describe("liveOverallPoints", () => {
+  it("is the live score itself in GW1, where nothing precedes it", () => {
+    // The reported case: header 3, live tab 7, same quantity.
+    expect(liveOverallPoints([{ event: 1, total_points: 3 }], 1, 7)).toBe(7);
+    expect(liveOverallPoints([], 1, 7)).toBe(7);
+  });
+
+  it("adds the live score to the last COMPLETED gameweek's cumulative total", () => {
+    const rows = [
+      { event: 1, total_points: 60 },
+      { event: 2, total_points: 118 },
+      { event: 3, total_points: 121 }, // in play, FPL's partial figure
+    ];
+    expect(liveOverallPoints(rows, 3, 55)).toBe(173);
+  });
+
+  it("never reads the current row, which already holds a partial live figure", () => {
+    // Counting it would bank the same points twice.
+    const rows = [
+      { event: 1, total_points: 60 },
+      { event: 2, total_points: 118 },
+    ];
+    expect(liveOverallPoints(rows, 2, 40)).toBe(100);
+  });
+
+  it("takes the latest prior row regardless of array order", () => {
+    const rows = [
+      { event: 2, total_points: 118 },
+      { event: 1, total_points: 60 },
+    ];
+    expect(liveOverallPoints(rows, 3, 10)).toBe(128);
+  });
+
+  it("carries a negative live week through", () => {
+    // A -8 week that scored 4 is a net -4 and must reduce the total.
+    expect(liveOverallPoints([{ event: 1, total_points: 60 }], 2, -4)).toBe(56);
   });
 });

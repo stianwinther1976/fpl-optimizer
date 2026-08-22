@@ -115,12 +115,18 @@ export function Stat({
 export function PriceTrendBar({ percent }: { percent: number }) {
   const mag = Math.min(Math.abs(percent), 120);
   const width = (mag / 120) * 50; // half the track is one full direction
-  const rising = percent >= 0;
+  // Zero is neither direction — see the note at the caller. The bar draws
+  // nothing at zero anyway (`width` is 0), so only the label was ever wrong.
+  const rising = percent > 0;
   return (
     <div
       className="relative mt-2 h-2 w-full overflow-hidden rounded-full bg-panel-2"
       role="img"
-      aria-label={`${Math.round(percent)}% toward a price ${rising ? "rise" : "fall"}`}
+      aria-label={
+        percent === 0
+          ? "Price has not moved toward a rise or a fall"
+          : `${Math.abs(Math.round(percent))}% toward a price ${rising ? "rise" : "fall"}`
+      }
     >
       <div
         className={`absolute top-0 h-full ${rising ? "bg-accent" : "bg-danger"}`}

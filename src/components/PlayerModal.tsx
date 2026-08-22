@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { api, currentFeed, type ElementSummary } from "@/lib/fpl";
 import type { Element, EventLive, Fixture, Team } from "@/lib/types";
 import { fmtPrice, POSITION_NAMES } from "@/lib/rules";
@@ -51,6 +51,8 @@ export default function PlayerModal({
   fixtures = [],
   teams,
   nextEvent = null,
+  multiplier = 1,
+  asOfGw = null,
 }: {
   element: Element;
   team: Team | undefined;
@@ -61,6 +63,34 @@ export default function PlayerModal({
   fixtures?: Fixture[];
   teams?: Map<number, Team>;
   nextEvent?: number | null;
+  /**
+   * What this player's score is multiplied by in the reader's team this
+   * gameweek — 2 for the captain, 3 under Triple Captain, 1 otherwise.
+   *
+   * THE MODAL HAD NO IDEA THE ARMBAND EXISTED. Tapping a card reading "4 pts"
+   * opened a sheet headed "2 pts", because the card applies the multiplier and
+   * the modal printed `stats.total_points` raw. Both numbers are true and the
+   * reader is given no way to know that.
+   */
+  multiplier?: number;
+  /**
+   * Set when the sheet is showing a PAST gameweek — the Team tab's time
+   * machine. Null on the live view.
+   *
+   * EVERYTHING BELOW THE SCORE IS PRESENT TENSE, and under a GW15 heading that
+   * is a sheet lying about which week it is describing. Read off the demo with
+   * the time machine on GW15: "Recent gameweeks — started 5 of last 5" listed
+   * GW20 through GW16, every one LATER than the gameweek on display and one of
+   * them still in play; the transfer badge was GW20's; and the price
+   * predictor, FPL's next-gameweek projection and "Upcoming fixtures GW21-23"
+   * were all about today.
+   *
+   * `element` is today's bootstrap row and cannot be anything else — FPL
+   * publishes no historic price or ownership per player — so the honest move is
+   * to cut the recent list at the gameweek being viewed and drop the blocks
+   * that have no past-tense reading at all.
+   */
+  asOfGw?: number | null;
 }) {
   // Re-render when the reader changes a call anywhere — the button state and
   // the note below it both have to follow the store rather than local state,
@@ -95,22 +125,97 @@ export default function PlayerModal({
     [];
   const total = liveEl?.stats.total_points ?? null;
 
-  // Last five recorded gameweeks (lazy — one small request per opened player).
-  const [recent, setRecent] = useState<ElementSummary["history"] | null>(null);
+  // This player's rounds (lazy — one small request per opened player), cut to
+  // what the viewed gameweek could have known and to matches actually played.
+  const [played, setPlayed] = useState<ElementSummary["history"] | null>(null);
   useEffect(() => {
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset while the new player's data loads
-    setRecent(null);
+    setPlayed(null);
     api
       .elementSummary(element.id)
       .then((s) => {
-        if (!cancelled) setRecent([...s.history].slice(-5).reverse());
+        if (!cancelled) {
+          const rows = s.history;
+          /*
+           * AND ONLY MATCHES THAT HAVE BEEN PLAYED.
+           *
+           * FPL emits a history row from the DEADLINE, with `minutes: 0` and
+           * `starts: 0`, for a fixture that has not kicked off. `xp.ts` stopped
+           * counting those; this sheet did not, and it is the one place a
+           * reader looks. Counted on the 2026-08-21 snapshot, 538 of 600
+           * players carried such a row inside their last-five window — e.g.
+           * element 21, round 1, kicking off the following afternoon, rendered
+           * as a red `GW1 0' 0p` chip under "started 0 of last 1".
+           *
+           * Mid-season it reads "started 4 of last 5" where the truth is 4 of
+           * 4, and the bias is by club: a Saturday lunchtime side looks clean
+           * while a Monday night side does not. `team_h_score` is null until
+           * the match has a score, which is the only thing on the row that
+           * tells the two apart — see `fetchRecentForm`, which uses the same
+           * test.
+           */
+          setPlayed(rows.filter((r) => r.team_h_score !== null));
+        }
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
+  /*
+   * `element.id` ONLY. `asOfGw` was in this array because the fetch used to do
+   * the cutting; the memos below do it now, off the same rounds. Leaving it
+   * here re-ran `setPlayed(null)` on every step of the time machine, so the
+   * season block flashed "Loading this player's rounds…" and the recent chips
+   * vanished each time the reader moved one gameweek — a refetch of data the
+   * component already had.
+   */
   }, [element.id]);
+  /*
+   * Two different cuts of the same rounds, and they are NOT the same cut.
+   *
+   * The "Recent gameweeks" list must stop BEFORE the gameweek on screen: that
+   * one is already rendered as the headline above it, so including it would
+   * print the same round twice.
+   *
+   * The season total must INCLUDE it — and it did not. Both blocks shared the
+   * `round < asOfGw` array, so under a "GW15 points — 8 pts" heading the block
+   * beneath read "Season to GW15 — 87" when the true figure to GW15 is 95.
+   * Measured on demo element 28: 5 / 8 / 9 points short at GW10 / GW15 / GW20,
+   * always exactly the gameweek in the heading. FPL's own site shows the
+   * inclusive number, and the two blocks contradicted each other on one sheet.
+   */
+  const recent = useMemo(() => {
+    if (!played) return null;
+    const rows = asOfGw == null ? played : played.filter((r) => r.round < asOfGw);
+    return [...rows].slice(-5).reverse();
+  }, [played, asOfGw]);
+  /*
+   * The season as the viewed gameweek knew it — INCLUDING that gameweek, which
+   * is the cut the heading above it names and the one FPL's own site shows.
+   * `played` is the full played history now; the recent-form list takes its own
+   * exclusive cut. An earlier version of this note said `played` was "already
+   * cut to `round < asOfGw`", which was true of the array both blocks used to
+   * share and is what made the season total short by exactly the headline
+   * gameweek.
+   *
+   * Only reached in the time machine: on the live sheet the `element` row is
+   * both cheaper and more complete, so it is used instead.
+   */
+  const toDate = useMemo(() => {
+    if (!played) return null;
+    let points = 0;
+    let goals = 0;
+    let assists = 0;
+    let xgi = 0;
+    for (const r of asOfGw == null ? played : played.filter((r) => r.round <= asOfGw)) {
+      points += r.total_points;
+      goals += r.goals_scored ?? 0;
+      assists += r.assists ?? 0;
+      xgi += parseFloat(r.expected_goal_involvements ?? "0") || 0;
+    }
+    return { points, goals, assists, xgi };
+  }, [played, asOfGw]);
   const startsKnown = recent?.some((r) => r.starts != null) ?? false;
   const startedCount = recent?.filter((r) => (r.starts ?? 0) > 0).length ?? 0;
 
@@ -138,19 +243,38 @@ export default function PlayerModal({
             <div id="player-modal-title" className="truncate text-lg font-bold">
               {element.first_name} {element.second_name}
             </div>
+            {/*
+              THE PRICE AND THE NEWS ARE TODAY'S, WHICHEVER GAMEWEEK IS ON
+              SCREEN. FPL publishes no historic price or news per player, so
+              the time machine cannot show that week's; what it can do is stop
+              presenting today's as though it were. The price is marked, and
+              the news — which is present tense with no past reading at all,
+              "Knee injury - expected back 15 Sep" under a GW15 heading — is
+              dropped, along with the set-piece duties beside it, which are
+              also a statement about the current depth chart.
+            */}
             <div className="text-sm text-muted">
-              {team?.name} · {POSITION_NAMES[element.element_type]} · £{fmtPrice(element.now_cost)}m
+              {team?.name} · {POSITION_NAMES[element.element_type]} · £
+              {fmtPrice(element.now_cost)}m{asOfGw != null && " today"}
             </div>
-            {element.news && <div className="mt-1 text-xs text-warn">{element.news}</div>}
-            {(duties.length > 0 || netTransfers !== 0) && (
+            {asOfGw == null && element.news && (
+              <div className="mt-1 text-xs text-warn">{element.news}</div>
+            )}
+            {asOfGw == null && (duties.length > 0 || netTransfers !== 0) && (
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {duties.map((d) => (
                   <Badge key={d} tone="purple">
                     {d}
                   </Badge>
                 ))}
-                {netTransfers > 25000 && <Badge tone="green">▲ {Math.round(netTransfers / 1000)}k in this GW</Badge>}
-                {netTransfers < -25000 && <Badge tone="red">▼ {Math.round(-netTransfers / 1000)}k out this GW</Badge>}
+                {/* The `asOfGw` test moved to the wrapper above, which now
+                    also covers the set-piece duties. */}
+                {netTransfers > 25000 && (
+                  <Badge tone="green">▲ {Math.round(netTransfers / 1000)}k in this GW</Badge>
+                )}
+                {netTransfers < -25000 && (
+                  <Badge tone="red">▼ {Math.round(-netTransfers / 1000)}k out this GW</Badge>
+                )}
               </div>
             )}
           </div>
@@ -167,8 +291,14 @@ export default function PlayerModal({
                   {gwFinished ? <Badge>Final</Badge> : <Badge tone="green">Live</Badge>}
                 </span>
               </div>
-              <div className={`text-xl font-bold ${gwFinished ? "" : "text-accent"}`}>
-                {total} {total === 1 ? "pt" : "pts"}
+              <div className={`text-right text-xl font-bold ${gwFinished ? "" : "text-accent"}`}>
+                {total == null ? "–" : total * multiplier}{" "}
+                {total != null && total * multiplier === 1 ? "pt" : "pts"}
+                {multiplier > 1 && total != null && (
+                  <div className="text-xs font-normal text-muted">
+                    {multiplier}× {total} as {multiplier === 3 ? "triple captain" : "captain"}
+                  </div>
+                )}
               </div>
             </div>
             {rows.length > 0 ? (
@@ -235,7 +365,7 @@ export default function PlayerModal({
         )}
 
         {/* Second opinion: FPL's own expected-points projection for the next GW */}
-        {element.ep_next != null && parseFloat(element.ep_next) >= 0 && (
+        {asOfGw == null && element.ep_next != null && parseFloat(element.ep_next) >= 0 && (
           <div className="mt-4 flex items-center justify-between rounded-lg border border-border-c bg-panel-2 px-3 py-2.5 text-sm">
             <span className="text-muted">
               FPL&apos;s own next-GW projection
@@ -247,7 +377,7 @@ export default function PlayerModal({
 
         {/* FPL's Price Change Predictor. Only rendered when the feed carries a
             figure — silence is honest, "unlikely to change" on missing data isn't. */}
-        {price && (
+        {asOfGw == null && price && (
           <div className="mt-4">
             <div className="flex items-baseline justify-between gap-2">
               <div className="text-sm font-semibold">Price change</div>
@@ -264,9 +394,18 @@ export default function PlayerModal({
               </div>
             </div>
             <PriceTrendBar percent={price.percent} />
+            {/*
+              ZERO IS NEITHER DIRECTION. `percent >= 0 ? "rise" : "fall"` reads
+              as exhaustive and is not — the same not-quite-ternary
+              `display.signedPrice` exists to document. A player who has not
+              moved read "0% of the way to a rise", which asserts a direction
+              the data does not support, under a heading already saying
+              "Unlikely to change".
+            */}
             <p className="mt-1.5 text-xs text-muted">
-              {Math.abs(price.percent).toFixed(0)}% of the way to a{" "}
-              {price.percent >= 0 ? "rise" : "fall"}
+              {price.percent === 0
+                ? "Hasn't moved toward either"
+                : `${Math.abs(price.percent).toFixed(0)}% of the way to a ${price.percent > 0 ? "rise" : "fall"}`}
               {price.imminent
                 ? " — past the threshold, so FPL expects the move at the next 00:00 UK update."
                 : ". Prices move at 00:00 UK, at most 0.1 a day."}
@@ -275,7 +414,7 @@ export default function PlayerModal({
         )}
 
         {/* Upcoming fixtures (next 3 GWs, like the official FPL view) */}
-        {upcoming.length > 0 && (
+        {asOfGw == null && upcoming.length > 0 && (
           <div className="mt-4">
             <div className="text-sm font-semibold">Upcoming fixtures</div>
             <div className="mt-2 flex flex-wrap gap-2">
@@ -297,7 +436,25 @@ export default function PlayerModal({
           </div>
         )}
 
-        {/* Team news the model cannot read */}
+        {/*
+          Team news the model cannot read.
+
+          HIDDEN WHEN THERE IS NO NEXT GAMEWEEK, because the call is about one
+          — `loadStartCalls` stamps it with `nextEvent` and refuses a payload
+          it cannot date. With none, the buttons would set something that
+          could not be saved and that the projection has no offset 0 to apply
+          it to.
+
+          AND HIDDEN IN THE TIME MACHINE, which an earlier version of this
+          comment claimed `nextEvent={null}` already did. It does not — the
+          Dashboard passes `squad.nextEvent` to both views — so under a "GW15
+          points — Final" heading the sheet asked "Do you know if he starts?",
+          and tapping it wrote a call stamped with TODAY'S gameweek and moved
+          the live projection. `asOfGw == null` is the test every other
+          present-tense block on this sheet already uses; a press conference
+          cannot be held about a match that has been played.
+        */}
+        {asOfGw == null && nextEvent != null && (
         <div className="mt-4">
           <div className="text-sm font-semibold">Do you know if he starts?</div>
           <p className="mt-1 text-xs text-muted">
@@ -314,7 +471,9 @@ export default function PlayerModal({
                 key={call}
                 type="button"
                 aria-pressed={myCall === call}
-                onClick={() => setStartCall(demo, element.id, myCall === call ? null : call)}
+                onClick={() =>
+                  setStartCall(demo, nextEvent, element.id, myCall === call ? null : call)
+                }
                 className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition ${
                   myCall === call
                     ? "border-accent bg-accent/15 text-accent"
@@ -328,30 +487,69 @@ export default function PlayerModal({
           </div>
           {myCall && (
             <p className="mt-2 text-xs text-warn">
-              You set this, not the model — every projection for {element.web_name} now
-              follows it. Tap again to hand him back to the model.
+              You set this, not the model — {element.web_name}&apos;s NEXT gameweek follows
+              it, and the model takes the rest of the horizon back. Tap again to hand him
+              back entirely.
             </p>
           )}
         </div>
+        )}
 
-        {/* Season stats */}
+        {/*
+          Season stats.
+
+          IN THE TIME MACHINE THIS WAS TODAY'S SEASON. Under a "GW15 points —
+          Final" heading the block read POINTS 69 / FORM 4.3 / OWNED 4.8% /
+          GOALS 2 / ASSISTS 4 / XGI 7.02 — every one of them the `element` row
+          as it stands now, five gameweeks later, with nothing on screen saying
+          so. The sheet already fetches this player's rounds, so the four
+          countable figures have a real past-tense reading and are summed to the
+          gameweek being viewed.
+
+          Form and ownership are dropped there rather than relabelled: FPL
+          publishes no historic value for either per player, so there is no
+          honest number to put in the box. That is the same rule 9dd8025 applied
+          to the price predictor and `ep_next`.
+        */}
+        {/*
+          A ZERO IS NOT A LOADING STATE. `toDate` is null until the rounds
+          arrive and stays null if the fetch fails — `.catch(() => {})`
+          swallows it — and summing an empty array gave a confident
+          "Season to GW15 — Points 0 / Goals 0 / xGI 0.00". That is a
+          fabricated number, unlike the live sheet, which reads a real
+          `element` row and can always be trusted to have one.
+        */}
         <div className="mt-4">
-          <div className="text-sm font-semibold">Season</div>
+          <div className="text-sm font-semibold">
+            {asOfGw == null ? "Season" : `Season to GW${asOfGw}`}
+          </div>
+          {asOfGw != null && toDate == null ? (
+            <p className="mt-2 text-xs text-muted">Loading this player&apos;s rounds…</p>
+          ) : (
           <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-            {[
-              ["Points", String(element.total_points)],
-              ["Form", element.form],
-              ["Owned", `${element.selected_by_percent}%`],
-              ["Goals", String(element.goals_scored)],
-              ["Assists", String(element.assists)],
-              ["xGI", element.expected_goal_involvements],
-            ].map(([label, value]) => (
+            {(asOfGw == null || toDate == null
+              ? [
+                  ["Points", String(element.total_points)],
+                  ["Form", element.form],
+                  ["Owned", `${element.selected_by_percent}%`],
+                  ["Goals", String(element.goals_scored)],
+                  ["Assists", String(element.assists)],
+                  ["xGI", element.expected_goal_involvements],
+                ]
+              : [
+                  ["Points", String(toDate.points)],
+                  ["Goals", String(toDate.goals)],
+                  ["Assists", String(toDate.assists)],
+                  ["xGI", toDate.xgi.toFixed(2)],
+                ]
+            ).map(([label, value]) => (
               <div key={label} className="rounded-lg bg-panel-2 px-2 py-2">
                 <div className="text-[11px] uppercase tracking-wide text-muted">{label}</div>
                 <div className="font-mono font-semibold">{value}</div>
               </div>
             ))}
           </div>
+          )}
         </div>
       </div>
     </Sheet>

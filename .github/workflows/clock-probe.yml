@@ -1,0 +1,42 @@
+# Measure how the live FPL feeds actually tick. Publishes nothing.
+#
+# Same handle as the snapshot workflow next door, and for the same reason: the
+# sandbox this repo is developed from can reach github.com but NOT
+# fantasy.premierleague.com, so "push a branch" is the only trigger it has.
+# The findings come back through the job log.
+#
+# Run it WHILE A MATCH IS IN PLAY or it has nothing to measure — it prints
+# "nothing in play" and exits.
+name: FPL clock probe
+
+on:
+  push:
+    branches: [data-snapshot]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fpl-clock-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    # The script bounds itself; this is only a backstop against a hung fetch.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Probe the match clock
+        run: node scripts/snapshot/clock-probe.mjs
+
+      - name: Probe what a manager's score is reported as
+        env:
+          # Overridable so a specific team can be measured; the default is a
+          # handful of low ids, which are real long-standing entries.
+          FPL_ENTRY_IDS: ${{ vars.FPL_ENTRY_IDS || '1,2,3' }}
+        run: node scripts/snapshot/entry-probe.mjs

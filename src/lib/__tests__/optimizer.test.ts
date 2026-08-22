@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { makeMockBootstrap, makeMockFixtures, makeMockOwned } from "./mockdata";
+import { makeDemoUniverse } from "../demo";
 import {
   optimize,
+  chipScenario,
   pickBestXi,
   buildLaunchSquad,
   buildLaunchVariants,
@@ -24,7 +26,8 @@ import { MAX_FREE_TRANSFERS, MAX_PER_CLUB, VALID_FORMATIONS, validateSquad } fro
 // `Element` from lib.dom wins and the `as Element` casts below fail to
 // compile (TS2352, insufficient overlap) — loudly, not silently, but the
 // error names two types both called "Element" and reads like nonsense.
-import type { Element } from "../types";
+import type { Bootstrap, Element, OwnedPlayer } from "../types";
+import type { PlayerXp } from "../xp";
 import { projectAll } from "../xp";
 
 const bootstrap = makeMockBootstrap();
@@ -209,7 +212,20 @@ describe("optimize", () => {
      * and nothing else.
      */
     const src = fs.readFileSync(path.join(__dirname, "../optimizer.ts"), "utf8");
-    expect(src).toMatch(/const wcGain = Math\.max\(\s*0,/);
+    /*
+     * The Wildcard's floor is no longer a literal `Math.max(0, ...)`. It takes
+     * the best of the built squad, KEEPING the squad, and every squad the beam
+     * already evaluated — and "keeping" is what puts the floor at zero, now
+     * structurally rather than by clamping. That is the stronger version of the
+     * same bound, and there IS a behavioural test for it two describes below:
+     * the gain can no longer come out under the best transfer plan, which is
+     * what the old clamp was hiding.
+     */
+    expect(src).toMatch(/const wcBase = Math\.max\(/);
+    expect(src).toMatch(
+      /wcKeep,\n[\s\S]{0,220}?\.\.\.\(wcOpenNow \? plans\.map\(\(p\) => p\.plainNetXp \+ p\.hitCost\) : \[\]\)/
+    );
+    expect(src).toMatch(/const wcGain = wcBase - wcKeep;/);
     expect(src).toMatch(/projectedGain: Math\.max\(0, fhBest\.gain\)/);
   });
 
@@ -1150,9 +1166,17 @@ describe("captaincy against the field", () => {
     expect([...r.captainReads.values()].some((x) => x.wasTemplateCaptain)).toBe(false);
   });
 
-  it("splits the keep XI into what the field has and what it does not", () => {
+  it("splits the RECOMMENDED XI into what the field has and what it does not", () => {
+    /*
+     * It used to be the keep XI, while the Line-up section below the card
+     * defaults to "Best plan" — one player different on the demo, and the one
+     * number on the page whose subject is ownership exposure was describing a
+     * team the reader was being advised not to field.
+     */
     const r = run();
-    const total = r.keepXi.starters.reduce((a, s) => a + s.xp, 0);
+    const best = [...r.plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
+    const shown = best && best.gainVsKeep > 0.05 ? best.nextXi : r.keepXi;
+    const total = shown.starters.reduce((a, s) => a + s.xp, 0);
     expect(r.fieldSplit.total).toBeCloseTo(total, 6);
     expect(r.fieldSplit.shared + r.fieldSplit.differential).toBeCloseTo(total, 6);
     // Every mock element carries a published ownership, so none is dropped.
@@ -1223,6 +1247,62 @@ describe("chip advice carries season-long timing", () => {
     for (const f of flagged) {
       expect(f.gw, `${f.chip} flagged a gameweek already scored`).toBeGreaterThan(13);
       if (f.stop != null) expect(f.gw, `${f.chip} flagged past its window`).toBeLessThanOrEqual(f.stop);
+    }
+  });
+
+  it("never names a gameweek outside the chip's own window", () => {
+    /*
+     * THE CLIP THE TEST ABOVE CHECKS IS ON `timing.windows` — the STRUCTURAL
+     * register. The headline `detail`, which is what the reader sees first, was
+     * an argmax over `nextEvent … nextEvent + horizon - 1` with no reference to
+     * `bootstrap.chips` at all. Any horizon crossing an expiry therefore named
+     * a gameweek the chip cannot be played in, three lines above a timing note
+     * saying when the window closed.
+     */
+    const withWindows = (start: number, stop: number) =>
+      optimize({
+        bootstrap: {
+          ...bootstrap,
+          chips: ["bboost", "3xc", "freehit", "wildcard"].map((name) => ({
+            name,
+            start_event: start,
+            stop_event: stop,
+          })),
+        },
+        fixtures,
+        owned,
+        bank: 20,
+        freeTransfers: 2,
+        nextEvent: 11,
+        horizon: 5, // GW11..15
+      });
+
+    // Window closes mid-horizon: every named gameweek is inside it.
+    for (const a of withWindows(2, 13).chipAdvice) {
+      const gw = a.detail.match(/Best in GW(\d+)/);
+      if (a.chip === "wildcard") {
+        // Not a one-week chip: it names no gameweek at all, so it cannot name
+        // a wrong one. Pinned so a future edit does not quietly give it one.
+        expect(gw, "the Wildcard card must not name a gameweek").toBeNull();
+        continue;
+      }
+      expect(gw, `${a.chip} names no gameweek inside a window it overlaps`).not.toBeNull();
+      expect(Number(gw![1]), `${a.chip} named a gameweek past its window`).toBeLessThanOrEqual(13);
+      expect(Number(gw![1])).toBeGreaterThanOrEqual(11);
+    }
+
+    // Window already closed, and window not yet open: no gameweek is named and
+    // no gain is claimed. Both are cases the timing note explains.
+    for (const [start, stop] of [
+      [2, 9],
+      [30, 38],
+    ]) {
+      for (const a of withWindows(start, stop).chipAdvice) {
+        if (a.chip === "wildcard") continue;
+        expect(a.detail, `${a.chip} named a gameweek with no overlap`).not.toMatch(/Best in GW/);
+        expect(a.detail).toMatch(/inside this chip's window/);
+        expect(a.projectedGain).toBe(0);
+      }
     }
   });
 
@@ -1363,5 +1443,796 @@ describe("rankLaunchVariants", () => {
 
   it("survives an empty list", () => {
     expect(rankLaunchVariants([])).toEqual({ order: [], leaders: new Set(), bestIndex: 0 });
+  });
+});
+
+describe("pickBestXi says which failure it hit", () => {
+  /*
+   * Branching on the squad SIZE alone reported "no projected fixtures in the
+   * horizon" for a squad that is short and has no goalkeeper — and a missing
+   * keeper is the one thing that is definitely not a horizon problem, because
+   * pool starvation empties every position together.
+   */
+  const el = (id: number, type: 1 | 2 | 3 | 4): Element =>
+    ({ id, element_type: type, team: (id % 20) + 1, now_cost: 45, web_name: `P${id}` }) as Element;
+  const xp = () => 3;
+  const squadOf = (spec: [1 | 2 | 3 | 4, number][]) => {
+    const out: Element[] = [];
+    let id = 1;
+    for (const [type, n] of spec) for (let i = 0; i < n; i++) out.push(el(id++, type));
+    return out;
+  };
+
+  it("names the missing goalkeeper rather than blaming the horizon", () => {
+    for (const spec of [
+      [[2, 5], [3, 5], [4, 1]] as [1 | 2 | 3 | 4, number][], // 11, no keeper
+      [[2, 5], [3, 5], [4, 4]] as [1 | 2 | 3 | 4, number][], // 14, no keeper
+      [[2, 5], [3, 5], [4, 5]] as [1 | 2 | 3 | 4, number][], // 15, no keeper
+    ]) {
+      expect(() => pickBestXi(squadOf(spec), xp)).toThrow(/no goalkeeper/);
+      expect(() => pickBestXi(squadOf(spec), xp)).not.toThrow(/horizon/);
+    }
+  });
+
+  it("still blames the horizon when the squad is simply empty", () => {
+    // The real cause it was written for: `buildSquadWithinBudget` filters on a
+    // positive projection, so with no fixtures in the horizon every pool comes
+    // back empty and this is handed nothing at all.
+    expect(() => pickBestXi([], xp)).toThrow(/horizon/);
+  });
+
+  it("names a position it is short of, whichever one it is", () => {
+    // Enough keepers, not enough defenders.
+    expect(() =>
+      pickBestXi(squadOf([[1, 2], [2, 2], [3, 5], [4, 3]]), xp)
+    ).toThrow(/only 2 defenders/);
+  });
+
+  it("does not cry wolf over a squad that can form an XI perfectly well", () => {
+    // 2-3-5-5 has a legal 3-5-2 in it; the new branch must not fire on it.
+    expect(() => pickBestXi(squadOf([[1, 2], [2, 3], [3, 5], [4, 5]]), xp)).not.toThrow();
+    expect(() => pickBestXi(squadOf([[1, 2], [2, 5], [3, 5], [4, 3]]), xp)).not.toThrow();
+  });
+});
+
+describe("the planner's beam dedupe keeps the better state, not the first", () => {
+  /*
+   * `PlanState.score` is PATH-DEPENDENT — which gameweek a transfer was made in
+   * changes the accumulated score even when the resulting fifteen, the free
+   * transfers before and the number used are all identical — so two parents can
+   * converge on one key with different scores. First-come-first-served kept
+   * whichever had the higher-ranked PARENT.
+   *
+   * THE MUTATION TRAP THIS TEST EXISTS TO AVOID: on a realistic pool the two
+   * rules agree most of the time, so a test built from real data goes green
+   * under both. The universe below is constructed so that they cannot.
+   */
+  const NGW = 2;
+  const universe = (seed: number) => {
+    const rnd = (n: number) => {
+      const x = Math.sin(seed * 7919 + n * 104729) * 10000;
+      return x - Math.floor(x);
+    };
+    const type = (i: number): 1 | 2 | 3 | 4 => (i < 2 ? 1 : i < 7 ? 2 : i < 12 ? 3 : 4);
+    const els: Element[] = [];
+    for (let i = 0; i < 15; i++)
+      els.push({ id: i + 1, element_type: type(i), team: (i % 20) + 1, now_cost: 50, web_name: `O${i + 1}`, status: "a" } as Element);
+    for (let i = 0; i < 3; i++)
+      els.push({ id: 100 + i, element_type: 3, team: 15 + i, now_cost: 50, web_name: `C${i}`, status: "a" } as Element);
+    const xp = new Map<number, PlayerXp>();
+    for (const e of els) {
+      const perGw = new Map<number, number>();
+      for (let g = 1; g <= NGW; g++)
+        perGw.set(g, e.id >= 100 ? rnd(e.id * 10 + g) * 20 : 2 + rnd(e.id * 10 + g) * 4);
+      xp.set(e.id, {
+        next: perGw.get(1)!,
+        perGw,
+        total: [...perGw.values()].reduce((a, b) => a + b, 0),
+      } as unknown as PlayerXp);
+    }
+    return {
+      bootstrap: {
+        elements: els,
+        events: Array.from({ length: 38 }, (_, i) => ({ id: i + 1, finished: false, is_next: i === 0 })),
+        teams: Array.from({ length: 20 }, (_, i) => ({ id: i + 1 })),
+      } as unknown as Bootstrap,
+      owned: els.slice(0, 15).map((e) => ({ element: e, sellPrice: 50, purchasePrice: 50 })) as OwnedPlayer[],
+      xp,
+    };
+  };
+
+  const plan = (seed: number) => {
+    const { bootstrap, owned, xp } = universe(seed);
+    return planHorizon({
+      bootstrap,
+      fixtures: [],
+      owned,
+      bank: 0,
+      freeTransfers: 1,
+      nextEvent: 1,
+      horizon: NGW,
+      precomputedXp: xp,
+      // Wide enough that ordinary pruning is not the constraint — which is the
+      // point: no beam width fixes a dedupe that throws the better state away.
+      beamWidth: 400,
+      candidatesPerPosition: 20,
+      singlesPerState: 20,
+    });
+  };
+
+  it("beats the first-seen rule on universes where the two can disagree", () => {
+    /*
+     * These four are seeds where a strictly better state was being discarded,
+     * measured against the first-seen rule at the same beam width. The bars are
+     * the first-seen results, so the assertion fails the moment the dedupe goes
+     * back to keeping whichever arrived first.
+     */
+    const floors: [number, number][] = [
+      [9, 134.523089],
+      [11, 134.086829],
+      [17, 131.802438],
+      [96, 0], // the largest gain measured, 13.20; the exact floor is below
+    ];
+    for (const [seed, floor] of floors) {
+      const got = plan(seed).totalXp;
+      expect(got, `seed ${seed}`).toBeGreaterThan(floor);
+    }
+    expect(plan(9).totalXp).toBeCloseTo(140.793669, 4);
+    expect(plan(11).totalXp).toBeCloseTo(146.808035, 4);
+    expect(plan(17).totalXp).toBeCloseTo(142.691261, 4);
+  });
+
+  it("still returns a legal, self-consistent plan", () => {
+    const p = plan(11);
+    expect(p.totalXp).toBeGreaterThan(p.keepXp);
+    expect(p.gainVsKeep).toBeCloseTo(p.totalXp - p.keepXp, 9);
+    for (const st of p.steps) expect(st.bankAfter).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("the chip sheet names a gameweek the chip can be played in", () => {
+  /*
+   * `optimize` runs every chip argmax through `inChipWindow`, with a long note
+   * saying that naming a gameweek outside the window is worse than silence.
+   * `chipScenario` — which draws the sheet you open FROM that card — looped
+   * from `nextEvent` and never read `bootstrap.chips` at all. Reproduced on the
+   * demo with the real 2026/27 window shape and `nextEvent: 16`, horizon 5:
+   *
+   *   CARD   Triple Captain — window to GW19
+   *   SHEET  Triple Captain — Best in GW20, gain 6.89
+   *
+   * Any reader in GW15-GW19 on the five- or eight-gameweek horizon was in it.
+   *
+   * The mock's fixtures run GW11-GW15, so the windows below are placed inside
+   * that range rather than at the real season's GW19/GW20 boundary. The shape
+   * is what matters: a window that ends inside the horizon, one that starts
+   * inside it, and one that does not meet it at all.
+   */
+  const CHIPS = ["wildcard", "freehit", "bboost", "3xc"];
+  const windows = (start: number, stop: number) =>
+    CHIPS.map((name) => ({ name, start_event: start, stop_event: stop, number: 1 }));
+
+  const inputWith = (
+    chipWindows: { name: string; start_event: number; stop_event: number; number: number }[],
+    usedChips: { name: string; event: number }[] = []
+  ) => {
+    const bootstrap = { ...makeMockBootstrap(), chips: chipWindows };
+    return {
+      bootstrap,
+      fixtures: makeMockFixtures(),
+      owned: makeMockOwned(bootstrap),
+      bank: 5,
+      freeTransfers: 1,
+      nextEvent: 11,
+      horizon: 5,
+      usedChips,
+    };
+  };
+
+  it("never names a gameweek past the chip's expiry", () => {
+    // Horizon GW11-15, window closes after GW13.
+    for (const chip of CHIPS) {
+      const s = chipScenario(inputWith(windows(11, 13)), chip);
+      expect(s.bestGw, chip).not.toBeNull();
+      expect(s.bestGw!, chip).toBeLessThanOrEqual(13);
+    }
+  });
+
+  it("never names a gameweek before the window opens", () => {
+    // Horizon GW11-15, window does not open until GW14.
+    for (const chip of CHIPS) {
+      const s = chipScenario(inputWith(windows(14, 20)), chip);
+      expect(s.bestGw, chip).not.toBeNull();
+      expect(s.bestGw!, chip).toBeGreaterThanOrEqual(14);
+    }
+  });
+
+  it("names no gameweek at all when no window meets the horizon", () => {
+    for (const chip of CHIPS) {
+      const s = chipScenario(inputWith(windows(20, 38)), chip);
+      expect(s.bestGw, chip).toBeNull();
+      expect(s.gain, chip).toBe(0);
+    }
+  });
+
+  it("names no gameweek once the reader has spent the only window left", () => {
+    for (const chip of CHIPS) {
+      const s = chipScenario(
+        inputWith([...windows(1, 10), ...windows(11, 15)], [{ name: chip, event: 12 }]),
+        chip
+      );
+      expect(s.bestGw, chip).toBeNull();
+    }
+  });
+
+  it("still judges the Wildcard past the close of its own window", () => {
+    /*
+     * It is not a one-week chip: it rebuilds the squad for the rest of the
+     * season, so clipping the TAIL would charge it for a restriction it does
+     * not have. With the window closing after GW13 the gain must not fall.
+     */
+    const unconstrained = chipScenario(inputWith([]), "wildcard");
+    const clipped = chipScenario(inputWith(windows(11, 13)), "wildcard");
+    expect(clipped.gain).toBeCloseTo(unconstrained.gain, 9);
+    expect(clipped.gain).toBeGreaterThan(0);
+  });
+
+  it("does NOT credit the Wildcard with gameweeks before it opens", () => {
+    /*
+     * THE OTHER HALF, WHICH THE TEST ABOVE COULD NOT SEE. It exercises only
+     * the window-CLOSING case, so "judged over the whole horizon" passed while
+     * the head went unclipped too — and a rebuild cannot score in a gameweek
+     * the reader has no way to own that squad in. Measured on this fixture at
+     * `nextEvent: 11`, horizon 5, window GW14-20: the sheet reported 37.267,
+     * identical to having no window at all, of which 13.849 came from GW11-13.
+     */
+    const unconstrained = chipScenario(inputWith([]), "wildcard");
+    const later = chipScenario(inputWith(windows(14, 20)), "wildcard");
+    expect(later.bestGw).toBe(14);
+    expect(later.gain).toBeLessThan(unconstrained.gain - 1);
+  });
+
+  it("draws the Wildcard's XI for the gameweek in its own heading", () => {
+    /*
+     * `xiAt(squad, nextEvent)` survived the clipping commit untouched, so with
+     * the chip opening at GW14 the sheet printed "Best in GW14" over the GW11
+     * eleven — 59.113 against 65.149 on this fixture, with different starters.
+     */
+    const later = chipScenario(inputWith(windows(14, 20)), "wildcard");
+    const input = inputWith(windows(14, 20));
+    const xp = projectAll({
+      bootstrap: input.bootstrap,
+      fixtures: input.fixtures,
+      nextEvent: input.nextEvent,
+      horizon: input.horizon,
+      pastSeason: undefined,
+    });
+    const at = (gw: number) =>
+      pickBestXi(later.squad!, (id) => xp.get(id)?.perGw.get(gw) ?? 0).totalXp;
+    expect(later.xi!.totalXp).toBeCloseTo(at(later.bestGw!), 9);
+    // And the two gameweeks really do disagree, or the assertion above is
+    // satisfied by a fixture where every week is the same.
+    expect(at(input.nextEvent)).not.toBeCloseTo(at(later.bestGw!), 3);
+  });
+
+  it("keeps the card and the sheet on the same gameweeks", () => {
+    // The card names no gameweek, but it must not measure a gap over weeks the
+    // sheet has just excluded — that is the card/sheet split this whole
+    // describe exists for, one level up.
+    const input = inputWith(windows(14, 20));
+    const card = optimize(input).chipAdvice.find((c) => c.chip === "wildcard")!;
+    const sheet = chipScenario(input, "wildcard");
+    expect(card.projectedGain).toBeCloseTo(sheet.gain, 6);
+  });
+});
+
+describe("the horizon total on screen is points, not the ranking key", () => {
+  /*
+   * `horizonScore` weights gameweek `i` by `gwDecay ** i` (0.88). That is what
+   * makes the planner prefer near-term certainty and it stays — but it was
+   * ALSO the number the card printed, under a heading saying "next N GWs" and
+   * beside a first-gameweek figure it could not be reconciled with. Measured on
+   * the demo, keep-the-team, the same XIs both ways: 0% / 11% / 21% / 33% low
+   * at horizons 1 / 3 / 5 / 8.
+   */
+  const run = (horizon: number) => {
+    const bootstrap = makeMockBootstrap();
+    return optimize({
+      bootstrap,
+      fixtures: makeMockFixtures(),
+      owned: makeMockOwned(bootstrap),
+      bank: 5,
+      freeTransfers: 1,
+      nextEvent: 11,
+      horizon,
+    });
+  };
+
+  it("agrees with the weighted total only at horizon 1, where the weight is 1", () => {
+    const one = run(1);
+    expect(one.keepHorizonPlainXp).toBeCloseTo(one.keepHorizonXp, 9);
+    // And at horizon 1 both are just the first gameweek's XI.
+    expect(one.keepHorizonPlainXp).toBeCloseTo(one.keepXi.totalXp, 9);
+  });
+
+  it("is strictly larger over a real horizon, by roughly the decay", () => {
+    const five = run(5);
+    expect(five.keepHorizonPlainXp).toBeGreaterThan(five.keepHorizonXp);
+    // A plain sum of five gameweeks cannot average less than the weighted one.
+    expect(five.keepHorizonPlainXp / 5).toBeGreaterThan(five.keepHorizonXp / 5);
+    // The gap grows with the horizon: that is the whole shape of the defect.
+    const three = run(3);
+    const gap = (r: { keepHorizonPlainXp: number; keepHorizonXp: number }) =>
+      1 - r.keepHorizonXp / r.keepHorizonPlainXp;
+    expect(gap(five)).toBeGreaterThan(gap(three));
+  });
+
+  it("stays reconcilable with the first gameweek the card quotes", () => {
+    // The reader can divide. At horizon 5 the plain total must not average
+    // wildly below the GW1 figure printed beside it on the same card — the
+    // weighted one did, by a fifth.
+    const five = run(5);
+    expect(five.keepHorizonPlainXp / 5).toBeGreaterThan(five.keepXi.totalXp * 0.85);
+  });
+});
+
+describe("the Wildcard cannot be worth less than one transfer", () => {
+  /*
+   * `dreamSquadWithinValue` maximises the sum of `totalDiscounted` over all
+   * FIFTEEN at par while `horizonScore` counts only the best XI — two
+   * objectives, so its squad is a local optimum of the wrong one. Measured on
+   * the demo, same squad, same week, unclamped:
+   *
+   *   horizon      1       2       3       5       8
+   *   wildcard   0.269   3.164   0.663   0.690   5.440
+   *   1 transfer 0.375   1.199   1.143   1.283   2.663
+   *
+   * so at three of the five the "best squad your money can buy" was worth less
+   * than a move the app recommends with one free transfer — which cannot be
+   * true, because a wildcard can make that move too. Every squad the beam
+   * already evaluated is reachable on the chip WITHOUT the hit, so `grossXp`
+   * is a lower bound and costs nothing to apply.
+   */
+  /*
+   * ON THE DEMO, NOT THE MOCK. Mutation-testing showed why: with the floor
+   * removed, the mock's squad still comes out fine — the greedy build happens
+   * to dominate there — so a test on `makeMockBootstrap` could not fail on the
+   * thing it was written for. The demo's mid-season universe is where the two
+   * objectives actually come apart, and it is where the table above was
+   * measured.
+   */
+  const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+  const run = (horizon: number, freeTransfers = 1) => {
+    const u = makeDemoUniverse(NOW);
+    const bootstrap = u.bootstrap;
+    const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
+      const element = bootstrap.elements.find((e) => e.id === p.element)!;
+      return {
+        element,
+        sellPrice: element.now_cost,
+        purchasePrice: element.now_cost,
+        pickPosition: i + 1,
+        isCaptain: p.is_captain,
+        isViceCaptain: p.is_vice_captain,
+      };
+    });
+    return optimize({
+      bootstrap,
+      fixtures: u.fixtures,
+      owned,
+      bank: 5,
+      freeTransfers,
+      nextEvent: bootstrap.events.find((e) => e.is_next)!.id,
+      horizon,
+    });
+  };
+
+  it("is never beaten by a transfer plan the same panel recommends", () => {
+    /*
+     * IN THE SAME UNITS AS THE PANEL. While `wcGain` was decayed and the
+     * transfer card was plain, the guarantee held in the objective and not on
+     * screen: swept over horizons 1-8 x free transfers {1,2,3,5} x bank
+     * {0,5,20}, the wildcard was beaten in 43 of 96 configurations, by up to
+     * 4.56 points. Free transfers of 2 or more is the ordinary state from GW3
+     * on and the demo only ever shows 1, which is why one spot-check at
+     * `freeTransfers: 1` looked fine — hence the sweep here.
+     */
+    for (const horizon of [2, 5, 8]) {
+      for (const ft of [1, 3]) {
+        const res = run(horizon, ft);
+        const wc = res.chipAdvice?.find((c) => c.chip === "wildcard");
+        const best = Math.max(0, ...res.plans.map((p) => p.gainVsKeep));
+        expect(wc, `h=${horizon} ft=${ft}`).toBeTruthy();
+        expect(wc!.projectedGain, `h=${horizon} ft=${ft}`).toBeGreaterThanOrEqual(best - 1e-9);
+      }
+    }
+  });
+
+  it("is still bounded below by zero", () => {
+    // Keeping the squad is one of the things it takes the best of, so a
+    // negative gap is not reachable — but it was `Math.max(0, …)` before and
+    // dropping that clamp must not reintroduce one.
+    for (const horizon of [1, 3, 5]) {
+      const wc = run(horizon).chipAdvice?.find((c) => c.chip === "wildcard");
+      expect(wc!.projectedGain).toBeGreaterThanOrEqual(0);
+    }
+  });
+});
+
+describe("'Against the field' describes the XI the panel recommends", () => {
+  /*
+   * `splitByField` was fed `keepXi.starters` — the NO-TRANSFER eleven — while
+   * the Line-up section below that card defaults to "Best plan". On the demo
+   * that was one player different: ARS Back 3 (9.7% owned) in the number, BOU
+   * Back 3 (6.3%) on the pitch. The one figure on the page whose entire subject
+   * is ownership exposure ignored the transfer the app had just recommended.
+   */
+  const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+  const res = (() => {
+    const u = makeDemoUniverse(NOW);
+    const bootstrap = u.bootstrap;
+    const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
+      const element = bootstrap.elements.find((e) => e.id === p.element)!;
+      return {
+        element,
+        sellPrice: element.now_cost,
+        purchasePrice: element.now_cost,
+        pickPosition: i + 1,
+        isCaptain: p.is_captain,
+        isViceCaptain: p.is_vice_captain,
+      };
+    });
+    return optimize({
+      bootstrap,
+      fixtures: u.fixtures,
+      owned,
+      bank: 5,
+      freeTransfers: 1,
+      nextEvent: bootstrap.events.find((e) => e.is_next)!.id,
+      horizon: 5,
+    });
+  })();
+
+  it("totals the same eleven the pitch draws by default", () => {
+    const best = [...res.plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
+    const shown = best && best.gainVsKeep > 0.05 ? best.nextXi : res.keepXi;
+    const sum = shown.starters.reduce((s, x) => s + x.xp, 0);
+    // `splitByField` drops players whose ownership FPL has not published, so
+    // the totals agree only up to those.
+    expect(res.fieldSplit.total).toBeCloseTo(sum, 6);
+    expect(res.fieldSplit.unknown).toBe(0);
+  });
+
+  it("says which eleven it is describing", () => {
+    const best = [...res.plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
+    expect(res.fieldXiIsPlan).toBe(Boolean(best && best.gainVsKeep > 0.05));
+  });
+
+  it("falls back to the held XI when no transfer is worth making", () => {
+    // With the recommendation switched off there is nothing to describe but
+    // the squad the reader holds.
+    const u = makeDemoUniverse(NOW);
+    const bootstrap = u.bootstrap;
+    const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
+      const element = bootstrap.elements.find((e) => e.id === p.element)!;
+      return {
+        element,
+        sellPrice: element.now_cost,
+        purchasePrice: element.now_cost,
+        pickPosition: i + 1,
+        isCaptain: p.is_captain,
+        isViceCaptain: p.is_vice_captain,
+      };
+    });
+    const noMoves = optimize({
+      bootstrap,
+      fixtures: u.fixtures,
+      owned,
+      bank: 5,
+      freeTransfers: 1,
+      nextEvent: bootstrap.events.find((e) => e.is_next)!.id,
+      horizon: 5,
+      maxTransfers: 0,
+    });
+    expect(noMoves.fieldXiIsPlan).toBe(false);
+    const sum = noMoves.keepXi.starters.reduce((s, x) => s + x.xp, 0);
+    expect(noMoves.fieldSplit.total).toBeCloseTo(sum, 6);
+  });
+});
+
+describe("a −4 hit costs 4, not 4 divided by the decay", () => {
+  /*
+   * `horizonScore` weights gameweek `i` by `gwDecay ** i` (0.88) and `hitCost`
+   * is a flat 4, so the benefit was shrunk and the cost charged at face value.
+   * The ratio `keepHorizonXp / keepHorizonPlainXp` is what a −4 really cost,
+   * measured on the demo:
+   *
+   *   horizon        1      3      5      8
+   *   ratio        1.000  0.885  0.787  0.668
+   *   a −4 hit     4.00   4.52   5.08   5.99   plain points
+   *
+   * At horizon 8 a two-transfer move had to gain 6.0 before the "the hit
+   * doesn't pay off" warning cleared. That is a constant nobody chose and no
+   * sweep supports.
+   */
+  const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+  const run = (horizon: number) => {
+    const u = makeDemoUniverse(NOW);
+    const bootstrap = u.bootstrap;
+    const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
+      const element = bootstrap.elements.find((e) => e.id === p.element)!;
+      return {
+        element,
+        sellPrice: element.now_cost,
+        purchasePrice: element.now_cost,
+        pickPosition: i + 1,
+        isCaptain: p.is_captain,
+        isViceCaptain: p.is_vice_captain,
+      };
+    });
+    return optimize({
+      bootstrap,
+      fixtures: u.fixtures,
+      owned,
+      bank: 5,
+      freeTransfers: 1,
+      nextEvent: bootstrap.events.find((e) => e.is_next)!.id,
+      horizon,
+    });
+  };
+
+  it("charges exactly the hit, in the same currency as the gain", () => {
+    for (const horizon of [1, 3, 5, 8]) {
+      const res = run(horizon);
+      const free = res.plans.find((p) => p.hitCost === 0);
+      const hit = res.plans.find((p) => p.hitCost === 4);
+      if (!free || !hit) continue;
+      // The gap between the two plans' gains is their gross difference minus
+      // exactly 4 — no more, whatever the horizon.
+      const grossGap = hit.plainNetXp + hit.hitCost - (free.plainNetXp + free.hitCost);
+      expect(hit.gainVsKeep - free.gainVsKeep, `h=${horizon}`).toBeCloseTo(grossGap - 4, 6);
+    }
+  });
+
+  it("states the gain in the same units as the baseline beside it", () => {
+    // `keepHorizonPlainXp` is what the "Keep the team" row prints. A gain
+    // measured against `keepHorizonXp` could not be added to it.
+    for (const horizon of [3, 8]) {
+      const res = run(horizon);
+      for (const p of res.plans) {
+        expect(p.gainVsKeep, `h=${horizon}`).toBeCloseTo(
+          p.plainNetXp - res.keepHorizonPlainXp,
+          6
+        );
+      }
+    }
+  });
+
+  it("does not let the decay inflate the hit as the horizon grows", () => {
+    /*
+     * The signature of the old defect: a two-transfer plan whose plain
+     * arithmetic clears the −4 while the decayed one does not. At horizon 8 the
+     * demo's two-transfer plan showed +0.16 and is now +3.18.
+     */
+    const res = run(8);
+    const hit = res.plans.find((p) => p.hitCost === 4);
+    expect(hit).toBeTruthy();
+    const decayedGain = hit!.netXp - res.keepHorizonXp;
+    expect(hit!.gainVsKeep).toBeGreaterThan(decayedGain + 1);
+  });
+});
+
+describe("one answer to 'which plan is best'", () => {
+  /*
+   * Moving `gainVsKeep` to plain points moved the Recommended badge with it and
+   * left `fieldXi` and the Line-up pitch ranking on the decayed `netXp`. The
+   * two disagree over a real band: with `p = keepHorizonXp / keepHorizonPlainXp`
+   * they differ whenever the extra transfer's plain gain is between 4 and 4/p —
+   * 4 to 5.99 at horizon 8, 4 to 7.36 at 12. Inside it the reader saw
+   * "Recommended" on the two-transfer card while the pitch below it and the
+   * ownership figure beside it both described the one-transfer eleven.
+   *
+   * The fixture is the demo squad with £4.5m in the bank — a manager who has
+   * just sold a premium — which puts the second transfer's gross gain at 4.63
+   * and lands it squarely in the band. Measured there, the two rankings pick
+   * different plans at horizons 8 and 12 and at both free-transfer counts.
+   */
+  const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+  const inBand = (horizon: number, freeTransfers: number) => {
+    const u = makeDemoUniverse(NOW);
+    const bootstrap = u.bootstrap;
+    const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
+      const element = bootstrap.elements.find((e) => e.id === p.element)!;
+      return {
+        element,
+        sellPrice: element.now_cost,
+        purchasePrice: element.now_cost,
+        pickPosition: i + 1,
+        isCaptain: p.is_captain,
+        isViceCaptain: p.is_vice_captain,
+      };
+    });
+    return optimize({
+      bootstrap,
+      fixtures: u.fixtures,
+      owned,
+      bank: 45,
+      freeTransfers,
+      nextEvent: bootstrap.events.find((e) => e.is_next)!.id,
+      horizon,
+    });
+  };
+
+  it("is a fixture where the two rankings really do disagree", () => {
+    // Or everything below is satisfied by a state that cannot tell them apart.
+    for (const [horizon, ft] of [[8, 1], [12, 1], [8, 0]] as const) {
+      const res = inBand(horizon, ft);
+      const byPlain = [...res.plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
+      const byDecay = [...res.plans].sort((a, b) => b.netXp - a.netXp)[0];
+      expect(byPlain.transfers.length, `h=${horizon} ft=${ft}`).not.toBe(byDecay.transfers.length);
+    }
+  });
+
+  it("badges, draws and describes the same eleven", () => {
+    for (const [horizon, ft] of [[8, 1], [12, 1], [8, 0]] as const) {
+      const res = inBand(horizon, ft);
+      const badged = [...res.plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
+      // The same rule `fieldXi` uses inside `optimize`.
+      const shown = badged && badged.gainVsKeep > 0.05 ? badged.nextXi : res.keepXi;
+      const sum = shown.starters.reduce((s, x) => s + x.xp, 0);
+      expect(res.fieldSplit.total, `h=${horizon} ft=${ft}`).toBeCloseTo(sum, 6);
+      expect(res.fieldXiIsPlan, `h=${horizon} ft=${ft}`).toBe(
+        Boolean(badged && badged.gainVsKeep > 0.05)
+      );
+    }
+  });
+
+  it("never prefers a plan the reader can see is behind", () => {
+    for (const [horizon, ft] of [[8, 1], [12, 1], [8, 0]] as const) {
+      const res = inBand(horizon, ft);
+      const best = [...res.plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
+      for (const p of res.plans) {
+        expect(p.gainVsKeep, `h=${horizon} ft=${ft}`).toBeLessThanOrEqual(best.gainVsKeep + 1e-9);
+      }
+    }
+  });
+});
+
+describe("the season planner charges a hit at 4, whenever it is taken", () => {
+  /*
+   * `xi.totalXp * decayAt(gw) - hit` weighted the benefit by `0.88 ** offset`
+   * and charged the cost at face value — and here the index is WHEN THE
+   * TRANSFER IS MADE, not the horizon, so the penalty grew the further out the
+   * planner looked:
+   *
+   *   hit taken at offset   0      2      4      5
+   *   gain weight         1.000  0.774  0.600  0.527
+   *   what a −4 cost      4.00   5.17   6.67   7.59   plain points
+   *
+   * The section's own copy advertises "when a −4 actually pays for itself".
+   */
+  const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+  const plan = (horizon: number, freeTransfers = 1) => {
+    const u = makeDemoUniverse(NOW);
+    const bootstrap = u.bootstrap;
+    const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
+      const element = bootstrap.elements.find((e) => e.id === p.element)!;
+      return {
+        element,
+        sellPrice: element.now_cost,
+        purchasePrice: element.now_cost,
+        pickPosition: i + 1,
+        isCaptain: p.is_captain,
+        isViceCaptain: p.is_vice_captain,
+      };
+    });
+    return planHorizon({
+      bootstrap,
+      fixtures: u.fixtures,
+      owned,
+      bank: 45,
+      freeTransfers,
+      nextEvent: bootstrap.events.find((e) => e.is_next)!.id,
+      horizon,
+    });
+  };
+
+  it("prints totals the reader can add up, beside the score it decides on", () => {
+    /*
+     * `gainVsKeep` stays the beam's own decayed objective — making it plain was
+     * tried and reverted, because the beam searches on the decayed score, so a
+     * plain gain comes out NEGATIVE on a plan the planner has just chosen
+     * (−2.97 on the demo at horizon 6). What the panel prints as POINTS are
+     * these two, and they have to be real sums.
+     */
+    for (const horizon of [4, 6, 8]) {
+      const p = plan(horizon);
+      const fromSteps = p.steps.reduce((s, st) => s + st.xi.totalXp, 0) - p.totalHits;
+      expect(p.plainTotalXp, `h=${horizon}`).toBeCloseTo(fromSteps, 6);
+      // Every hit shown in the steps is in the total, once.
+      expect(p.totalHits, `h=${horizon}`).toBe(p.steps.reduce((s, st) => s + st.hit, 0));
+      expect(p.plainKeepXp, `h=${horizon}`).toBeGreaterThan(0);
+    }
+  });
+
+  it("baselines against the squad the reader HOLDS, not the one the plan ends with", () => {
+    /*
+     * `keepXp` reads `beam[0].players` and is correct, because it runs BEFORE
+     * the search loop while `beam` still holds the single starting state. The
+     * plain baseline copied that idiom AFTER the loop, where `beam` is the
+     * search frontier — so "never transferring" was the post-transfer squad.
+     *
+     * On the real 2026-08-21 snapshot at GW2 over six gameweeks it printed
+     * 240.1 against a plan of 227.8: the card told the reader that doing
+     * nothing beat the plan the panel had just built, by 12.3 points. The demo
+     * hid it — 368.3 against a true 369.32 — which is why this asserts the
+     * baseline against an independent recomputation rather than against a sign.
+     */
+    for (const horizon of [4, 6]) {
+      const u = makeDemoUniverse(NOW);
+      const bootstrap = u.bootstrap;
+      const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
+        const element = bootstrap.elements.find((e) => e.id === p.element)!;
+        return {
+          element,
+          sellPrice: element.now_cost,
+          purchasePrice: element.now_cost,
+          pickPosition: i + 1,
+          isCaptain: p.is_captain,
+          isViceCaptain: p.is_vice_captain,
+        };
+      });
+      const nextEvent = bootstrap.events.find((e) => e.is_next)!.id;
+      const p = planHorizon({
+        bootstrap,
+        fixtures: u.fixtures,
+        owned,
+        bank: 45,
+        freeTransfers: 1,
+        nextEvent,
+        horizon,
+      });
+      const xp = projectAll({
+        bootstrap,
+        fixtures: u.fixtures,
+        nextEvent,
+        horizon,
+        pastSeason: undefined,
+      });
+      let held = 0;
+      for (let i = 0; i < horizon; i++) {
+        const gw = nextEvent + i;
+        held += pickBestXi(
+          owned.map((o) => o.element),
+          (id) => xp.get(id)?.perGw.get(gw) ?? 0
+        ).totalXp;
+      }
+      expect(p.plainKeepXp, `h=${horizon}`).toBeCloseTo(held, 6);
+      // And the plan the app just built must not read as worse than nothing.
+      expect(p.plainTotalXp, `h=${horizon}`).toBeGreaterThan(p.plainKeepXp);
+    }
+  });
+
+  it("weighs a hit against the gameweek it is paid in, not against gameweek one", () => {
+    /*
+     * The property, stated on the search key rather than on an outcome: a
+     * gameweek's contribution must be a single decayed quantity, so that the
+     * hit/gain trade is the same at every offset. Pinned at source because the
+     * quantity is internal to the beam.
+     */
+    const src = fs.readFileSync(path.join(__dirname, "../optimizer.ts"), "utf8");
+    expect(src).toMatch(/const gwScore = \(xi\.totalXp - hit\) \* decayAt\(gw\);/);
+    // In the CODE — the note above it quotes the old expression.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    expect(code).not.toMatch(/xi\.totalXp \* decayAt\(gw\) - hit/);
+  });
+
+  it("keeps the decayed score as the objective, and says so", () => {
+    // The panel prints the plain totals as points and the decayed gain as "the
+    // planner's weighted score". They must stay distinguishable quantities.
+    const p = plan(6);
+    expect(p.totalXp).not.toBeCloseTo(p.plainTotalXp, 1);
+    expect(p.keepXp).not.toBeCloseTo(p.plainKeepXp, 1);
+    expect(p.gainVsKeep).toBeCloseTo(p.totalXp - p.keepXp, 9);
   });
 });

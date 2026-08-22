@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { currentFeed, fetchRecentForm, type TeamData } from "@/lib/fpl";
+import { setRecentForm as publishRecentForm } from "@/lib/recentFormStore";
 import type { RecentForm } from "@/lib/types";
 import { cachedPastSeason, loadPastSeason } from "@/lib/pastSeasonStore";
 import { launchPool } from "@/lib/pool";
@@ -161,18 +162,34 @@ export default function OptimizePanel({
      * pre-selection above needs the same answer — and because a tie has to be
      * shown as a tie rather than resolved into a winner. Read its note.
      */
+    // Has any football been played? `is_current` flips at the GW1 deadline;
+    // `finished` means bonus confirmed and is three days later.
+    const seasonUnderway = data.bootstrap.events.some(
+      (e) => e.finished || e.is_current || e.is_previous
+    );
     const launchLeaders = launch ? rankLaunchVariants(launch).leaders : new Set<string>();
     const chosen = launch?.[launchPick] ?? null;
     return (
       <div className="space-y-4">
         <div className="card p-5">
           <div className="text-lg font-bold">🚀 Season launch: build your £100m squad</div>
+          {/*
+            DO NOT SAY NOBODY HAS KICKED A BALL. This branch fires whenever an
+            entry has no picks, not only in July: with the real feed at GW1
+            current and GW2 next it greeted a reader over a GW2–GW6 fixture
+            window while the Live tab in the same app was rendering a played
+            match. Whether football has started is a fact the app already knows
+            — the same `is_current` test `entryNotFoundMessage` uses — so it
+            says the true one.
+          */}
           <p className="mt-1 text-sm text-muted">
-            No squad registered yet — perfect timing. Pre-season there isn&apos;t one single
-            &quot;best&quot; team (nobody&apos;s kicked a ball yet), so the drafter gives you a
-            few viable structures within the £100.0m budget — built from prices, FPL&apos;s own
-            projections, team strength and the GW{upcomingEvent}–{upcomingEvent + 4} fixtures.
-            Pick the approach you like.
+            No squad registered yet — perfect timing.{" "}
+            {seasonUnderway
+              ? "There is no single \u201cbest\u201d team, so the drafter gives you a few viable structures"
+              : "Pre-season there isn\u2019t one single \u201cbest\u201d team (nobody\u2019s kicked a ball yet), so the drafter gives you a few viable structures"}{" "}
+            within the £100.0m budget — built from prices, FPL&apos;s own projections, team
+            strength and the GW{upcomingEvent}–{upcomingEvent + 4} fixtures. Pick the
+            approach you like.
           </p>
           <button onClick={runLaunch} disabled={launchRunning} className="btn-primary mt-3 rounded-lg px-5 py-2.5">
             {launchRunning ? "Drafting…" : launch ? "Re-draft" : "Build my launch squads"}
@@ -441,10 +458,18 @@ export default function OptimizePanel({
         .slice(0, 15)
         .forEach((e) => ids.add(e.id));
     }
+    // Captured BEFORE the fetch, not after it. This is hundreds of round trips
+    // with no abort signal, and the reader can navigate to the demo while it
+    // runs; `setRecentForm` drops a map whose feed is no longer current rather
+    // than filing real footballers under demo ids.
+    const feed = currentFeed();
     const map = await fetchRecentForm([...ids], 5, 8, (done, total) =>
       setPhase(`Checking recent line-ups… ${done}/${total}`)
     );
     setRecentForm(map);
+    // And publish it, so the Dashboard's own projection stops disagreeing with
+    // this one about the same player — see `recentFormStore`.
+    publishRecentForm(map, feed);
     return map;
   }
 
@@ -468,6 +493,9 @@ export default function OptimizePanel({
         recentForm: recent,
         // `loadRecentForm` has already awaited this, so the read is settled.
         pastSeason: cachedPastSeason() ?? undefined,
+        // Which half's chip window the reader is still reasoning about depends
+        // on which copies they have spent — see `chipWindow`.
+        usedChips: data.history?.chips ?? [],
       });
       setResult(res);
     } catch {
@@ -525,6 +553,22 @@ export default function OptimizePanel({
        * not acceptable; this call site was simply not obeying it.
        */
       const past = await ensurePastSeason();
+      /*
+       * AND RECENT FORM, FOR EXACTLY THE SAME REASON — which the note above
+       * fixed for last season's record and then left half-done.
+       *
+       * `loadRecentForm` is awaited by `run()` and `runPlan()` and by nothing
+       * else, so a chip tapped before Optimize scored with `recentForm`
+       * undefined while the advisor two inches away scored with it. The two
+       * disagreed on screen: measured on the demo, the Wildcard sheet said
+       * "+2.3 pts over 5 gameweeks" where the advisor said +0.0, and Bench
+       * Boost 13.6 against 13.4. The badges are live from first paint, so
+       * tapping one first is the ordinary path, not a corner.
+       *
+       * `loadRecentForm` memoises, so this is free once either button has been
+       * pressed, and `ensurePastSeason` above is already inside it.
+       */
+      const recent = await loadRecentForm();
       await new Promise((r) => setTimeout(r, 20));
       const scen = chipScenario(
         {
@@ -536,8 +580,9 @@ export default function OptimizePanel({
           nextEvent: squad!.nextEvent!,
           horizon,
           precomputedXp: result?.xp,
-          recentForm: recentForm ?? undefined,
+          recentForm: recent,
           pastSeason: past,
+          usedChips: data.history?.chips ?? [],
         },
         chip
       );
@@ -607,13 +652,26 @@ export default function OptimizePanel({
                * the window it now claimed. Clearing is the honest state — the
                * reader presses Optimize again, which is one tap and cannot
                * mislead.
+               *
+               * `plan` IS NOT ONE OF THEM, and clearing it was a bug of the
+               * same family read backwards. The Multi-GW planner does not take
+               * this horizon — `runPlan` passes a fixed 6, its button says
+               * "Plan next 6 GWs" and its copy says "the next six deadlines".
+               * So the plan on screen is still an exact answer to the question
+               * it was asked, and throwing it away costs the reader the panel's
+               * single most expensive computation to fix a mislabelling that
+               * was never there.
+               *
+               * `failure` goes, though. It is the reason the results now being
+               * cleared are missing, so leaving it behind states a failure
+               * about nothing the screen still shows.
                */
               setHorizon(parseInt(e.target.value));
               setResult(null);
-              setPlan(null);
               setChipView(null);
+              setFailure(null);
             }}
-            className="rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
+            className="min-h-11 rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
           >
             {[1, 2, 3, 5, 8].map((h) => (
               <option key={h} value={h}>
@@ -625,7 +683,7 @@ export default function OptimizePanel({
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
           <button
             type="button"
-            className="-m-1.5 p-1.5"
+            className="-m-1.5 flex min-h-11 items-center p-1.5"
             onClick={() =>
               setInfoOpen({
                 title: `${squad.freeTransfers} free transfer${squad.freeTransfers === 1 ? "" : "s"}`,
@@ -643,7 +701,7 @@ export default function OptimizePanel({
           </button>
           <button
             type="button"
-            className="-m-1.5 p-1.5"
+            className="-m-1.5 flex min-h-11 items-center p-1.5"
             onClick={() =>
               setInfoOpen({
                 title: `Bank £${fmtPrice(squad.bank)}m`,
@@ -660,7 +718,7 @@ export default function OptimizePanel({
             <button
               key={i}
               type="button"
-              className="-m-1.5 p-1.5"
+              className="-m-1.5 flex min-h-11 items-center p-1.5"
               disabled={chipLoading != null}
               onClick={() => showChip(c.name)}
             >
@@ -680,9 +738,17 @@ export default function OptimizePanel({
         </button>
       </div>
 
+      {/*
+       * `alert`, NOT `status`. Both are live regions, but `status` is polite:
+       * a screen reader queues it behind whatever it is already saying, and
+       * every one of these appears while the panel is mid-announcement about
+       * the work that just failed. `alert` is assertive and interrupts, which
+       * is the right register for "the thing you asked for did not happen" —
+       * the reader is otherwise left waiting on a spinner that has gone.
+       */}
       {failure && (
         <div
-          role="status"
+          role="alert"
           className="card border-danger/50 bg-danger/10 p-4 text-sm text-danger"
         >
           {failure}
@@ -721,7 +787,7 @@ export default function OptimizePanel({
             type="button"
             onClick={runPlan}
             disabled={planning || running}
-            className="rounded-lg border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent hover:bg-accent/20 active:bg-accent/20 disabled:opacity-50"
+            className="min-h-11 rounded-lg border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent hover:bg-accent/20 active:bg-accent/20 disabled:opacity-50"
           >
             {planning ? "Planning…" : plan ? "Re-plan 6 GWs" : "Plan next 6 GWs"}
           </button>
@@ -735,13 +801,29 @@ export default function OptimizePanel({
         {plan && (
           <div className="mt-3 space-y-3">
             <div className="card flex flex-wrap items-center gap-x-6 gap-y-1 p-4 text-sm">
+              {/*
+                TWO NUMBERS, BECAUSE THEY ANSWER TWO QUESTIONS. `gainVsKeep` is
+                the beam's own objective — decayed, so a gameweek six weeks out
+                counts for less — and it is what decides that this plan beats
+                doing nothing. It is not a points total and printing it alone as
+                "xp" was the same mislabelling the transfer card carried. The
+                plain totals beside it are points the reader can add up.
+              */}
               <div>
                 <span className="text-muted">Plan value:</span>{" "}
                 <b className="text-accent">
                   {plan.gainVsKeep >= 0 ? "+" : ""}
-                  {plan.gainVsKeep.toFixed(1)} xp
+                  {plan.gainVsKeep.toFixed(1)}
                 </b>{" "}
-                <span className="text-muted">vs never transferring</span>
+                <span className="text-muted">on the planner&apos;s weighted score</span>
+              </div>
+              <div>
+                <span className="text-muted">Projected:</span>{" "}
+                <b>{plan.plainTotalXp.toFixed(1)} pts</b>{" "}
+                <span className="text-muted">
+                  over {plan.steps.length} GW{plan.steps.length === 1 ? "" : "s"}, against{" "}
+                  {plan.plainKeepXp.toFixed(1)} for never transferring
+                </span>
               </div>
               {plan.totalHits > 0 ? (
                 <div className="text-danger">−{plan.totalHits} pts in hits (already priced in)</div>
@@ -814,11 +896,35 @@ export default function OptimizePanel({
           {/* Transfer plans */}
           <div>
             <SectionTitle>🔄 Transfer plans (next {horizon} GWs)</SectionTitle>
+            {/*
+              SAY THAT THE RANKING IS WEIGHTED, once, where the plans are.
+              Nothing in the app mentioned it and the "+x.x xp vs keeping"
+              figures are the weighted quantity — a reader comparing them
+              against the per-player totals two lines below, which are not, had
+              no way to recover the difference.
+            */}
+            {horizon > 1 && (
+              <p className="mt-1 text-xs text-muted">
+                Which players to move is chosen on a weighted total — a gameweek {horizon}{" "}
+                weeks out counts for less than the next one, because the projection is less
+                certain that far ahead. The points and the −4 hits below are plain sums, so
+                a hit costs what FPL charges for it.
+              </p>
+            )}
             <div className="mt-3 grid gap-3">
+              {/*
+                THE UNDISCOUNTED TOTAL, BECAUSE THIS ONE IS READ AS POINTS.
+                `keepHorizonXp` is the ranking key and weights gameweek `i` by
+                `gwDecay ** i` — so at horizon 8 the card read "best XI projects
+                61.1 xp in GW21 … 327.0 xp", which is 40.9 a week against a
+                stated 61.1 for the first, with no falling fixtures to explain
+                it and nothing in the UI mentioning weighting. Measured on the
+                demo the gap runs 0% / 11% / 21% / 33% at horizons 1 / 3 / 5 / 8.
+              */}
               <PlanRow
                 title="Keep the team"
                 sub={`0 transfers · best XI projects ${result.keepXi.totalXp.toFixed(1)} xp in GW${squad.nextEvent}`}
-                net={result.keepHorizonXp}
+                net={result.keepHorizonPlainXp}
                 gain={0}
                 best={!result.plans.some((p) => p.gainVsKeep > 0.05)}
               />
@@ -827,7 +933,7 @@ export default function OptimizePanel({
                   key={plan.transfers.length}
                   className={`card p-4 ${
                     plan.gainVsKeep > 0.05 &&
-                    plan.netXp === Math.max(...result.plans.map((p) => p.netXp))
+                    plan.plainNetXp === Math.max(...result.plans.map((p) => p.plainNetXp))
                       ? "border-accent/60"
                       : ""
                   }`}
@@ -838,8 +944,13 @@ export default function OptimizePanel({
                       {plan.hitCost > 0 && (
                         <span className="text-danger"> (−{plan.hitCost} hit)</span>
                       )}
+                      {/* Both halves on the same quantity as the number
+                          printed beside them — see `TransferPlan.plainNetXp`.
+                          Ranking on the decayed `netXp` while the card showed a
+                          plain gain could badge a plan the reader could not see
+                          was ahead. */}
                       {plan.gainVsKeep > 0.05 &&
-                        plan.netXp === Math.max(...result.plans.map((p) => p.netXp)) && (
+                        plan.plainNetXp === Math.max(...result.plans.map((p) => p.plainNetXp)) && (
                           <span className="ml-2">
                             <Badge tone="green">Recommended</Badge>
                           </span>
@@ -971,9 +1082,28 @@ export default function OptimizePanel({
                   wording said the former and a reader would have concluded the
                   XI was full of differentials.
                 */}
+                {/*
+                  SAY WHICH 50.2 THIS IS. `splitByField` is fed
+                  `keepXi.starters`, which carry each man's OWN xp — so this
+                  total is the eleven un-captained, while "best XI projects 56.7
+                  xp" one card above includes the captain's second multiple.
+                  Two numbers, both labelled "your XI's projected points",
+                  6.5 apart, and nothing said the difference was the armband.
+                */}
+                {/*
+                  NAME THE ELEVEN. This used to be computed from the
+                  no-transfer XI while the Line-up section below defaults to
+                  "Best plan" — one player different on the demo, and the one
+                  number on the page whose subject is ownership exposure was
+                  describing a team the reader was being advised not to field.
+                  It now follows the recommendation, and says which that is,
+                  because the pitch below is switchable.
+                */}
                 <span className="text-sm text-muted">
-                  of your XI&apos;s {result.fieldSplit.total.toFixed(1)} projected points are
-                  not already shared with the rest of the field.
+                  of {result.fieldXiIsPlan ? "the recommended XI" : "your XI"}&apos;s{" "}
+                  {result.fieldSplit.total.toFixed(1)} projected points (before the
+                  captain&apos;s second multiple) are not already shared with the rest of
+                  the field.
                 </span>
               </div>
               <p className="mt-2 text-xs text-muted">
@@ -1017,12 +1147,20 @@ export default function OptimizePanel({
                     {a.timing.note && (
                       <div
                         className={`mt-2 border-t border-border-c pt-2 text-xs ${
-                          a.timing.verdict === "structural-window-ahead"
+                          available && a.timing.verdict === "structural-window-ahead"
                             ? "text-warn"
                             : "text-muted"
                         }`}
                       >
-                        {a.timing.verdict === "structural-window-ahead" ? "⏳ " : ""}
+                        {/*
+                          A CHIP YOU DO NOT HAVE GETS NO HOURGLASS. The card
+                          dims and badges itself "Used / outside window", but the
+                          timing note rendered at full strength regardless — so a
+                          spent chip still urged the reader to wait for a
+                          gameweek they cannot play it in, in the one colour on
+                          the card that means "act on this".
+                        */}
+                        {available && a.timing.verdict === "structural-window-ahead" ? "⏳ " : ""}
                         {a.timing.note}
                       </div>
                     )}
@@ -1061,7 +1199,9 @@ export default function OptimizePanel({
             </div>
             <div className="mt-3">
               {(() => {
-                const bestPlan = [...result.plans].sort((a, b) => b.netXp - a.netXp)[0];
+                // `plainNetXp`, so the pitch draws the eleven the card above it
+                // badges — see the note at `fieldXi` in `optimizer.ts`.
+                const bestPlan = [...result.plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
                 const xi =
                   view === "dream"
                     ? result.dreamTeam
@@ -1155,14 +1295,37 @@ function ChipSheet({
       </div>
       <p className="mt-1 text-sm text-muted">{blurb[s.chip]}</p>
 
+      {/*
+        NO GAMEWEEK IS A REAL ANSWER. `chipScenario` now clips to the chip's own
+        window, so a chip that has expired — or whose window opens after the
+        horizon ends — comes back with `bestGw: null` rather than naming a
+        gameweek it cannot be played in. The card beside this already declined
+        to name one in that state; this sheet named GW20 for a chip that dies
+        at GW19.
+      */}
+      {s.bestGw == null ? (
+        <div className="mt-3 rounded-lg border border-border-c bg-panel-2 px-3 py-2.5 text-sm text-muted">
+          None of the next {s.horizon} gameweeks is inside this chip&apos;s window, so
+          there is nothing here to project.
+        </div>
+      ) : (
       <div className="mt-3 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2.5 text-sm">
         <div className="font-semibold text-accent">
           Best in GW{s.bestGw}
           {s.note && <span className="font-normal"> — {s.note}</span>}
         </div>
         <div className="mt-0.5 text-muted">
+          {/*
+            THE SAME CAVEAT THE CARD CARRIES, ON THE MORE PROMINENT RENDER.
+            `wcGain` is the best reachable squad minus keeping — bounded below
+            by zero and by the best transfer plan on screen, so it is almost
+            always comfortably positive. The advisor card says in so many words
+            that this is the size of a gap and not a reason to play the chip;
+            this sheet showed the identical quantity with no such sentence,
+            under a bigger heading.
+          */}
           {s.chip === "wildcard" && (
-            <>Projected to gain <b className="text-foreground">+{s.gain.toFixed(1)} pts</b> over {s.horizon} gameweeks vs keeping your team.</>
+            <>Projected to gain <b className="text-foreground">+{s.gain.toFixed(1)} pts</b> over {s.horizon} gameweeks vs keeping your team. That is the size of the gap between your squad and the best one your money can buy — not a reason to play the chip this week.</>
           )}
           {s.chip === "freehit" && (
             <>A one-week squad projects <b className="text-foreground">+{s.gain.toFixed(1)} pts</b> more than your team that gameweek.</>
@@ -1175,8 +1338,9 @@ function ChipSheet({
           )}
         </div>
       </div>
+      )}
 
-      {isSquadChip && s.xi && s.squad && (
+      {isSquadChip && s.xi && s.squad && s.bestGw != null && (
         <>
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm">
             <span>
