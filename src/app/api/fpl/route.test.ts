@@ -41,12 +41,26 @@ describe("proxy cache policy", () => {
   });
 
   it("does not let the in-play feeds go stale to pay for it", () => {
-    // Fixtures and live scores drive a 30s poll. Whatever the summaries need,
-    // these two must keep their own short leash.
+    /*
+     * THE LEASH WAS 75 SECONDS LONG. `cacheSeconds * 2` gave these two a
+     * 25-second freshness window and 50 seconds of grace on top, so an edge was
+     * entitled to hand a reader a score or a match clock 75 seconds old — and
+     * the UI polls every 30, which adds up to another 30 before the next
+     * attempt. Reported from a live match twice: the clock behind the
+     * television, and scores "langt bak".
+     *
+     * The whole budget now has to stay under one poll interval, which is what
+     * this asserts rather than the two numbers separately.
+     */
     for (const p of ["fixtures/", "event/5/live/"]) {
-      expect(cacheSeconds(p)).toBe(25);
-      expect(staleSeconds(p)).toBe(50);
+      expect(cacheSeconds(p) + staleSeconds(p), p).toBeLessThanOrEqual(30);
+      // But not zero grace: a 20-second-old score beats an error while the
+      // origin retries, and the origin's own deadline is 10 seconds.
+      expect(staleSeconds(p), p).toBeGreaterThanOrEqual(10);
     }
+    // And nothing else was dragged down with them — staleness costs nothing on
+    // a feed that does not move mid-afternoon.
+    expect(staleSeconds("bootstrap-static/")).toBe(cacheSeconds("bootstrap-static/") * 2);
   });
 });
 
@@ -72,7 +86,7 @@ describe("cacheControl", () => {
 
   it("still lets the CDN hold it for the endpoint's own TTL", () => {
     expect(cacheControl("fixtures/")).toContain(`s-maxage=${cacheSeconds("fixtures/")}`);
-    expect(cacheControl("event/1/live/")).toContain("s-maxage=25");
+    expect(cacheControl("event/1/live/")).toContain("s-maxage=10");
     expect(cacheControl("bootstrap-static/")).toContain("s-maxage=300");
   });
 

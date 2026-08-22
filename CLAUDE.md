@@ -250,6 +250,17 @@ too; `proxy-revalidate` was backwards on both counts (RFC 9111 §5.2.2.9). The
 client sends `cache: "no-store"` for `fixtures/` and `event/{id}/live/` as the
 second belt.
 
+**The live feeds get a freshness budget shorter than one poll.** `fixtures/`
+and `event/{gw}/live/` are `s-maxage=10, stale-while-revalidate=20`, so an edge
+may serve at most 30 seconds of staleness against a 30-second UI poll. They used
+to take `cacheSeconds * 2` off a 25-second window — a 75-second entitlement,
+plus up to 30 more before the next poll — which is the arithmetic behind two
+separate reports of the clock and the scores lagging during a match. `fixtures/`
+counts as live because `matchMinute` reads `minutes` off it, so it carries the
+clock. The 75 is arithmetic on the header, not a measurement: no CDN runs in the
+sandbox, so what a given edge does with `stale-while-revalidate` is unverified
+here.
+
 **The origin does not cache at all any more, deliberately.** The upstream fetch
 carries `cache: "no-store"` rather than `next: { revalidate }`, because Next
 awaits its own background revalidation before completing the request

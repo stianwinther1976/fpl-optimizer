@@ -95,12 +95,28 @@ export const ALLOWED: RegExp[] = [
   new RegExp(`^leagues-classic/${ID}/standings/$`),
 ];
 
+/**
+ * The two feeds that move while a match is on: scores, and the match clock.
+ *
+ * `fixtures/` is not obviously "live" from its name, but `matchMinute` reads
+ * `minutes` off it, so it carries the clock and ages exactly as fast as the
+ * scores do.
+ */
+export function isLivePath(path: string): boolean {
+  return path.startsWith("fixtures") || path.includes("/live/");
+}
+
 // Cache lifetime (seconds) per endpoint type.
 export function cacheSeconds(path: string): number {
   if (path.startsWith("bootstrap-static")) return 300;
-  // Fixtures and live scores drive the in-play view (30s UI poll) — keep fresh.
-  if (path.startsWith("fixtures")) return 25;
-  if (path.includes("/live/")) return 25;
+  /*
+   * Ten seconds, against a 30-second UI poll. It used to be 25, which with the
+   * old 50-second grace let an edge serve a 75-second-old score. Ten means
+   * almost every poll goes past the edge to the origin — which is the point,
+   * and costs little: these are two small documents and the route's in-flight
+   * map folds concurrent readers of the same path into one upstream fetch.
+   */
+  if (isLivePath(path)) return 10;
   if (path.includes("/history/") || path.includes("/transfers/")) return 300;
   // An element summary changes when a gameweek's results land and not otherwise
   // — the same volatility as the entry history above, and it was getting the
@@ -120,6 +136,33 @@ export function cacheSeconds(path: string): number {
  * is what sets this: a summary is allowed to be served stale for as long as a
  * day, because the thing it could be stale ABOUT happens weekly, and the refresh
  * is already on its way to the next reader.
+ */
+/**
+ * How long the edge may keep serving a body it knows is out of date.
+ *
+ * THE LIVE FEEDS WERE THE WORST CASE, NOT THE BEST. `cacheSeconds * 2` gave
+ * `fixtures/` and `event/{gw}/live/` a 25-second freshness window and a
+ * 50-second grace on top, so a CDN was entitled to hand a reader a score or a
+ * match clock up to 75 seconds old — and the UI polls every 30, which adds up
+ * to another 30 before the next attempt. Reported from a live match, twice:
+ * the clock behind the television, and scores "langt bak".
+ *
+ * Grace still has a job on these two — a 20-second-old score beats an error
+ * while the origin retries — but 50 seconds of it during a match is the defect
+ * rather than the protection, and the origin's own deadline is 10 seconds, so
+ * 20 covers a hiccup with room to spare.
+ *
+ * THE FIX IS ENTIRELY IN `cacheSeconds`, and a `* 20` special case here was
+ * written first and then removed: with the live window down to 10, `* 2` is
+ * already 20. Mutation-testing it is what showed that — putting the branch back
+ * changed nothing and every test stayed green. Everything else keeps `* 2` for
+ * its own reason: staleness costs nothing on a feed that does not move
+ * mid-afternoon.
+ *
+ * The 75 seconds is arithmetic on the header, not a measurement — no CDN runs
+ * in this sandbox, so what a given edge actually does with
+ * `stale-while-revalidate` is unverified here. What IS measured is that both
+ * numbers reach the wire: see `route.test.ts`.
  */
 export function staleSeconds(path: string): number {
   if (path.startsWith("element-summary")) return 86_400;
