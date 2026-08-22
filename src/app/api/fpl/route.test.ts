@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { ALLOWED, cacheControl, cdnCacheControl, cacheSeconds, staleSeconds } from "./[...path]/route";
+import {
+  ALLOWED,
+  cacheControl,
+  cdnCacheControl,
+  cacheSeconds,
+  staleSeconds,
+  fetchUpstream,
+  inflightSize,
+} from "./[...path]/route";
 
 /*
  * THE CACHE POLICY IS PART OF THE MODEL, NOT JUST PLUMBING.
@@ -235,8 +243,16 @@ describe("an error is never a cached one", () => {
       "utf8"
     );
     expect(route).toContain('headers: { "Cache-Control": "no-store" }');
-    // Four error paths: unknown endpoint, upstream not-ok, non-JSON, unreachable.
-    expect((route.match(/return errorJson\(/g) ?? []).length).toBe(4);
+    /*
+     * Three `return errorJson(` sites now, not four: the upstream's own two
+     * failure shapes — not-ok and non-JSON — moved into `readUpstream`, which
+     * returns them as DATA so they can be shared between deduped callers. They
+     * reach the client through the one `result.kind === "error"` return, which
+     * is an `errorJson` like the others. What must not change is that no error
+     * ever leaves this file any other way.
+     */
+    expect((route.match(/return errorJson\(/g) ?? []).length).toBe(3);
+    expect(route).toMatch(/if \(result\.kind === "error"\) return errorJson\(/);
     // And no error path bypasses it.
     expect(route).not.toMatch(/return NextResponse\.json\(\s*\{ error:/);
   });
@@ -252,5 +268,113 @@ describe("an error is never a cached one", () => {
     // come from FPL itself, and following one serves an off-host body under our
     // origin labelled publicly cacheable at the edge.
     expect(route).toContain('redirect: "error"');
+  });
+});
+
+describe("a hung upstream cannot hold the response open", () => {
+  /*
+   * WHAT THIS FILE CANNOT TEST, SAID PLAINLY. Everything below stubs
+   * `globalThis.fetch` directly, so nothing here goes through Next's patched
+   * `fetch` — and the defect being fixed lives entirely inside that patch:
+   * `withExecuteRevalidates` awaits a background revalidation whose signal
+   * `patch-fetch` has stripped. A test at this level could not have failed on
+   * it and still cannot, which is the CLAUDE.md failure mode where the test and
+   * the code share a belief. It was found by building the route and pointing
+   * `FPL_API_BASE` at a stub that accepts the connection and never answers:
+   *
+   *   entry stale, hung upstream, Data Cache on ... still open at 120 s
+   *   entry stale, hung upstream, `no-store` ...... 502 at 10.01 s
+   *   cold miss,   hung upstream, `no-store` ...... 502 at 10.01 s
+   *
+   * So the source guard below is the honest half: it pins the ONE decision the
+   * measurement turned on, which is that this fetch does not enter the Data
+   * Cache. The behavioural tests pin the parts that are this module's own.
+   */
+  const route = () =>
+    fs.readFileSync(path.resolve(__dirname, "[...path]/route.ts"), "utf8");
+
+  it("opts the upstream fetch out of the Data Cache", () => {
+    expect(route()).toContain('cache: "no-store"');
+    expect(route()).not.toMatch(/next:\s*\{\s*revalidate/);
+  });
+
+  it("reads the body inside the deadline, not after it", () => {
+    // `fetch` resolving means the HEADERS arrived. An upstream that sends them
+    // and then stalls the body would be unbounded again, one layer down.
+    const src = route();
+    const at = src.indexOf("async function readUpstream");
+    expect(at).toBeGreaterThan(0);
+    const body = src.slice(at, src.indexOf("export function fetchUpstream"));
+    expect(body).toContain("await res.json()");
+    expect(src).toMatch(/withDeadline\(readUpstream\(url\), UPSTREAM_TIMEOUT_MS\)/);
+  });
+
+  it("makes one upstream request when many readers ask at once", async () => {
+    // 20 concurrent identical requests against a slow stub produced exactly one
+    // upstream fetch, measured on a production build. This is that, in-process.
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      await new Promise((r) => setTimeout(r, 30));
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => "application/json" },
+        json: async () => ({ ok: true }),
+      } as unknown as Response;
+    }) as typeof fetch;
+    try {
+      const out = await Promise.all(
+        Array.from({ length: 20 }, () => fetchUpstream("http://x/api/event/1/live/"))
+      );
+      expect(calls).toBe(1);
+      expect(out.every((r) => r.kind === "ok")).toBe(true);
+      // And two different URLs are two reads, not one.
+      calls = 0;
+      await Promise.all([fetchUpstream("http://x/a/"), fetchUpstream("http://x/b/")]);
+      expect(calls).toBe(2);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("does not remember a read once it has finished", async () => {
+    // The map is the whole memory footprint of the dedupe. An entry that
+    // outlived its fetch would be a cache with no expiry and no eviction.
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      json: async () => ({ ok: true }),
+    })) as unknown as typeof fetch;
+    try {
+      await fetchUpstream("http://x/api/fixtures/");
+      expect(inflightSize()).toBe(0);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("shares a failure as well as a success, and forgets it too", async () => {
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      await new Promise((r) => setTimeout(r, 20));
+      throw new Error("upstream down");
+    }) as unknown as typeof fetch;
+    try {
+      const results = await Promise.allSettled([
+        fetchUpstream("http://x/api/down/"),
+        fetchUpstream("http://x/api/down/"),
+      ]);
+      expect(calls).toBe(1);
+      expect(results.every((r) => r.status === "rejected")).toBe(true);
+      expect(inflightSize()).toBe(0);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });

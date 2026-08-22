@@ -17,22 +17,38 @@ const UPSTREAM_TIMEOUT_MS = 10_000;
  * revalidating", `...isStale ? [] : ['signal']`. Every path here is cached
  * after its first success, so the signal binds cold misses and nothing else.
  *
- * WHAT THAT DOES AND DOES NOT MEAN, measured against a stub that accepts the
- * connection and never answers:
+ * AN EARLIER VERSION OF THIS COMMENT RECORDED A MEASUREMENT THAT DOES NOT
+ * REPRODUCE, and the conclusion drawn from it was the opposite of the truth.
+ * It read:
  *
- *   cold miss, hung upstream ......... 502 at 10.04 s (deadline fires)
  *   entry stale, hung upstream ....... 200 at 0.04 s, the stale body
  *
- * So a reader is never made to wait: on a stale entry Next answers from the
- * cache immediately and refreshes behind it, which is `stale-while-revalidate`
- * doing its job. What is genuinely unbounded is that BACKGROUND refresh, which
- * neither this nor the signal can reach — but nothing is awaiting it and the
- * handler has already returned, so it cannot hold the response open.
+ * and concluded that the background refresh "cannot hold the response open".
+ * Re-measured from a clean `git archive HEAD` export, production build, with
+ * `FPL_API_BASE` pointed at a stub that accepts the connection and never
+ * answers — prime `fixtures/` (ttl 25 s), wait 28 s, flip the stub to hang,
+ * request again:
  *
- * This function is therefore what makes the ten seconds a guarantee about the
- * path the route actually awaits, whether or not the signal survives to it.
- * The signal still earns its place: on a cold miss it closes the socket, which
- * racing a timer cannot do.
+ *   cold miss, hung upstream ......... 502 at 10.01 s (the deadline fires)
+ *   entry stale, hung upstream ....... STILL OPEN at 120 s, cut off by curl
+ *
+ * Next awaits it. `withExecuteRevalidates` in
+ * `next/dist/server/revalidation-utils.js` wraps the route handler and, in its
+ * `finally`, awaits every revalidate registered during the request — including
+ * the background refresh whose signal `patch-fetch` has just stripped. So the
+ * one path where the deadline was believed not to matter was the one path with
+ * no bound on it at all, and a reader whose entry had gone stale waited on FPL
+ * for as long as the platform allowed.
+ *
+ * Hence `cache: "no-store"` at the fetch below: no Data Cache entry means no
+ * revalidation to register, so both belts bind on every request. Measured on
+ * the same harness, `no-store` build:
+ *
+ *   would-be-stale entry, hung upstream ... 502 at 10.01 s
+ *   cold miss, hung upstream .............. 502 at 10.01 s
+ *
+ * The signal still earns its place: it closes the socket, which racing a timer
+ * cannot do.
  */
 function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
@@ -190,6 +206,85 @@ export function cdnCacheControl(path: string): string {
  * browser, and `no-store` removes the guesswork rather than leaving it as a
  * belief about somebody else's software.
  */
+/** What one upstream read produced, reduced so it can be shared between callers. */
+type Upstream =
+  | { kind: "ok"; data: unknown }
+  | { kind: "error"; status: number; message: string };
+
+/**
+ * Reads in flight, keyed by upstream URL.
+ *
+ * WITH THE DATA CACHE GONE, NOTHING ELSE ABSORBS A BURST. The note on `ID`
+ * above records 200 concurrent `element-summary/{n}` requests producing 200
+ * upstream fetches; those are 200 distinct URLs and no cache would have merged
+ * them, but a launch draft also has many readers asking for the SAME path at
+ * the same moment, and `revalidate` used to fold those together. This is the
+ * part of that worth keeping, and the only part that cannot hang: an entry
+ * lives exactly as long as the fetch it names.
+ *
+ * A second caller joins the FIRST caller's deadline, which started earlier, so
+ * it can see a failure sooner than ten seconds. That is the honest trade — it
+ * is one request, not two, and it is bounded either way.
+ *
+ * Response caching itself is now entirely at the edge. That is where this file
+ * already said the real cache lives: see `cdnCacheControl`, whose
+ * `stale-while-revalidate` is what serves a reader while the origin is failing
+ * — and unlike Next's, it does it without holding anyone's response open.
+ */
+const inflight = new Map<string, Promise<Upstream>>();
+
+async function readUpstream(url: string): Promise<Upstream> {
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "fpl-optimizer (personal, non-commercial)",
+      Accept: "application/json",
+    },
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    redirect: "error",
+    /*
+     * NO DATA CACHE. See `withDeadline`: an entry Next considers stale is
+     * refreshed inside the request, with the caller's signal stripped, and the
+     * route module awaits that refresh before answering. Measured at 120
+     * seconds and still going against a hung upstream. Opting out of the cache
+     * is what makes the ten-second deadline true on every path.
+     */
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    // FPL returns 503/maintenance pages while the game updates.
+    const status = res.status === 404 ? 404 : 503;
+    return {
+      kind: "error",
+      status,
+      message: status === 404 ? "Not found" : "FPL is updating the game",
+    };
+  }
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    return { kind: "error", status: 503, message: "FPL is updating the game" };
+  }
+  // Inside the deadline on purpose: `fetch` resolving only means the HEADERS
+  // arrived, so an upstream that sends them and then stalls the body would
+  // otherwise be unbounded again — the same defect one layer down.
+  return { kind: "ok", data: await res.json() };
+}
+
+/** One bounded read per URL at a time. */
+export function fetchUpstream(url: string): Promise<Upstream> {
+  const running = inflight.get(url);
+  if (running) return running;
+  const p = withDeadline(readUpstream(url), UPSTREAM_TIMEOUT_MS).finally(() => {
+    inflight.delete(url);
+  });
+  inflight.set(url, p);
+  return p;
+}
+
+/** Test-only: the number of reads currently in flight. */
+export function inflightSize(): number {
+  return inflight.size;
+}
+
 function errorJson(body: { error: string }, status: number) {
   return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
@@ -215,7 +310,6 @@ export async function GET(
     search = `?page_standings=${/^\d{1,4}$/.test(page) ? page : "1"}`;
   }
   const url = `${FPL_BASE}/${joined}${search}`;
-  const ttl = cacheSeconds(joined);
 
   try {
     /*
@@ -239,31 +333,9 @@ export async function GET(
      * body came back 200 with `cdn-cache-control: public, s-maxage`. A proxy
      * with one known upstream has no business following anything.
      */
-    const upstream = await withDeadline(
-      fetch(url, {
-        headers: {
-          "User-Agent": "fpl-optimizer (personal, non-commercial)",
-          Accept: "application/json",
-        },
-        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-        redirect: "error",
-        next: { revalidate: ttl },
-      }),
-      UPSTREAM_TIMEOUT_MS
-    );
-
-    if (!upstream.ok) {
-      // FPL returns 503/maintenance pages while the game updates.
-      const status = upstream.status === 404 ? 404 : 503;
-      return errorJson({ error: status === 404 ? "Not found" : "FPL is updating the game" }, status);
-    }
-
-    const contentType = upstream.headers.get("content-type") ?? "";
-    if (!contentType.includes("application/json")) {
-      return errorJson({ error: "FPL is updating the game" }, 503);
-    }
-
-    const data = await upstream.json();
+    const result = await fetchUpstream(url);
+    if (result.kind === "error") return errorJson({ error: result.message }, result.status);
+    const data = result.data;
     return NextResponse.json(data, {
       headers: {
         "Cache-Control": cacheControl(joined),
