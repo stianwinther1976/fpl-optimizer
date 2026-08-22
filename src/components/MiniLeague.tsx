@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { markNavigation } from "@/lib/nav";
-import { api, DEMO_ENTRY_ID, fmtNum, type TeamData } from "@/lib/fpl";
+import { api, DEMO_ENTRY_ID, FplApiError, fmtNum, type TeamData } from "@/lib/fpl";
 import type { EventLive, LeagueStandings } from "@/lib/types";
 import { CHIP_LABELS } from "@/lib/rules";
 import { liveEntryScore, provisionalBonus, squadMatchState } from "@/lib/live";
@@ -130,8 +130,28 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
       setStandings(merged);
       localStorage.setItem("fpl-league-id", String(num));
       loadDetails(merged);
-    } catch {
-      setError("League not found — check the ID.");
+    } catch (err) {
+      /*
+       * SAY WHICH FAILURE IT WAS. This was a bare catch that answered every
+       * one of them with "League not found — check the ID." — reported against
+       * a league the reader had just picked out of his OWN list, where the ID
+       * was the one thing that could not be wrong. Sending someone to check a
+       * number they did not type is worse than saying nothing.
+       *
+       * It matters more since the proxy stopped serving a cached body behind a
+       * failed upstream (measured, see the route). That was the right call for
+       * the live feeds, where a stale score is a lie — but it means FPL's
+       * 503s now reach the reader instead of being papered over, and a Saturday
+       * teatime is exactly when they happen.
+       */
+      const status = err instanceof FplApiError ? err.status : null;
+      setError(
+        status === 404
+          ? "League not found — check the ID."
+          : status === 503
+            ? "FPL is not answering right now — this is their end, not the ID. Try again in a minute."
+            : "Could not load the league. Try again."
+      );
     } finally {
       setLoading(false);
     }

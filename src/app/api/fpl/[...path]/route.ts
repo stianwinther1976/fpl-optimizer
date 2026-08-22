@@ -253,8 +253,42 @@ export function cacheControl(path: string): string {
  * a claim to check rather than a fact — the deployed site's actual behaviour is
  * one `curl -I` away.
  */
+/**
+ * How long the edge may keep answering from a stale copy once the ORIGIN is
+ * failing (RFC 5861 `stale-if-error`).
+ *
+ * PUTTING BACK, DELIBERATELY AND NARROWLY, SOMETHING THE `no-store` CHANGE
+ * TOOK AWAY. Next's Data Cache used to hide upstream failures by serving the
+ * last good body with a 200, which is measured and is why it was removed: on
+ * a live feed a stale score under a current "Updated" stamp is a lie, and a
+ * reader hit exactly that.
+ *
+ * But that removal applied to every endpoint, and it should not have. League
+ * standings, entry history and player summaries change on the scale of a
+ * gameweek. Serving one a minute old through an FPL outage costs a reader
+ * nothing; refusing costs them the screen. Reported on a Saturday teatime: a
+ * league the reader had just picked from his own list came back
+ * "League not found".
+ *
+ * So the live feeds get NOTHING here — they must fail visibly, which the tab's
+ * staleness strip then explains — and everything else gets its normal stale
+ * window. Zero is returned rather than omitted so the two cases are one
+ * expression.
+ *
+ * NOT VERIFIED ON VERCEL. Like `CDN-Cache-Control` beside it, whether the edge
+ * honours `stale-if-error` at all is read from memory here; this sandbox
+ * cannot reach their documentation. It is safe if ignored — the header simply
+ * does nothing and the reader sees the honest error — but do not record it as
+ * working until someone has watched an edge do it.
+ */
+export function staleIfErrorSeconds(path: string): number {
+  return isLivePath(path) ? 0 : staleSeconds(path);
+}
+
 export function cdnCacheControl(path: string): string {
-  return `public, s-maxage=${cacheSeconds(path)}, stale-while-revalidate=${staleSeconds(path)}`;
+  const base = `public, s-maxage=${cacheSeconds(path)}, stale-while-revalidate=${staleSeconds(path)}`;
+  const sie = staleIfErrorSeconds(path);
+  return sie > 0 ? `${base}, stale-if-error=${sie}` : base;
 }
 
 /** What one upstream read produced, reduced so it can be shared between callers. */

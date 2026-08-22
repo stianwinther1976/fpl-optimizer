@@ -196,6 +196,40 @@ starting or benched, and `projectAll` applies it last. Two things about it:
   then freezes, so a match in stoppage reads exactly 90 for as long as it runs.
   The app shows `90+'`; claiming "90'" through four more minutes of football is a
   claim the data cannot support.
+- **FPL caches its own feeds, and the TTLs differ by an order of magnitude.**
+  Measured from a runner during GW1 (probe runs 32577720199 and 32581024633),
+  reading FPL's own `age` header:
+
+  | Endpoint | Observed max `age` | Effective TTL |
+  |---|---|---|
+  | `entry/{id}/` | 61 s | ~60 s |
+  | `event/{gw}/live/` | 92 s | ~90 s |
+  | `fixtures/` | 301 s, resets 301 s apart | **300 s** |
+  | `entry/{id}/event/{gw}/picks/` | 56,549 s | **~15.7 hours** |
+
+  Two consequences that both shipped as defects:
+
+  - `fixtures[].minutes` only steps when that five-minute window turns over, so
+    the match clock ran 2-8 minutes behind. On IPS-SUN, kicked off 14:00:00Z,
+    at 14:18:11Z with 18 minutes played: `fixtures[].minutes` 10, max player
+    minutes 16. `matchMinute` therefore takes the larger of the two — see
+    `liveMatchMinutes`.
+  - **`picks/` is cached for most of a day, and `entry_history` rides inside
+    it.** Picks cannot change after the deadline so that is reasonable of FPL,
+    but `entry_history.points` and `.rank` move all gameweek. Three entries at
+    15:33Z: `summary_event_points` 27/51/44 against `entry_history.points`
+    17/27/20. Anything about a LIVE gameweek must come from `entry/{id}/`;
+    `event_transfers_cost` is the exception, being fixed once the deadline
+    passes.
+
+- **`entry.summary_event_points` is live and exact, but excludes provisional
+  bonus.** It equalled the effective XI's `total_points` summed off
+  `event/{gw}/live/` with the captain doubled, on every sample of all three
+  probed entries. Where the app differs from it during the provisional window,
+  the difference is the bonus and nothing else — one entry showed 51 against a
+  projected 5 of bonus. So a disagreement with FPL's own figure is not by
+  itself evidence of a bug; check the bonus term before concluding anything.
+
 - **`finished` means bonus confirmed, not "the match has ended."** The final
   whistle is `finished_provisional`, and after a Saturday afternoon the two are
   hours apart. Use the provisional flag for anything about the MATCH, and

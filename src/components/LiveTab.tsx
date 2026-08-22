@@ -482,8 +482,30 @@ export default function LiveTab({
               )}
             </div>
           )}
-          {data.picks?.entry_history.rank != null && (
-            <div>GW rank: {data.picks.entry_history.rank.toLocaleString("en-GB")}</div>
+          {/*
+            `entry.summary_event_rank`, NOT `picks.entry_history.rank`, and the
+            difference is measured. Probe run 32581024633 sampled FPL's own
+            `age` header on both endpoints across a live gameweek:
+
+              entry/{id}/                  age never exceeded 61s
+              entry/{id}/event/{gw}/picks/ age reached 56,549s — 15.7 HOURS
+
+            Picks do not change after the deadline, so caching that document
+            for most of a day is entirely reasonable of FPL — but
+            `entry_history` rides inside it, and its `points` and `rank` DO
+            move all gameweek. Measured on three entries at 15:33Z:
+
+              summary_event_points  27 / 51 / 44
+              entry_history.points  17 / 27 / 20
+
+            That is where the two different gameweek ranks on one screen came
+            from: the header read the fresh one and this line read a figure
+            from the night before. `event_transfers_cost` is still taken from
+            the same document and is still sound, because a hit is fixed once
+            the deadline passes.
+          */}
+          {data.entry.summary_event_rank != null && (
+            <div>GW rank: {data.entry.summary_event_rank.toLocaleString("en-GB")}</div>
           )}
         </div>
         <div className="ml-auto text-right text-xs text-muted">

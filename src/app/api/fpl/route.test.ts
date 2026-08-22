@@ -11,6 +11,7 @@ import {
   inflightSize,
   memoSize,
   resetMemo,
+  staleIfErrorSeconds,
 } from "./[...path]/route";
 
 /*
@@ -538,6 +539,40 @@ describe("the origin absorbs a launch draft, and only a launch draft", () => {
     } finally {
       globalThis.fetch = original;
       resetMemo();
+    }
+  });
+});
+
+describe("stale-if-error: the edge may cover an outage, except on live feeds", () => {
+  /*
+   * The `no-store` change removed the origin's ability to serve a cached body
+   * behind a failed upstream. That is measured and correct for the live feeds —
+   * a stale score under a current "Updated" stamp is a lie. It was applied to
+   * every endpoint though, and a reader on a Saturday teatime got
+   * "League not found" for a league he had just picked out of his own list.
+   *
+   * Slow-moving endpoints get the cover back at the EDGE, where it cannot hold
+   * a response open the way the Data Cache did.
+   */
+  it("gives the live feeds no cover at all", () => {
+    expect(staleIfErrorSeconds("fixtures/")).toBe(0);
+    expect(staleIfErrorSeconds("event/1/live/")).toBe(0);
+    expect(cdnCacheControl("fixtures/")).not.toContain("stale-if-error");
+    expect(cdnCacheControl("event/1/live/")).not.toContain("stale-if-error");
+  });
+
+  it("covers the endpoints a gameweek-scale staleness cannot mislead about", () => {
+    for (const p of ["leagues-classic/123/standings/", "entry/1/history/", "element-summary/1/"]) {
+      expect(staleIfErrorSeconds(p)).toBe(staleSeconds(p));
+      expect(cdnCacheControl(p)).toContain(`stale-if-error=${staleSeconds(p)}`);
+    }
+  });
+
+  it("keeps it off the browser header, which must not serve stale live data", () => {
+    // `Cache-Control` is the browser's copy; the whole point of the split is
+    // that the two layers want different things.
+    for (const p of ["fixtures/", "leagues-classic/123/standings/"]) {
+      expect(cacheControl(p)).not.toContain("stale-if-error");
     }
   });
 });
