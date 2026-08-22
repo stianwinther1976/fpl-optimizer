@@ -601,3 +601,97 @@ export function liveEntryScore(
   }
   return pts - (p.entry_history?.event_transfers_cost ?? 0);
 }
+
+/**
+ * How long the in-play feed may show the SAME numbers before it is not live.
+ *
+ * A BOUND, NOT A FITTED VALUE, and it is worth being precise about which:
+ * the longest freeze this feed can legitimately show is half time, which the
+ * Laws of the Game cap at 15 minutes. That is a rule of the sport, not a
+ * measurement of FPL, so it does not need a sweep — but the margin on top of
+ * it does not have one either. Five minutes is a guess at FPL's own update
+ * lag; nothing here has measured it, and no snapshot taken so far contains an
+ * in-play fixture to measure it from.
+ *
+ * Erring long is the right direction. A false "not updating" during half time
+ * of a 3pm slot — when every match freezes at 45 together — would be the
+ * advisory crying wolf on the one screen that has to be trusted.
+ */
+export const FEED_STALL_MS = 20 * 60_000;
+
+/**
+ * Everything about this gameweek's in-play matches that MUST change while
+ * football is being played.
+ *
+ * WHY THIS EXISTS AT ALL, because two other defences already looked like they
+ * covered it and do not:
+ *
+ *  - The origin no longer serves a cached body behind a failed upstream
+ *    (`cache: "no-store"`), and
+ *  - `liveStaleMinutes` catches a feed that has stopped ANSWERING.
+ *
+ * Both are about OUR request failing. Neither fires when the request succeeds
+ * and the payload is simply old — an upstream edge serving its own stale copy,
+ * which is indistinguishable from a fresh one at every layer we control. It
+ * was observed: a match that had finished 2-0 rendered `55'` under a current
+ * "Updated" stamp, having earlier rendered `2'` for over an hour. The payload
+ * advanced once and stopped again, and every HTTP status along the way was 200.
+ *
+ * So the only honest test left is whether OUR OWN DATA MOVES. This makes no
+ * claim about FPL's internals and does not estimate a minute from the clock —
+ * the repo has three shipped defects from doing exactly that. It compares the
+ * feed with itself.
+ *
+ * Scores and the finish flags are folded in as well as the clock, so a feed
+ * that is alive in any respect counts as alive.
+ */
+export function liveSignature(fixtures: Fixture[], event: number): string {
+  return fixtures
+    .filter((f) => f.event === event && isInPlay(f))
+    .map(
+      (f) =>
+        `${f.id}:${f.minutes ?? ""}:${f.team_h_score ?? ""}-${f.team_a_score ?? ""}:${
+          f.finished ? 1 : 0
+        }${f.finished_provisional ? 1 : 0}`
+    )
+    .sort()
+    .join("|");
+}
+
+/**
+ * The watch a caller holds between polls: the last in-play signature seen, and
+ * when it was first seen.
+ */
+export type FeedWatch = { sig: string; at: number };
+
+/**
+ * Fold a fresh payload into the watch, returning the SAME OBJECT when nothing
+ * moved.
+ *
+ * Referential stability is the point of that: this is held in React state and
+ * set from the poll, so returning a new object every thirty seconds would
+ * repaint the tab forever for no change. Pure — no ref written during render,
+ * which `react-hooks/refs` rejects and which was the first shape of this.
+ */
+export function advanceFeedWatch(
+  watch: FeedWatch,
+  fixtures: Fixture[],
+  event: number,
+  now: number
+): FeedWatch {
+  const sig = liveSignature(fixtures, event);
+  return sig === watch.sig ? watch : { sig, at: now };
+}
+
+/**
+ * How long the feed has shown the same in-play numbers, or null while it moves.
+ *
+ * An empty signature — no match in play — is never a stall: the gap between two
+ * kick-offs is not the feed failing, and `advanceFeedWatch` resets the clock on
+ * the way in and out of it.
+ */
+export function feedStallMs(watch: FeedWatch, now: number): number | null {
+  if (watch.sig === "") return null;
+  const held = now - watch.at;
+  return held >= FEED_STALL_MS ? held : null;
+}

@@ -7,6 +7,10 @@ import {
   projectAutoSubs,
   provisionalBonus,
   isInPlay,
+  feedStallMs,
+  advanceFeedWatch,
+  liveSignature,
+  FEED_STALL_MS,
 } from "../live";
 import { availabilityAt, XP_CONFIG } from "../xp";
 import { makeElement } from "./mockdata";
@@ -1079,5 +1083,114 @@ describe("one definition of a manager's live score", () => {
     const five = [1, 2, 3, 4, 5].map(() => entry());
     const one = liveEntryScore(five[0], elements, live, fixtures, 10, null);
     expect(bandMedianScore(five, elements, live, fixtures, 10, null)).toBe(one);
+  });
+});
+
+describe("feedStallMs — a 200 does not mean the data moved", () => {
+  const T0 = 1_700_000_000_000;
+  // One poll: fold the payload in, then ask how long it has been still.
+  let watch = { sig: "", at: T0 };
+  const step = (w: { sig: string; at: number }, fixtures: Fixture[], event: number, now: number) => {
+    watch = advanceFeedWatch(w, fixtures, event, now);
+    w.sig = watch.sig;
+    w.at = watch.at;
+    return feedStallMs(watch, now);
+  };
+
+  const fx = (over: Partial<Fixture>): Fixture =>
+    ({
+      id: 1,
+      event: 1,
+      started: true,
+      finished: false,
+      finished_provisional: false,
+      minutes: 10,
+      team_h: 1,
+      team_a: 2,
+      team_h_score: 0,
+      team_a_score: 0,
+      kickoff_time: new Date(T0).toISOString(),
+      stats: [],
+      ...over,
+    }) as Fixture;
+
+  it("is null while the clock advances", () => {
+    const w = { sig: "", at: T0 };
+    expect(step(w, [fx({ minutes: 10 })], 1, T0)).toBeNull();
+    expect(step(w, [fx({ minutes: 11 })], 1, T0 + 60_000)).toBeNull();
+    // Even long after the first sighting, because the signature keeps changing.
+    expect(step(w, [fx({ minutes: 30 })], 1, T0 + 60 * 60_000)).toBeNull();
+  });
+
+  it("is null while a score moves even if the clock does not", () => {
+    const w = { sig: "", at: T0 };
+    step(w, [fx({ minutes: 45 })], 1, T0);
+    expect(
+      step(w, [fx({ minutes: 45, team_h_score: 1 })], 1, T0 + 30 * 60_000)
+    ).toBeNull();
+  });
+
+  it("tolerates half time, which legitimately freezes the clock at 45", () => {
+    const w = { sig: "", at: T0 };
+    step(w, [fx({ minutes: 45 })], 1, T0);
+    // 15 minutes is the Laws of the Game cap; this must not cry wolf.
+    expect(step(w, [fx({ minutes: 45 })], 1, T0 + 15 * 60_000)).toBeNull();
+    expect(step(w, [fx({ minutes: 45 })], 1, T0 + 19 * 60_000)).toBeNull();
+  });
+
+  it("reports a feed that has stopped moving past the bound", () => {
+    const w = { sig: "", at: T0 };
+    step(w, [fx({ minutes: 55 })], 1, T0);
+    expect(step(w, [fx({ minutes: 55 })], 1, T0 + FEED_STALL_MS)).toBe(FEED_STALL_MS);
+    // The observed case: a finished 2-0 still rendering 55'.
+    const held = 45 * 60_000;
+    expect(step(w, [fx({ minutes: 55, team_h_score: 2 })], 1, T0 + held)).toBeNull();
+  });
+
+  it("resets rather than accusing when no match is in play", () => {
+    const w = { sig: "", at: T0 };
+    step(w, [fx({ minutes: 55 })], 1, T0);
+    // Between kick-offs the signature is empty; that is not a stall.
+    expect(step(w, [fx({ finished_provisional: true })], 1, T0 + 60 * 60_000)).toBeNull();
+    expect(w.at).toBe(T0 + 60 * 60_000);
+  });
+
+  it("ignores fixtures from another gameweek", () => {
+    const w = { sig: "", at: T0 };
+    expect(liveSignature([fx({ event: 2, minutes: 70 })], 1)).toBe("");
+    expect(step(w, [fx({ event: 2 })], 1, T0 + 60 * 60_000)).toBeNull();
+  });
+
+  it("does not go stale on fixture ORDER, which the API does not promise", () => {
+    const a = fx({ id: 1, minutes: 10 });
+    const b = fx({ id: 2, minutes: 20 });
+    expect(liveSignature([a, b], 1)).toBe(liveSignature([b, a], 1));
+  });
+
+  it("tolerates stoppage at 90, where the clock legitimately stops", () => {
+    // `minutes` caps at 90 and holds there for the rest of a match that runs
+    // to 94 — measured, see `matchMinute`. Stoppage cannot outlast the bound.
+    const w = { sig: "", at: T0 };
+    step(w, [fx({ minutes: 90 })], 1, T0);
+    expect(step(w, [fx({ minutes: 90 })], 1, T0 + 19 * 60_000)).toBeNull();
+  });
+
+  it("still reports a stall at 90 once stoppage cannot explain it", () => {
+    // The whistle flips `finished_provisional`. Half an hour on 90 with the
+    // flag still down is the feed, not the football.
+    const w = { sig: "", at: T0 };
+    step(w, [fx({ minutes: 90 })], 1, T0);
+    expect(step(w, [fx({ minutes: 90 })], 1, T0 + 30 * 60_000)).toBe(30 * 60_000);
+  });
+
+  it("drops out of the in-play set once the whistle goes", () => {
+    // Not a stall — there is nothing left to be stale ABOUT, and the reset
+    // matters so the wait for the next kick-off does not accumulate.
+    const w = { sig: "", at: T0 };
+    step(w, [fx({ minutes: 90 })], 1, T0);
+    expect(
+      step(w, [fx({ minutes: 90, finished_provisional: true })], 1, T0 + 25 * 60_000)
+    ).toBeNull();
+    expect(w.sig).toBe("");
   });
 });

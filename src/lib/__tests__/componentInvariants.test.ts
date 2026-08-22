@@ -1876,7 +1876,7 @@ describe("the Live tab cannot present stale numbers as live", () => {
     // Its own clock, because `setError` gets the same string every poll and
     // React bails out of the repaint. See the comment at the call site.
     expect(src).toMatch(/setInterval\(\(\) => setNowMs\(Date\.now\(\)\), LIVE_REFRESH_MS \/ 3\)/);
-    expect(src).toMatch(/const stale = staleMin !== null;/);
+    expect(src).toMatch(/const ageMin = staleMin \?\? stallMin \?\? 0;/);
   });
 
   it("suppresses live styling on a fixture whose data is stale", () => {
@@ -1886,11 +1886,25 @@ describe("the Live tab cannot present stale numbers as live", () => {
   });
 
   it("labels the age on the fixture clock rather than asserting a bare minute", () => {
-    expect(src).toContain("m old`");
+    expect(src).toContain("${ageMin}m old`");
   });
 
   it("stops claiming a 30s refresh while the feed is not answering", () => {
-    expect(src).toMatch(/Not updating — \$\{staleMin\} min old/);
+    expect(src).toMatch(/Not updating — \$\{ageMin\} min old/);
+  });
+
+  it("also flags a feed that answers 200 with numbers that have not moved", () => {
+    /*
+     * The case both other defences miss. `no-store` at the origin and
+     * `liveStaleMinutes` are both about OUR REQUEST failing; neither fires when
+     * an upstream edge serves its own stale copy with a 200. Observed: a match
+     * that had finished 2-0 rendering `55'` under a current "Updated" stamp.
+     */
+    expect(src).toContain("feedStallMs(feedWatch, nowMs)");
+    // Folded in from the PAYLOAD, on the poll, not derived from the request.
+    expect(src).toMatch(/setFeedWatch\(\(w\) => advanceFeedWatch\(w, fx, currentEvent, Date\.now\(\)\)\)/);
+    // Either kind of staleness drives the same visible state.
+    expect(src).toMatch(/const stale = staleMin !== null \|\| stallMin !== null;/);
   });
 
   it("does not blank a populated live view because one poll failed", () => {

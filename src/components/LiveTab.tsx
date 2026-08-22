@@ -10,6 +10,9 @@ import {
   provisionalBonus,
   isInPlay,
   LIVE_REFRESH_MS,
+  feedStallMs,
+  advanceFeedWatch,
+  type FeedWatch,
 } from "@/lib/live";
 import {
   autoSubView,
@@ -41,6 +44,13 @@ export default function LiveTab({
   // 0 until the first tick, which reads as "not stale" — correct, because
   // `updatedAt` is still null then and there is nothing on screen to be stale.
   const [nowMs, setNowMs] = useState(0);
+  /*
+   * State, not a ref: it is read during render, and `react-hooks/refs` rejects
+   * that — correctly, since a ref written on a poll and read on a repaint is a
+   * tearing hazard. `advanceFeedWatch` returns the SAME object when nothing
+   * moved, so setting it every thirty seconds costs no repaint.
+   */
+  const [feedWatch, setFeedWatch] = useState<FeedWatch>({ sig: "", at: 0 });
   const [bandPicks, setBandPicks] = useState<EntryEventPicks[] | null>(null);
   const bandTried = useRef(false);
   const [matchOpen, setMatchOpen] = useState<Fixture | null>(null);
@@ -66,6 +76,8 @@ export default function LiveTab({
       setLive(l);
       setFixtures(fx);
       setUpdatedAt(new Date());
+      // The watch advances on the PAYLOAD, not on the request succeeding.
+      setFeedWatch((w) => advanceFeedWatch(w, fx, currentEvent, Date.now()));
       setError(null);
     } catch {
       if (my !== seq.current) return;
@@ -377,7 +389,17 @@ export default function LiveTab({
    * precisely the case this has to detect.
    */
   const staleMin = gwDone ? null : liveStaleMinutes(updatedAt, nowMs, LIVE_REFRESH_MS);
-  const stale = staleMin !== null;
+  /*
+   * THE SECOND KIND OF STALE, and the one that survives both other defences.
+   * `staleMin` catches a feed that has stopped ANSWERING. This catches a feed
+   * that answers 200 with numbers that have not moved — which is what a reader
+   * actually hit: a match that had finished 2-0 rendering `55'` under a current
+   * "Updated" stamp. See `feedStallMs`.
+   */
+  const stallMs = gwDone || nowMs === 0 ? null : feedStallMs(feedWatch, nowMs);
+  const stallMin = stallMs === null ? null : Math.floor(stallMs / 60_000);
+  const stale = staleMin !== null || stallMin !== null;
+  const ageMin = staleMin ?? stallMin ?? 0;
 
   return (
     <div className="space-y-4">
@@ -454,7 +476,7 @@ export default function LiveTab({
             {gwDone
               ? "Gameweek complete — auto-refresh off"
               : stale
-                ? `Not updating — ${staleMin} min old`
+                ? `Not updating — ${ageMin} min old`
                 : "Auto-refresh every 30s"}
           </div>
           <button
@@ -582,7 +604,7 @@ export default function LiveTab({
                 <div className={`text-xs ${liveNow ? "font-semibold text-accent" : "text-muted"}`}>
                   {f.started
                     ? stale
-                      ? `${minute} · ${staleMin}m old`
+                      ? `${minute} · ${ageMin}m old`
                       : minute
                     : kickOffPassed(f, (updatedAt ?? new Date()).getTime())
                       ? "waiting on FPL"
