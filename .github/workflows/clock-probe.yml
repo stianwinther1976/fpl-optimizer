@@ -31,5 +31,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Probe
+      - name: Probe the match clock
         run: node scripts/snapshot/clock-probe.mjs
+
+      - name: Probe what a manager's score is reported as
+        env:
+          # Overridable so a specific team can be measured; the default is a
+          # handful of low ids, which are real long-standing entries.
+          FPL_ENTRY_IDS: ${{ vars.FPL_ENTRY_IDS || '1,2,3' }}
+        run: node scripts/snapshot/entry-probe.mjs
