@@ -1831,7 +1831,24 @@ function reconstructSquad(
 export interface ChipScenario {
   chip: string;
   label: string;
-  bestGw: number; // GW where the chip pays most
+  /**
+   * The gameweek the chip pays most in — or null when none of the gameweeks in
+   * the horizon is inside the chip's own window.
+   *
+   * IT WAS NOT CLIPPED, AND THE CARD BESIDE IT WAS. `optimize` runs every chip
+   * argmax through `inChipWindow` with a long note saying that naming a
+   * gameweek outside the window is worse than silence; `chipScenario`, which
+   * draws the sheet you open FROM that card, looped from `nextEvent` and never
+   * read `bootstrap.chips` at all. Reproduced on the demo with the real 2026/27
+   * window shape (first-half chips GW2-19), `nextEvent: 16`, horizon 5:
+   *
+   *   CARD   Triple Captain — window to GW19
+   *   SHEET  Triple Captain — Best in GW20, gain 6.89
+   *
+   * GW20 is past the chip's expiry, and any reader in GW15-GW19 on the five-
+   * or eight-gameweek horizon was in that state.
+   */
+  bestGw: number | null; // GW where the chip pays most
   gain: number; // projected extra points from playing it
   note?: string; // e.g. "double gameweek for 3 of your players"
   squad?: Element[]; // Wildcard / Free Hit: the squad to field
@@ -1858,8 +1875,25 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
     });
   const lastEvent =
     bootstrap.events.length > 0 ? bootstrap.events[bootstrap.events.length - 1].id : 38;
-  const gws: number[] = [];
-  for (let g = nextEvent; g < nextEvent + horizon && g <= lastEvent; g++) gws.push(g);
+  /*
+   * Clipped to THIS chip's own window, exactly as `optimize` clips its cards —
+   * see the note on `ChipScenario.bestGw` for what the two disagreeing looked
+   * like. A null window means the game has published none, and the only honest
+   * reading left is not to constrain; that matches `inChipWindow`.
+   */
+  const win = chipWindow(chip, bootstrap.chips, nextEvent, input.usedChips);
+  const allGws: number[] = [];
+  for (let g = nextEvent; g < nextEvent + horizon && g <= lastEvent; g++) allGws.push(g);
+  /*
+   * `gws` is where the chip may be PLAYED. `allGws` is the horizon it is judged
+   * over, and for the one-week chips those are the same thing — you play it in
+   * the week it pays. The Wildcard is the exception and keeps the full horizon:
+   * it rebuilds the squad for the rest of the season, so scoring it only over
+   * the weeks it can be played in would charge it for a restriction it does not
+   * have. That is the distinction `inChipWindow`'s note in `optimize` already
+   * draws; this file did not draw it at all.
+   */
+  const gws = win ? allGws.filter((g) => g >= win.start && g <= win.stop) : allGws;
   const squadEls = owned.map((o) => o.element);
   const teamValue = owned.reduce((s, o) => s + o.sellPrice, 0) + bank;
   const label =
@@ -1870,6 +1904,15 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
         : chip === "bboost"
           ? "Bench Boost"
           : "Triple Captain";
+
+  /*
+   * Nothing playable anywhere in the horizon — expired, or not open yet. Every
+   * branch below would otherwise return a number about gameweeks the reader
+   * cannot use the chip in, and the Wildcard is not an exception here even
+   * though its SCORING horizon is: a gap measured over GW11-15 is not the gain
+   * from playing a chip that does not open until GW20.
+   */
+  if (gws.length === 0) return { chip, label, bestGw: null, gain: 0, horizon };
 
   const fxIndex = makeFixtureIndex(fixtures);
   const squadTeams = new Set(squadEls.map((e) => e.team));
@@ -1895,12 +1938,21 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
     const { squad, cost } = buildSquadWithinBudget(bootstrap.elements, xp, teamValue);
     const gain = Math.max(
       0,
-      horizonScore(squad, xp, gws) - horizonScore(squadEls, xp, gws)
+      horizonScore(squad, xp, allGws) - horizonScore(squadEls, xp, allGws)
     );
+    /*
+     * `nextEvent` WAS PRINTED AS "Best in GW{n}" AND IS NOT ALWAYS PLAYABLE.
+     * The Wildcard is not a one-week chip, so there is no argmax here — but the
+     * sheet prints this number under a heading and hands it to the pitch's
+     * fixture ticker, and in 2026/27 the first Wildcard does not open until
+     * GW2. Read at GW1 it named a gameweek the chip cannot be played in. The
+     * earliest playable gameweek is the honest answer: it is the one thing
+     * about timing this scenario actually knows.
+     */
     return {
       chip,
       label,
-      bestGw: nextEvent,
+      bestGw: gws[0] ?? null,
       gain,
       squad,
       cost,
@@ -1912,7 +1964,7 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
 
   if (chip === "freehit") {
     // One-week squad tailored to the single best gameweek in the horizon.
-    let best = { gw: nextEvent, gain: -Infinity, squad: [] as Element[], cost: 0 };
+    let best = { gw: gws[0] ?? null, gain: -Infinity, squad: [] as Element[], cost: 0 };
     for (const gw of gws) {
       const { squad, cost } = buildSquadWithinBudget(
         bootstrap.elements,
@@ -1923,6 +1975,7 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
       const gain = xiAt(squad, gw).totalXp - xiAt(squadEls, gw).totalXp;
       if (gain > best.gain) best = { gw, gain, squad, cost };
     }
+    if (best.gw == null) return { chip, label, bestGw: null, gain: 0, horizon };
     return {
       chip,
       label,
@@ -1938,7 +1991,8 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
   }
 
   if (chip === "bboost") {
-    let best = { gw: nextEvent, gain: 0, xi: xiAt(squadEls, nextEvent) };
+    if (gws.length === 0) return { chip, label, bestGw: null, gain: 0, horizon };
+    let best = { gw: gws[0], gain: -Infinity, xi: xiAt(squadEls, gws[0]) };
     for (const gw of gws) {
       const xi = xiAt(squadEls, gw);
       const benchXp = xi.bench.reduce((s, p) => s + p.xp, 0);
@@ -1957,7 +2011,8 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
   }
 
   // Triple Captain
-  let best = { gw: nextEvent, gain: 0, name: squadEls[0]?.web_name ?? "your captain" };
+  if (gws.length === 0) return { chip, label, bestGw: null, gain: 0, horizon };
+  let best = { gw: gws[0], gain: 0, name: squadEls[0]?.web_name ?? "your captain" };
   for (const gw of gws) {
     for (const e of squadEls) {
       const v = xp.get(e.id)?.perGw.get(gw) ?? 0;

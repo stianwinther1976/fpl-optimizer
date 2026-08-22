@@ -4,6 +4,7 @@ import path from "node:path";
 import { makeMockBootstrap, makeMockFixtures, makeMockOwned } from "./mockdata";
 import {
   optimize,
+  chipScenario,
   pickBestXi,
   buildLaunchSquad,
   buildLaunchVariants,
@@ -1564,5 +1565,94 @@ describe("the planner's beam dedupe keeps the better state, not the first", () =
     expect(p.totalXp).toBeGreaterThan(p.keepXp);
     expect(p.gainVsKeep).toBeCloseTo(p.totalXp - p.keepXp, 9);
     for (const st of p.steps) expect(st.bankAfter).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("the chip sheet names a gameweek the chip can be played in", () => {
+  /*
+   * `optimize` runs every chip argmax through `inChipWindow`, with a long note
+   * saying that naming a gameweek outside the window is worse than silence.
+   * `chipScenario` — which draws the sheet you open FROM that card — looped
+   * from `nextEvent` and never read `bootstrap.chips` at all. Reproduced on the
+   * demo with the real 2026/27 window shape and `nextEvent: 16`, horizon 5:
+   *
+   *   CARD   Triple Captain — window to GW19
+   *   SHEET  Triple Captain — Best in GW20, gain 6.89
+   *
+   * Any reader in GW15-GW19 on the five- or eight-gameweek horizon was in it.
+   *
+   * The mock's fixtures run GW11-GW15, so the windows below are placed inside
+   * that range rather than at the real season's GW19/GW20 boundary. The shape
+   * is what matters: a window that ends inside the horizon, one that starts
+   * inside it, and one that does not meet it at all.
+   */
+  const CHIPS = ["wildcard", "freehit", "bboost", "3xc"];
+  const windows = (start: number, stop: number) =>
+    CHIPS.map((name) => ({ name, start_event: start, stop_event: stop, number: 1 }));
+
+  const inputWith = (
+    chipWindows: { name: string; start_event: number; stop_event: number; number: number }[],
+    usedChips: { name: string; event: number }[] = []
+  ) => {
+    const bootstrap = { ...makeMockBootstrap(), chips: chipWindows };
+    return {
+      bootstrap,
+      fixtures: makeMockFixtures(),
+      owned: makeMockOwned(bootstrap),
+      bank: 5,
+      freeTransfers: 1,
+      nextEvent: 11,
+      horizon: 5,
+      usedChips,
+    };
+  };
+
+  it("never names a gameweek past the chip's expiry", () => {
+    // Horizon GW11-15, window closes after GW13.
+    for (const chip of CHIPS) {
+      const s = chipScenario(inputWith(windows(11, 13)), chip);
+      expect(s.bestGw, chip).not.toBeNull();
+      expect(s.bestGw!, chip).toBeLessThanOrEqual(13);
+    }
+  });
+
+  it("never names a gameweek before the window opens", () => {
+    // Horizon GW11-15, window does not open until GW14.
+    for (const chip of CHIPS) {
+      const s = chipScenario(inputWith(windows(14, 20)), chip);
+      expect(s.bestGw, chip).not.toBeNull();
+      expect(s.bestGw!, chip).toBeGreaterThanOrEqual(14);
+    }
+  });
+
+  it("names no gameweek at all when no window meets the horizon", () => {
+    for (const chip of CHIPS) {
+      const s = chipScenario(inputWith(windows(20, 38)), chip);
+      expect(s.bestGw, chip).toBeNull();
+      expect(s.gain, chip).toBe(0);
+    }
+  });
+
+  it("names no gameweek once the reader has spent the only window left", () => {
+    for (const chip of CHIPS) {
+      const s = chipScenario(
+        inputWith([...windows(1, 10), ...windows(11, 15)], [{ name: chip, event: 12 }]),
+        chip
+      );
+      expect(s.bestGw, chip).toBeNull();
+    }
+  });
+
+  it("still judges the Wildcard over the whole horizon", () => {
+    /*
+     * It is not a one-week chip: it rebuilds the squad for the rest of the
+     * season, so scoring it only over the weeks it may be PLAYED in would
+     * charge it for a restriction it does not have. With the window closing
+     * after GW13 the gain must not fall, only the gameweek named may move.
+     */
+    const unconstrained = chipScenario(inputWith([]), "wildcard");
+    const clipped = chipScenario(inputWith(windows(11, 13)), "wildcard");
+    expect(clipped.gain).toBeCloseTo(unconstrained.gain, 9);
+    expect(clipped.gain).toBeGreaterThan(0);
   });
 });

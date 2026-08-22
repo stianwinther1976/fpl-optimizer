@@ -1217,6 +1217,20 @@ function ChipSheet({
       </div>
       <p className="mt-1 text-sm text-muted">{blurb[s.chip]}</p>
 
+      {/*
+        NO GAMEWEEK IS A REAL ANSWER. `chipScenario` now clips to the chip's own
+        window, so a chip that has expired — or whose window opens after the
+        horizon ends — comes back with `bestGw: null` rather than naming a
+        gameweek it cannot be played in. The card beside this already declined
+        to name one in that state; this sheet named GW20 for a chip that dies
+        at GW19.
+      */}
+      {s.bestGw == null ? (
+        <div className="mt-3 rounded-lg border border-border-c bg-panel-2 px-3 py-2.5 text-sm text-muted">
+          None of the next {s.horizon} gameweeks is inside this chip&apos;s window, so
+          there is nothing here to project.
+        </div>
+      ) : (
       <div className="mt-3 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2.5 text-sm">
         <div className="font-semibold text-accent">
           Best in GW{s.bestGw}
@@ -1246,8 +1260,9 @@ function ChipSheet({
           )}
         </div>
       </div>
+      )}
 
-      {isSquadChip && s.xi && s.squad && (
+      {isSquadChip && s.xi && s.squad && s.bestGw != null && (
         <>
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm">
             <span>

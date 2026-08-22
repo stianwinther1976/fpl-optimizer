@@ -1482,3 +1482,19 @@ describe("nobody reads FPL's gameweek average raw", () => {
     }
   });
 });
+
+describe("the chip sheet can say it has no gameweek", () => {
+  /*
+   * `chipScenario` now returns `bestGw: null` when no gameweek in the horizon
+   * is inside the chip's own window — expired, or not open yet. If the sheet
+   * still rendered `Best in GW{s.bestGw}` it would print "Best in GWnull", and
+   * the pitch below it would be handed a null `nextEvent`. The card beside this
+   * already declined to name a gameweek in that state; the sheet named GW20 for
+   * a chip that dies at GW19.
+   */
+  it("renders the empty-window branch instead of a gameweek", () => {
+    const src = read("OptimizePanel.tsx");
+    expect(src).toContain("{s.bestGw == null ? (");
+    expect(src).toMatch(/isSquadChip && s\.xi && s\.squad && s\.bestGw != null/);
+  });
+});
