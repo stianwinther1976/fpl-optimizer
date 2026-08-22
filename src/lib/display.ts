@@ -405,3 +405,40 @@ export function publishedAverage(
   const v = ev?.average_entry_score;
   return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
 }
+
+
+/**
+ * A kick-off that has come and gone while FPL still says the match has not
+ * started.
+ *
+ * WHY THE READER NEEDS THIS SPELLED OUT. The fixture card shows a score and a
+ * clock once `started` is true, and the kick-off time before that. There is a
+ * third state and it looked identical to the second: the match is under way on
+ * television and FPL has not flipped the flag yet. A card reading "HUL v MUN /
+ * Sat 13:30" two minutes after the whistle is indistinguishable from an app
+ * that has stopped fetching, and the reader's reasonable conclusion — "live
+ * doesn't work" — is one the screen gives them no way to check.
+ *
+ * So the card says which it is. It is not a guess about the match: it is the
+ * arithmetic the reader is already doing, stated by the app instead of left to
+ * them.
+ *
+ * The grace period exists because FPL is routinely a minute or so behind the
+ * whistle, and a card that flips to "awaiting" on the stroke of kick-off would
+ * cry wolf at every match. `provisional_start_time` is excluded outright — a
+ * time FPL has itself marked TBC is not a time to measure lateness against.
+ */
+export function kickOffPassed(
+  f: {
+    kickoff_time: string | null;
+    started?: boolean;
+    provisional_start_time?: boolean;
+  },
+  now: number,
+  graceMs = 60_000
+): boolean {
+  if (f.started || !f.kickoff_time || f.provisional_start_time) return false;
+  const at = Date.parse(f.kickoff_time);
+  if (!Number.isFinite(at)) return false;
+  return now - at > graceMs;
+}

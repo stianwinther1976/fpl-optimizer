@@ -11,7 +11,13 @@ import {
   isInPlay,
   LIVE_REFRESH_MS,
 } from "@/lib/live";
-import { autoSubView, benchPoints, kickoffLabel, publishedAverage } from "@/lib/display";
+import {
+  autoSubView,
+  benchPoints,
+  kickOffPassed,
+  kickoffLabel,
+  publishedAverage,
+} from "@/lib/display";
 import { ErrorBox, Skeleton, Badge } from "./ui";
 import MatchModal from "./MatchModal";
 
@@ -501,10 +507,20 @@ export default function LiveTab({
                   )}
                   <span className={aClass}>{teams.get(f.team_a)?.short_name}</span>
                 </div>
+                {/*
+                  THREE STATES, NOT TWO. A card reading "HUL v MUN / Sat 13:30"
+                  two minutes after the whistle is indistinguishable from an app
+                  that has stopped fetching — and "live doesn't work" is the
+                  reasonable conclusion the screen gives no way to check. When
+                  the kick-off has passed and FPL still has not flagged it, the
+                  card says so. See `kickOffPassed`.
+                */}
                 <div className={`text-xs ${liveNow ? "font-semibold text-accent" : "text-muted"}`}>
                   {f.started
                     ? minute
-                    : kickoffLabel(f, (iso) =>
+                    : kickOffPassed(f, (updatedAt ?? new Date()).getTime())
+                      ? "waiting on FPL"
+                      : kickoffLabel(f, (iso) =>
                           new Date(iso).toLocaleString("en-GB", {
                             weekday: "short",
                             hour: "2-digit",

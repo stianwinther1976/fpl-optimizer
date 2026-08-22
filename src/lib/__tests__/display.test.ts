@@ -12,6 +12,7 @@ import {
   kickoffLabel,
   liveCornerNote,
   publishedAverage,
+  kickOffPassed,
   netEventPoints,
   netGwDelta,
   netGwPoints,
@@ -560,5 +561,51 @@ describe("FPL's gameweek average is not published while the gameweek runs", () =
     // comparison, so saying so explicitly is cheaper than reasoning about it.
     expect(publishedAverage({ average_entry_score: NaN })).toBeNull();
     expect(publishedAverage({ average_entry_score: -3 })).toBeNull();
+  });
+});
+
+describe("a kick-off that has passed while FPL still says not started", () => {
+  /*
+   * The fixture card had two states and the reader needed three. "HUL v MUN /
+   * Sat 13:30" two minutes after the whistle is indistinguishable from an app
+   * that has stopped fetching, and "live doesn't work" is the reasonable
+   * conclusion the screen gave no way to check.
+   */
+  const at = (iso: string) => Date.parse(iso);
+  const KO = "2026-08-22T12:30:00Z";
+  const f = (over: Record<string, unknown> = {}) => ({
+    kickoff_time: KO,
+    started: false,
+    ...over,
+  });
+
+  it("says nothing before kick-off", () => {
+    expect(kickOffPassed(f(), at(KO) - 60_000)).toBe(false);
+  });
+
+  it("says nothing inside the grace period", () => {
+    // FPL is routinely a minute or so behind the whistle; flipping on the
+    // stroke of kick-off would cry wolf at every match.
+    expect(kickOffPassed(f(), at(KO) + 1_000)).toBe(false);
+    expect(kickOffPassed(f(), at(KO) + 60_000)).toBe(false);
+  });
+
+  it("says so once the grace has gone", () => {
+    expect(kickOffPassed(f(), at(KO) + 61_000)).toBe(true);
+    expect(kickOffPassed(f(), at(KO) + 120_000)).toBe(true);
+  });
+
+  it("says nothing once FPL has flagged the match", () => {
+    // Then the card has a clock and a score to show instead.
+    expect(kickOffPassed(f({ started: true }), at(KO) + 600_000)).toBe(false);
+  });
+
+  it("refuses to measure lateness against a time FPL calls provisional", () => {
+    expect(kickOffPassed(f({ provisional_start_time: true }), at(KO) + 600_000)).toBe(false);
+  });
+
+  it("says nothing when there is no kick-off time at all", () => {
+    expect(kickOffPassed(f({ kickoff_time: null }), at(KO) + 600_000)).toBe(false);
+    expect(kickOffPassed(f({ kickoff_time: "not a date" }), at(KO) + 600_000)).toBe(false);
   });
 });

@@ -1837,3 +1837,20 @@ describe("a sheet is a screen, so the back gesture closes it", () => {
     expect(sheet).toMatch(/closeRef\.current\(\)/);
   });
 });
+
+describe("the fixture card can say FPL has not flagged kick-off", () => {
+  /*
+   * `kickOffPassed` is tested properly in `display.test.ts`. What cannot be
+   * tested there is that the card CALLS it — and the whole point is that a
+   * reader looking at "HUL v MUN / Sat 13:30" two minutes after the whistle
+   * cannot tell a late FPL flag from an app that has stopped fetching.
+   */
+  it("uses the third state instead of falling back to the kick-off time", () => {
+    const src = read("LiveTab.tsx");
+    expect(src).toMatch(/kickOffPassed\(f, \(updatedAt \?\? new Date\(\)\)\.getTime\(\)\)/);
+    expect(src).toContain('"waiting on FPL"');
+    // Measured against the last successful poll, not the wall clock: the point
+    // is to describe the DATA's age, and a stalled poll must not keep counting.
+    expect(src).not.toMatch(/kickOffPassed\(f, Date\.now\(\)\)/);
+  });
+});
