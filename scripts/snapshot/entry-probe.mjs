@@ -116,6 +116,45 @@ async function main() {
     const wait = EVERY_MS - ((Date.now() - started) % EVERY_MS);
     await new Promise((r) => setTimeout(r, wait));
   }
+  // ---- The assumption under `liveLeagueTotal`, checked rather than believed.
+  //
+  // That helper computes a rival's live total as `total - event_total + live`,
+  // where `total - event_total` is meant to be the total BEFORE this gameweek.
+  // That is only sound if the two fields come from the same snapshot and mean
+  // what they say. If FPL published `event_total` as 0 while `total` carried
+  // the gameweek — plausible, and unverified — then in GW1 the helper would
+  // DOUBLE every total on the table.
+  //
+  // GW1 is the cleanest possible test: nothing precedes it, so `total` and
+  // `event_total` must be equal for every row, and `total - event_total` must
+  // be 0. League 314 is the global "Overall" league and needs no permission.
+  const LEAGUE = process.env.FPL_LEAGUE_ID ?? "314";
+  const st = await get(`leagues-classic/${LEAGUE}/standings/`);
+  if (!st.ok || !st.body) {
+    console.log(`standings ${LEAGUE}: ${st.status}`);
+  } else {
+    const rows = st.body.standings?.results ?? [];
+    console.log(`standings ${LEAGUE} · GW${event} · ${rows.length} rows · age=${st.age ?? "-"}`);
+    console.log("  entry | total | event_total | total-event_total");
+    let mismatched = 0;
+    for (const r of rows.slice(0, 12)) {
+      console.log(
+        `  ${String(r.entry).padEnd(9)} | ${String(r.total).padStart(5)} | ${String(
+          r.event_total
+        ).padStart(11)} | ${String(r.total - r.event_total).padStart(6)}`
+      );
+    }
+    for (const r of rows) if (r.total !== r.event_total) mismatched++;
+    console.log(
+      `  rows where total !== event_total: ${mismatched}/${rows.length}` +
+        (event === 1
+          ? mismatched === 0
+            ? "  => GW1 holds, the subtraction is sound"
+            : "  => GW1 BROKEN, `liveLeagueTotal` would be wrong"
+          : "  (only decisive in GW1)")
+    );
+  }
+
   console.log("done");
 }
 
