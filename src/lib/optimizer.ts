@@ -814,23 +814,44 @@ export function optimize(input: OptimizerInput): OptimizerResult {
    * gap measured over a later sub-window would be the unit mismatch this file
    * has already been caught making twice.
    *
-   * BOTH SIDES OF THE FLOOR ARE DECAYED, and the transfer card beside it now
-   * prints a PLAIN gain. So the guarantee this floor was introduced for — "the
-   * Wildcard can never be worth less than the best transfer plan on screen" —
-   * holds in the decayed currency and not, strictly, in the one the reader
-   * reads. Measured on the demo at horizon 8: the floor is 4.598 and the card
-   * next to it prints +4.626. It stays decayed because `wcGain` is itself a
-   * decayed quantity and mixing them is the defect rather than the fix; what it
-   * means is that this is a floor on the OBJECTIVE, and the copy claims no more.
+   * The floor and the card are in the SAME currency now — see the note below on
+   * why `wcGain` became plain. Swept on the demo over horizons 1-8 x free
+   * transfers {1,2,3,5} x bank {0,5,20}: 43 of 96 configurations had the
+   * wildcard coming out below a plan the same panel recommends while the two
+   * were in different currencies, and 0 of 96 do now.
    */
   const wcWin = chipWindow("wildcard", bootstrap.chips, nextEvent, input.usedChips);
   const wcGws = wcWin ? gws.filter((g) => g >= wcWin.start) : gws;
   const wcOpenNow = wcGws.length === gws.length;
-  const wcKeep = wcOpenNow ? keepHorizonXp : horizonScore(squadEls, xp, wcGws, scoreCache);
+  /*
+   * PLAIN POINTS, because the copy says "points" and the card beside it is
+   * plain. This was `horizonScore` on both sides — decayed — under copy reading
+   * "~X points behind an optimal one ... over the next N gameweeks", which is
+   * the same mislabelling `keepHorizonPlainXp` was introduced to fix two rows
+   * above, with the same profile. Measured on the 2026-08-21 snapshot, £100.0m
+   * squad, GW2 next:
+   *
+   *   horizon        1      3      5      8
+   *   card said     5.0   11.8   16.5   22.1
+   *   plain gap     5.04  13.37  21.06  32.96
+   *   low by          0%    12%    22%    33%
+   *
+   * And it broke the floor this block exists for. With the floor decayed and
+   * the transfer card plain, the wildcard came out BELOW a plan the same panel
+   * recommends: swept on the demo over horizons 1-8 x free transfers {1,2,3,5}
+   * x bank {0,5,20}, 43 of 96 configurations, by up to 4.56 points. Free
+   * transfers of 2 or more is the ordinary state from GW3 on, and the demo only
+   * ever shows 1, which is why one spot-check looked fine.
+   */
+  const plainScore = (els: Element[]) =>
+    wcGws.reduce((s, gw) => s + pickBestXi(els, (id) => xp.get(id)?.perGw.get(gw) ?? 0).totalXp, 0);
+  const wcKeep = plainScore(squadEls);
   const wcBase = Math.max(
-    horizonScore(dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank)), xp, wcGws, scoreCache),
+    plainScore(dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank))),
     wcKeep,
-    ...(wcOpenNow ? plans.map((p) => p.grossXp) : [])
+    // Every squad the beam evaluated is reachable on the chip without its hit,
+    // so its plain total before the hit is a floor — in the same currency now.
+    ...(wcOpenNow ? plans.map((p) => p.plainNetXp + p.hitCost) : [])
   );
   const wcGain = wcBase - wcKeep;
   chipAdvice.push({
@@ -840,9 +861,10 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     /*
      * SAY WHAT THIS NUMBER IS, BECAUSE IT IS NOT WHAT IT LOOKS LIKE.
      *
-     * `wcGain` is the best reachable squad minus keeping, over the horizon —
-     * see `wcBase` above for the three things it takes the best of. It is
-     * bounded below by zero and by the best transfer plan's own score, so it is
+     * `wcGain` is the best reachable squad minus keeping, in plain points over
+     * the horizon — see `wcBase` above for the three things it takes the best
+     * of. It is bounded below by zero and by the best transfer plan on the same
+     * panel, in the same units the panel prints, so it is
      * almost always comfortably positive — and the card then sorts to the top
      * of the advisor and reads as "play this now".
      * It is not that. It is the gap between your squad and the best one your
@@ -1994,7 +2016,25 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
    * baseline is the held squad over the same gameweeks.
    */
   const plainTotalXp = steps.reduce((s, st) => s + st.xi.totalXp, 0) - totalHits;
-  const plainKeepXp = gws.reduce((s, gw) => s + xiAt(beam[0].players, gw).totalXp, 0);
+  /*
+   * `heldSquad`, NOT `beam[0].players`.
+   *
+   * `keepXp` above uses `beam[0].players` and is correct, because it is
+   * computed BEFORE the search loop, while `beam` still holds the single
+   * starting state. This line runs AFTER it, where `beam` is the search
+   * frontier — so the "never transferring" baseline was the squad the plan ends
+   * with, transfers and all. Copying the idiom without noticing it is
+   * position-dependent.
+   *
+   * On the real 2026-08-21 snapshot at GW2, six gameweeks: it printed 240.1
+   * against a plan of 227.8, so the card told the reader that doing nothing
+   * beats the plan the panel had just built, by 12.3 points. Refutable from the
+   * same screen — "Keep the team" reads 167.5 over GW2-GW6, about 33.5 a week,
+   * and 240.1 over six would need GW7 alone to be 72.6. The demo hides it: 368.3
+   * against a true 369.32, so the plan still looks better there.
+   */
+  const heldSquad = owned.map((o) => ({ element: o.element }));
+  const plainKeepXp = gws.reduce((s, gw) => s + xiAt(heldSquad, gw).totalXp, 0);
   return {
     steps,
     totalXp: best.score,
@@ -2161,10 +2201,17 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
   if (chip === "wildcard") {
     // Permanent rebuild within team value, judged over the whole horizon.
     const { squad, cost } = buildSquadWithinBudget(bootstrap.elements, xp, teamValue);
-    const gain = Math.max(
-      0,
-      horizonScore(squad, xp, wcGws) - horizonScore(squadEls, xp, wcGws)
-    );
+    /*
+     * PLAIN, matching the card — see the note on `wcBase` in `optimize`. The
+     * card moved to plain points and this did not for one commit, which put
+     * 24.81 on the card and 23.42 on the sheet you open from it.
+     */
+    const plainOver = (els: Element[]) =>
+      wcGws.reduce(
+        (s, gw) => s + pickBestXi(els, (id) => xp.get(id)?.perGw.get(gw) ?? 0).totalXp,
+        0
+      );
+    const gain = Math.max(0, plainOver(squad) - plainOver(squadEls));
     /*
      * `nextEvent` WAS PRINTED AS "Best in GW{n}" AND IS NOT ALWAYS PLAYABLE.
      * The Wildcard is not a one-week chip, so there is no argmax here — but the

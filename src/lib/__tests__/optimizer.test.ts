@@ -222,7 +222,9 @@ describe("optimize", () => {
      * what the old clamp was hiding.
      */
     expect(src).toMatch(/const wcBase = Math\.max\(/);
-    expect(src).toMatch(/wcKeep,\n\s*\.\.\.\(wcOpenNow \? plans\.map\(\(p\) => p\.grossXp\) : \[\]\)/);
+    expect(src).toMatch(
+      /wcKeep,\n[\s\S]{0,220}?\.\.\.\(wcOpenNow \? plans\.map\(\(p\) => p\.plainNetXp \+ p\.hitCost\) : \[\]\)/
+    );
     expect(src).toMatch(/const wcGain = wcBase - wcKeep;/);
     expect(src).toMatch(/projectedGain: Math\.max\(0, fhBest\.gain\)/);
   });
@@ -1800,7 +1802,7 @@ describe("the Wildcard cannot be worth less than one transfer", () => {
    * measured.
    */
   const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
-  const run = (horizon: number) => {
+  const run = (horizon: number, freeTransfers = 1) => {
     const u = makeDemoUniverse(NOW);
     const bootstrap = u.bootstrap;
     const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
@@ -1819,19 +1821,30 @@ describe("the Wildcard cannot be worth less than one transfer", () => {
       fixtures: u.fixtures,
       owned,
       bank: 5,
-      freeTransfers: 1,
+      freeTransfers,
       nextEvent: bootstrap.events.find((e) => e.is_next)!.id,
       horizon,
     });
   };
 
   it("is never beaten by a transfer plan the same panel recommends", () => {
-    for (const horizon of [1, 2, 3, 5]) {
-      const res = run(horizon);
-      const wc = res.chipAdvice?.find((c) => c.chip === "wildcard");
-      const best = Math.max(0, ...res.plans.map((p) => p.gainVsKeep));
-      expect(wc, `h=${horizon}`).toBeTruthy();
-      expect(wc!.projectedGain, `h=${horizon}`).toBeGreaterThanOrEqual(best - 1e-9);
+    /*
+     * IN THE SAME UNITS AS THE PANEL. While `wcGain` was decayed and the
+     * transfer card was plain, the guarantee held in the objective and not on
+     * screen: swept over horizons 1-8 x free transfers {1,2,3,5} x bank
+     * {0,5,20}, the wildcard was beaten in 43 of 96 configurations, by up to
+     * 4.56 points. Free transfers of 2 or more is the ordinary state from GW3
+     * on and the demo only ever shows 1, which is why one spot-check at
+     * `freeTransfers: 1` looked fine — hence the sweep here.
+     */
+    for (const horizon of [2, 5, 8]) {
+      for (const ft of [1, 3]) {
+        const res = run(horizon, ft);
+        const wc = res.chipAdvice?.find((c) => c.chip === "wildcard");
+        const best = Math.max(0, ...res.plans.map((p) => p.gainVsKeep));
+        expect(wc, `h=${horizon} ft=${ft}`).toBeTruthy();
+        expect(wc!.projectedGain, `h=${horizon} ft=${ft}`).toBeGreaterThanOrEqual(best - 1e-9);
+      }
     }
   });
 
@@ -2139,6 +2152,64 @@ describe("the season planner charges a hit at 4, whenever it is taken", () => {
       // Every hit shown in the steps is in the total, once.
       expect(p.totalHits, `h=${horizon}`).toBe(p.steps.reduce((s, st) => s + st.hit, 0));
       expect(p.plainKeepXp, `h=${horizon}`).toBeGreaterThan(0);
+    }
+  });
+
+  it("baselines against the squad the reader HOLDS, not the one the plan ends with", () => {
+    /*
+     * `keepXp` reads `beam[0].players` and is correct, because it runs BEFORE
+     * the search loop while `beam` still holds the single starting state. The
+     * plain baseline copied that idiom AFTER the loop, where `beam` is the
+     * search frontier — so "never transferring" was the post-transfer squad.
+     *
+     * On the real 2026-08-21 snapshot at GW2 over six gameweeks it printed
+     * 240.1 against a plan of 227.8: the card told the reader that doing
+     * nothing beat the plan the panel had just built, by 12.3 points. The demo
+     * hid it — 368.3 against a true 369.32 — which is why this asserts the
+     * baseline against an independent recomputation rather than against a sign.
+     */
+    for (const horizon of [4, 6]) {
+      const u = makeDemoUniverse(NOW);
+      const bootstrap = u.bootstrap;
+      const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
+        const element = bootstrap.elements.find((e) => e.id === p.element)!;
+        return {
+          element,
+          sellPrice: element.now_cost,
+          purchasePrice: element.now_cost,
+          pickPosition: i + 1,
+          isCaptain: p.is_captain,
+          isViceCaptain: p.is_vice_captain,
+        };
+      });
+      const nextEvent = bootstrap.events.find((e) => e.is_next)!.id;
+      const p = planHorizon({
+        bootstrap,
+        fixtures: u.fixtures,
+        owned,
+        bank: 45,
+        freeTransfers: 1,
+        nextEvent,
+        horizon,
+      });
+      const xp = projectAll({
+        bootstrap,
+        fixtures: u.fixtures,
+        nextEvent,
+        horizon,
+        pastSeason: undefined,
+      });
+      let held = 0;
+      for (let i = 0; i < horizon; i++) {
+        const gw = nextEvent + i;
+        held += pickBestXi(
+          owned.map((o) => o.element),
+          (id) => xp.get(id)?.perGw.get(gw) ?? 0
+        ).totalXp;
+      }
+      expect(p.plainKeepXp, `h=${horizon}`).toBeCloseTo(held, 6);
+      // And the plan the app just built must not read as worse than nothing.
+      expect(p.plainTotalXp, `h=${horizon}`).toBeGreaterThan(p.plainKeepXp);
     }
   });
 

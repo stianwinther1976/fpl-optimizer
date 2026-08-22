@@ -525,10 +525,20 @@ export function makeDemoUniverse(now: number) {
           ? new Date(now - 8 * 3600_000).toISOString()
           : new Date(firstKickoff(gw) + i * 90 * 60_000).toISOString(),
         finished: isPast || isCurrent,
+        // `finished_provisional` is the final whistle and `finished` is bonus
+        // confirmed, so anything finished is provisionally finished too. The
+        // real feed has 0 of 380 fixtures missing the field and none that are
+        // `finished` without it; the demo left it undefined, and every call
+        // site ORs the two so nothing read wrong — but a demo whose SHAPE
+        // differs from the feed is how a branch goes untested.
+        finished_provisional: isPast || isCurrent,
         started: gw <= CURRENT_GW,
         // Filled in by the goals the match feed actually records, below.
         team_h_score: gw <= CURRENT_GW ? 0 : null,
         team_a_score: gw <= CURRENT_GW ? 0 : null,
+        // Filled by pass 4b of `buildGw` for every started fixture. The real
+        // feed sends an empty array for the rest, so that is the default.
+        stats: [] as { identifier: string; h: { element: number; value: number }[]; a: { element: number; value: number }[] }[],
       });
     }
   }
@@ -838,8 +848,22 @@ export function makeDemoUniverse(now: number) {
 
     /*
      * PASS 4 — bonus, awarded 3/2/1 on BPS within each fixture with FPL's
-     * tie-sharing. Awarded for in-play fixtures too, because since 2026/27 FPL
-     * publishes its own projected bonus once a match passes twenty minutes, and
+     * tie-sharing.
+     *
+     * MEASURED, at least at full time. On the 2026-08-21 snapshot the one
+     * fixture that is `finished_provisional` and not `finished` has already
+     * paid its bonus into the per-player rows: element 15 carries `bonus: 3`,
+     * `bps: 41`, `total_points: 11`, and the fixture's own `stats` array
+     * carries the 3/2/1 rows beside a 30-row BPS ladder. So awarding it before
+     * confirmation is what FPL does, and `provisionalBonus` netting to zero
+     * there is correct rather than a demo artefact.
+     *
+     * WHAT IS NOT MEASURED is the IN-PLAY case — whether FPL publishes bonus
+     * before the whistle. Neither snapshot contains a fixture in play, so the
+     * claim below is a belief this file cannot check; it is left as it was
+     * rather than reversed on a guess. Awarded for in-play fixtures too, on the
+     * premise that since 2026/27 FPL publishes its own projected bonus once a
+     * match passes twenty minutes, and
      * this one is at 58. That matters for more than realism: `provisionalBonus`
      * treats anything itemised in `explain` as already counted, so awarding it
      * here is what makes the Live tab's total agree with the dashboard's. When
@@ -861,6 +885,44 @@ export function makeDemoUniverse(now: number) {
         i += tied.length;
         award -= tied.length;
       }
+    }
+
+    /*
+     * PASS 4b — THE PER-FIXTURE `stats` ARRAY, WHICH THE DEMO DID NOT EMIT.
+     *
+     * All 380 demo fixtures shipped `stats: []`, while the real feed carries
+     * `bps` and `bonus` rows on every started fixture — GW1 fixture 1 of the
+     * 2026-08-21 snapshot has 30 bps rows from −8 to 41, and the three bonus
+     * rows pay exactly the top three. `provisionalBonus` reads that ladder, and
+     * CLAUDE.md names its absence as the THIRD instance of "the API sent a
+     * field and `types.ts` did not model it". So the branch written to replace
+     * the double-gameweek abstention took `ladder === null` on the only feed
+     * that runs locally and never executed in a single browser sweep.
+     *
+     * Split home and away, exactly as FPL splits it, and only for fixtures that
+     * have started — the real feed sends an empty array for the rest.
+     */
+    for (const f of gwFixtures) {
+      if (!f.started) continue;
+      const side = (home: boolean) =>
+        scored
+          .filter((p) => p.f === f && p.minutes > 0 && (p.e.team === f.team_h) === home)
+          .map((p) => ({ element: p.e.id, value: p.bps }))
+          .sort((a, b) => b.value - a.value);
+      const bonusSide = (home: boolean) =>
+        scored
+          .filter(
+            (p) =>
+              p.f === f &&
+              (p.e.team === f.team_h) === home &&
+              (bonusOf.get(p.e.id) ?? 0) > 0
+          )
+          .map((p) => ({ element: p.e.id, value: bonusOf.get(p.e.id) ?? 0 }))
+          .sort((a, b) => b.value - a.value);
+      f.stats = [
+        { identifier: "bps", h: side(true), a: side(false) },
+        { identifier: "bonus", h: bonusSide(true), a: bonusSide(false) },
+      ];
     }
 
     // PASS 5 — assemble. `total_points` is the sum of `explain`, always.
@@ -1526,6 +1588,12 @@ export function makeDemoUniverse(now: number) {
     // completed fixture for the auto-substitution machinery to act on.
     for (const { f } of ranked.slice(0, Math.min(2, ranked.length - 1))) {
       f.finished = false;
+      // AND NOT PROVISIONALLY FINISHED EITHER. The fixture loop now sets both
+      // flags together, because on the real feed a `finished` fixture always
+      // carries the provisional one too — so a match sent back into play has to
+      // clear both, or `isInPlay` sees full time and the demo has no live
+      // fixture at all.
+      f.finished_provisional = false;
       f.kickoff_time = new Date(now - 73 * 60_000).toISOString();
       // The published match clock, which is what `matchMinute` now reads. Set
       // it to the same 58 the kickoff above was chosen to produce, so the demo
@@ -1559,6 +1627,9 @@ export function makeDemoUniverse(now: number) {
       settled.finished = false;
       settled.finished_provisional = true;
       settled.minutes = 90;
+      // The real feed has 0 of 380 fixtures missing this flag and none that are
+      // `finished` without it. Every call site ORs the two, so nothing reads
+      // wrong today; setting it keeps the demo the same SHAPE as the feed.
     }
   }
 

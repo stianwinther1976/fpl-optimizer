@@ -2487,3 +2487,87 @@ describe("auto-substitution waits for full time, not for bonus", () => {
     expect(projectAutoSubs(u.picks.picks, byId, u.live, fixtures, CURRENT_GW).out).toEqual([]);
   });
 });
+
+describe("the demo has the same SHAPE as the feed it stands in for", () => {
+  /*
+   * All 380 demo fixtures shipped `stats: []` while the real feed carries `bps`
+   * and `bonus` rows on every started fixture — the 2026-08-21 snapshot's GW1
+   * fixture 1 has a 30-row BPS ladder from −8 to 41 and three bonus rows paying
+   * exactly the top three. `provisionalBonus` reads that ladder, and CLAUDE.md
+   * names its absence as the THIRD instance of "the API sent a field and
+   * `types.ts` did not model it" — so the branch written to replace the
+   * double-gameweek abstention took `ladder === null` on the only feed that
+   * runs locally, and never executed in a single browser sweep.
+   */
+  const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+  const u = makeDemoUniverse(NOW);
+  type Row = { element: number; value: number };
+  type Stat = { identifier: string; h: Row[]; a: Row[] };
+  const statsOf = (f: { stats?: Stat[] }): Stat[] => f.stats ?? [];
+  const find = (f: { stats?: Stat[] }, id: string) =>
+    statsOf(f).find((x) => x.identifier === id);
+
+  it("puts a BPS ladder on every started fixture", () => {
+    const started = u.fixtures.filter((f) => f.started);
+    expect(started.length).toBeGreaterThan(0);
+    for (const f of started) {
+      const bps = find(f, "bps");
+      expect(bps, `fixture ${f.id}`).toBeTruthy();
+      expect(bps!.h.length + bps!.a.length, `fixture ${f.id}`).toBeGreaterThan(0);
+    }
+    // And nothing on a fixture that has not kicked off, as the feed does.
+    for (const f of u.fixtures.filter((x) => !x.started)) {
+      expect(statsOf(f).length, `fixture ${f.id}`).toBe(0);
+    }
+  });
+
+  it("pays exactly the top three of each ladder, split home and away", () => {
+    const f = u.fixtures.find((x) => x.started)!;
+    const bps = find(f, "bps")!;
+    const bonus = find(f, "bonus")!;
+    const ladder = [...bps.h, ...bps.a].sort((a, b) => b.value - a.value);
+    const paid = [...bonus.h, ...bonus.a].sort((a, b) => b.value - a.value);
+    /*
+     * TIE-SHARING, WHICH FPL DOES AND THE FIRST VERSION OF THIS TEST DID NOT
+     * ALLOW: two players level on BPS both take 3 and the next takes 1, so the
+     * awards are not always [3, 2, 1]. What must hold is that everyone paid
+     * outscores everyone unpaid, and that the awards descend from 3.
+     */
+    const paidIds = new Set(paid.map((p) => p.element));
+    const worstPaid = Math.min(...ladder.filter((r) => paidIds.has(r.element)).map((r) => r.value));
+    const bestUnpaid = Math.max(
+      ...ladder.filter((r) => !paidIds.has(r.element)).map((r) => r.value)
+    );
+    expect(worstPaid).toBeGreaterThan(bestUnpaid);
+    expect(paid[0].value).toBe(3);
+    for (let i = 1; i < paid.length; i++) {
+      expect(paid[i].value).toBeLessThanOrEqual(paid[i - 1].value);
+    }
+    // Home rows are home players, away rows away players.
+    for (const r of bps.h) {
+      expect(u.bootstrap.elements.find((e) => e.id === r.element)!.team).toBe(f.team_h);
+    }
+    for (const r of bps.a) {
+      expect(u.bootstrap.elements.find((e) => e.id === r.element)!.team).toBe(f.team_a);
+    }
+  });
+
+  it("keeps a match in play out of BOTH finished flags", () => {
+    /*
+     * The fixture loop now sets `finished` and `finished_provisional` together,
+     * because the real feed has 0 of 380 fixtures `finished` without the
+     * provisional flag. A match sent back into play has to clear both, or
+     * `isInPlay` reads full time and the demo has no live fixture at all.
+     */
+    const inPlay = u.fixtures.filter(
+      (f) => f.started && !f.finished && !f.finished_provisional
+    );
+    expect(inPlay.length).toBe(2);
+    for (const f of inPlay) {
+      const bps = find(f, "bps")!;
+      expect(bps.h.length + bps.a.length).toBeGreaterThan(0);
+    }
+    // And no fixture is finished without being provisionally finished.
+    expect(u.fixtures.filter((f) => f.finished && !f.finished_provisional)).toHaveLength(0);
+  });
+});
