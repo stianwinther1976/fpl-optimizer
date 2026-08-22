@@ -510,3 +510,26 @@ export function liveOverallPoints(
   }
   return before + liveNet;
 }
+
+/**
+ * A rival's overall total DURING a live gameweek, from the live score.
+ *
+ * The league table had the same split the dashboard header did: the "GW"
+ * column printed the live figure while "Total" printed `total` straight from
+ * the standings — FPL's stored cumulative, refreshed on their schedule. In
+ * GW1, where the two are by definition the same number, the table showed 7
+ * beside 3.
+ *
+ * `total - eventTotal` is the total BEFORE this gameweek, and it is sound even
+ * when the standings payload is stale, because both halves come from the same
+ * snapshot: whatever partial figure FPL had for the gameweek is in `total` and
+ * in `eventTotal` alike, and subtracting removes exactly it. That is a
+ * stronger guarantee than the dashboard's version has, which is why this does
+ * not go looking through history rows.
+ *
+ * Both `total` and `eventTotal` are NET of transfer costs, as is the score
+ * `liveEntryScore` returns, so the three compose directly.
+ */
+export function liveLeagueTotal(total: number, eventTotal: number, liveNet: number): number {
+  return total - eventTotal + liveNet;
+}
