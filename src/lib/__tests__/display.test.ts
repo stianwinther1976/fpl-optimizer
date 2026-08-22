@@ -15,6 +15,7 @@ import {
   kickOffPassed,
   liveStaleMinutes,
   liveOverallPoints,
+  liveLeagueTotal,
   netEventPoints,
   netGwDelta,
   netGwPoints,
@@ -686,5 +687,28 @@ describe("liveOverallPoints", () => {
   it("carries a negative live week through", () => {
     // A -8 week that scored 4 is a net -4 and must reduce the total.
     expect(liveOverallPoints([{ event: 1, total_points: 60 }], 2, -4)).toBe(56);
+  });
+});
+
+describe("liveLeagueTotal", () => {
+  it("makes GW and total agree in GW1, where they are the same number", () => {
+    // Measured on league 314 at 16:49Z: 0 of 50 rows had total !== event_total,
+    // so `total - event_total` really is 0 there. See `standings-check.mjs`.
+    // Reported: the table showed a live 7 beside a stored 3.
+    expect(liveLeagueTotal(3, 3, 7)).toBe(7);
+  });
+
+  it("adds the live score onto the total before this gameweek", () => {
+    // 118 overall of which 12 is this week's stored figure => 106 before it.
+    expect(liveLeagueTotal(118, 12, 40)).toBe(146);
+  });
+
+  it("is unaffected by how stale the standings snapshot is", () => {
+    // Both halves move together, so the difference is invariant.
+    expect(liveLeagueTotal(118, 12, 40)).toBe(liveLeagueTotal(110, 4, 40));
+  });
+
+  it("carries a hit-negative week through", () => {
+    expect(liveLeagueTotal(60, 0, -4)).toBe(56);
   });
 });

@@ -510,3 +510,37 @@ export function liveOverallPoints(
   }
   return before + liveNet;
 }
+
+/**
+ * A rival's overall total DURING a live gameweek, from the live score.
+ *
+ * The league table had the same split the dashboard header did: the "GW"
+ * column printed the live figure while "Total" printed `total` straight from
+ * the standings — FPL's stored cumulative, refreshed on their schedule. In
+ * GW1, where the two are by definition the same number, the table showed 7
+ * beside 3.
+ *
+ * `total - eventTotal` is the total BEFORE this gameweek, and it is sound even
+ * when the standings payload is stale, because both halves come from the same
+ * snapshot: whatever partial figure FPL had for the gameweek is in `total` and
+ * in `eventTotal` alike, and subtracting removes exactly it. That is a
+ * stronger guarantee than the dashboard's version has, which is why this does
+ * not go looking through history rows.
+ *
+ * MEASURED, not assumed. If FPL published `eventTotal` as 0 while `total`
+ * already carried the gameweek, this would DOUBLE every total on the table in
+ * GW1 — which is exactly where it was about to ship. GW1 is the cleanest
+ * possible test of it: nothing precedes it, so the difference must be 0 on
+ * every row. Read off league 314, the global Overall league, at 16:49Z on
+ * 2026-08-22: **0 of 50 rows had `total !== event_total`**, and every
+ * difference was 0. The check lives in `scripts/snapshot/standings-check.mjs`
+ * and is the first step of the probe workflow; re-run it in a later gameweek
+ * and it will say it is only decisive in GW1, which is honest — the guarantee
+ * being relied on is the same-snapshot one, and GW1 is where it can be seen.
+ *
+ * Both `total` and `eventTotal` are NET of transfer costs, as is the score
+ * `liveEntryScore` returns, so the three compose directly.
+ */
+export function liveLeagueTotal(total: number, eventTotal: number, liveNet: number): number {
+  return total - eventTotal + liveNet;
+}
