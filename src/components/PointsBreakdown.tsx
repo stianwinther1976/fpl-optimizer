@@ -338,8 +338,15 @@ export default function PointsBreakdown({
                 season view the header says "Apps" and the number on screen was
                 24 — the number of players — against a true 213, which is
                 19 gameweeks x 11 plus the four bench slots a Bench Boost added
-                in GW15. The per-gameweek view was right only because its header
-                changes to "Pl" and one appearance per row is the same thing.
+                in GW15.
+
+                The per-gameweek view counts a different thing on purpose, and
+                an earlier version of this note claimed the two agreed: `apps`
+                counts rows with MINUTES, while `byGw` is set for every player
+                in the effective XI. So they differ whenever someone in the
+                counted set did not play — 10 against 11 for a blanked starter
+                with no legal substitute, 14 against 15 in most Bench Boost
+                weeks. Its header says "Pl" rather than "Apps" for that reason.
               */}
               <td className="px-2 py-2 text-right font-mono text-muted">
                 {gwView

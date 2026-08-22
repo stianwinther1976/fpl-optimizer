@@ -89,11 +89,19 @@ const LABELS: Record<PriceTrend, string> = {
 export function readPriceChange(
   el: Pick<Element, "price_change_percent" | "price_change_hourly_rate">
 ): PriceChangeRead | null {
+  /*
+   * `price_change_hourly_rate` IS TYPED AS A NUMBER AND HAS ONLY EVER BEEN SEEN
+   * AS ZERO. Both snapshots are pre-season, so nothing establishes its
+   * in-season shape — and FPL ships `price_change_percent` as a STRING, so a
+   * string here would make `rate === 0` never match and silently restore the
+   * "speak for all 600" behaviour. This repo is three for three on unmodelled
+   * field shapes, so the read is coerced rather than trusted.
+   */
   const raw = el.price_change_percent;
   if (raw == null || raw === "") return null;
   const n = Number(raw);
   if (!Number.isFinite(n)) return null;
-  const rate = el.price_change_hourly_rate ?? 0;
+  const rate = Number(el.price_change_hourly_rate ?? 0);
   if (n === 0 && (!Number.isFinite(rate) || rate === 0)) return null;
   const percent = Math.max(-200, Math.min(200, n));
   const mag = Math.abs(percent);

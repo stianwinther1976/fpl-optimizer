@@ -549,11 +549,21 @@ export default function Dashboard({
      *    see this call site. The time-machine branch below has the guard; the
      *    live branch did not.
      *
-     * Returning null in both cases sends every consumer back to
+     * A null `xi` in both cases sends every consumer back to
      * `pickPosition <= 11`, which is the right answer for each.
+     *
+     * BUT `out` IS NOT ABOUT THE XI, AND BAILING TOOK IT WITH THEM. `out` is
+     * "whose matches finished on zero minutes" — a per-player fact about
+     * MINUTES, true under every chip — and it is also what fires the
+     * vice-captain takeover below. Returning null outright therefore stopped
+     * the armband moving in exactly the two weeks a reader is most invested in.
+     * `LiveTab` says the rule in so many words — "Bench Boost cancels the
+     * substitution but not the vice-captain rule, which FPL applies in every
+     * week regardless of chip" — and this file did the opposite. Measured on a
+     * constructed universe with a fixture at full time and bonus unconfirmed,
+     * captain blanked: Bench Boost 39 on the Live tab against 37 here, Free Hit
+     * 28 against 23, and 27 against 18 with a starter blanked as well.
      */
-    if (data.picks.active_chip === "bboost") return null;
-    if (data.picks.active_chip === "freehit") return null;
     const elementById = new Map(data.bootstrap.elements.map((e) => [e.id, e]));
     const { effectiveXi, out } = projectAutoSubs(
       data.picks.picks,
@@ -562,7 +572,24 @@ export default function Dashboard({
       data.fixtures,
       currentEvent
     );
-    return { xi: new Set(effectiveXi), out: new Set(out) };
+    /*
+     * AND FREE HIT IS NOT A NO-SUBS WEEK. FPL applies auto-substitutions under
+     * Free Hit exactly as it does in an ordinary gameweek; Bench Boost is the
+     * one that cancels them, because all fifteen already score. The bail here
+     * covered both, so under a Free Hit the pitch counted the picked eleven
+     * while every other surface counted the substituted one — measured on the
+     * constructed universe at 90 against 96, and 84 against 96 with a starter
+     * blanked as well.
+     *
+     * The reason the Free Hit bail was added is in the note above: `autoSubs`
+     * describes `data.picks`, and intersecting it with a squad built from the
+     * PREVIOUS gameweek drew an impossible team. That is fixed at the source —
+     * the pitch draws `currentPlayers`, which IS the Free Hit fifteen, the same
+     * set `data.picks.picks` holds — so the bail is no longer protecting
+     * anything and is costing the substitution.
+     */
+    const noSubs = data.picks.active_chip === "bboost";
+    return { xi: noSubs ? null : new Set(effectiveXi), out: new Set(out) };
   }, [liveData, data, currentEvent]);
   const effectiveXiIds = autoSubs?.xi ?? null;
 

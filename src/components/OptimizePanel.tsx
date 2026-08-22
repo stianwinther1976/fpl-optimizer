@@ -801,13 +801,29 @@ export default function OptimizePanel({
         {plan && (
           <div className="mt-3 space-y-3">
             <div className="card flex flex-wrap items-center gap-x-6 gap-y-1 p-4 text-sm">
+              {/*
+                TWO NUMBERS, BECAUSE THEY ANSWER TWO QUESTIONS. `gainVsKeep` is
+                the beam's own objective — decayed, so a gameweek six weeks out
+                counts for less — and it is what decides that this plan beats
+                doing nothing. It is not a points total and printing it alone as
+                "xp" was the same mislabelling the transfer card carried. The
+                plain totals beside it are points the reader can add up.
+              */}
               <div>
                 <span className="text-muted">Plan value:</span>{" "}
                 <b className="text-accent">
                   {plan.gainVsKeep >= 0 ? "+" : ""}
-                  {plan.gainVsKeep.toFixed(1)} xp
+                  {plan.gainVsKeep.toFixed(1)}
                 </b>{" "}
-                <span className="text-muted">vs never transferring</span>
+                <span className="text-muted">on the planner&apos;s weighted score</span>
+              </div>
+              <div>
+                <span className="text-muted">Projected:</span>{" "}
+                <b>{plan.plainTotalXp.toFixed(1)} pts</b>{" "}
+                <span className="text-muted">
+                  over {plan.steps.length} GW{plan.steps.length === 1 ? "" : "s"}, against{" "}
+                  {plan.plainKeepXp.toFixed(1)} for never transferring
+                </span>
               </div>
               {plan.totalHits > 0 ? (
                 <div className="text-danger">−{plan.totalHits} pts in hits (already priced in)</div>
@@ -1183,7 +1199,9 @@ export default function OptimizePanel({
             </div>
             <div className="mt-3">
               {(() => {
-                const bestPlan = [...result.plans].sort((a, b) => b.netXp - a.netXp)[0];
+                // `plainNetXp`, so the pitch draws the eleven the card above it
+                // badges — see the note at `fieldXi` in `optimizer.ts`.
+                const bestPlan = [...result.plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
                 const xi =
                   view === "dream"
                     ? result.dreamTeam

@@ -63,8 +63,10 @@ export interface Element {
    *  Past ±100 the change is expected at the next 00:00 UK update. */
   price_change_percent?: string;
   /**
-   * The rest of the 2026/27 predictor, which the API publishes and this app
-   * does not read — modelled so that stays a decision rather than an oversight.
+   * The rest of the 2026/27 predictor. `price_change_hourly_rate` IS read —
+   * `readPriceChange` uses it, with `price_change_percent`, to tell a stopped
+   * predictor from a forecast. The other three are modelled and unread, so that
+   * stays a decision rather than an oversight.
    * `src/lib/priceChange.ts` opened by saying these did not exist and used that
    * as the reason for its own thresholds; see the note there for what every one
    * of them is worth 0 / null / false on both live snapshots.

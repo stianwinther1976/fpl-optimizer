@@ -537,7 +537,20 @@ export function optimize(input: OptimizerInput): OptimizerResult {
    * gains anything, otherwise keeping. The reader can still switch the pitch to
    * "No transfers" or "Dream £100m", so the copy names which eleven this is.
    */
-  const bestPlan = [...plans].sort((a, b) => b.netXp - a.netXp)[0];
+  /*
+   * `plainNetXp`, NOT `netXp` — the same quantity the panel badges and prints.
+   *
+   * Moving `gainVsKeep` to plain points moved the Recommended badge with it and
+   * left this sort and the Line-up pitch's on the decayed one. The two rankings
+   * differ over a real band: with `p = keepHorizonXp / keepHorizonPlainXp` they
+   * disagree whenever the extra transfer's plain gain is between 4 and 4/p —
+   * 4 to 4.52 at horizon 3, 4 to 5.08 at 5, 4 to 5.99 at 8. Inside it the
+   * reader saw "Recommended" on the two-transfer card while the pitch below and
+   * this ownership figure both described the one-transfer eleven. That is
+   * exactly the defect the note below was written to remove, reintroduced by
+   * the metric change.
+   */
+  const bestPlan = [...plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
   const fieldXi =
     bestPlan && bestPlan.gainVsKeep > 0.05 ? bestPlan.nextXi : keepXi;
   const fieldSplit = splitByField(
@@ -800,6 +813,15 @@ export function optimize(input: OptimizerInput): OptimizerResult {
    * happen NOW, so their scores are over `gws`, and comparing them against a
    * gap measured over a later sub-window would be the unit mismatch this file
    * has already been caught making twice.
+   *
+   * BOTH SIDES OF THE FLOOR ARE DECAYED, and the transfer card beside it now
+   * prints a PLAIN gain. So the guarantee this floor was introduced for — "the
+   * Wildcard can never be worth less than the best transfer plan on screen" —
+   * holds in the decayed currency and not, strictly, in the one the reader
+   * reads. Measured on the demo at horizon 8: the floor is 4.598 and the card
+   * next to it prints +4.626. It stays decayed because `wcGain` is itself a
+   * decayed quantity and mixing them is the defect rather than the fix; what it
+   * means is that this is a floor on the OBJECTIVE, and the copy claims no more.
    */
   const wcWin = chipWindow("wildcard", bootstrap.chips, nextEvent, input.usedChips);
   const wcGws = wcWin ? gws.filter((g) => g >= wcWin.start) : gws;
@@ -820,7 +842,7 @@ export function optimize(input: OptimizerInput): OptimizerResult {
      *
      * `wcGain` is the best reachable squad minus keeping, over the horizon —
      * see `wcBase` above for the three things it takes the best of. It is
-     * bounded below by zero and by the best transfer plan on screen, so it is
+     * bounded below by zero and by the best transfer plan's own score, so it is
      * almost always comfortably positive — and the card then sorts to the top
      * of the advisor and reads as "play this now".
      * It is not that. It is the gap between your squad and the best one your
@@ -1688,7 +1710,18 @@ export interface GwPlanStep {
 
 export interface SeasonPlan {
   steps: GwPlanStep[];
-  totalXp: number; // discounted XI xp over the horizon, hits subtracted
+  totalXp: number; // discounted XI xp over the horizon, hits subtracted (search key)
+  /**
+   * The same plan summed WITHOUT the decay, hits subtracted — the number the
+   * panel prints as "Plan value".
+   *
+   * `totalXp` is the beam's key and is a decayed quantity; printing it as
+   * points had the same problem the single-week card had, and worse, because
+   * the decay here is indexed by the gameweek a transfer is made in.
+   */
+  plainTotalXp: number;
+  /** `keepXp` without the decay. */
+  plainKeepXp: number;
   totalHits: number;
   keepXp: number; // same score for doing nothing all horizon
   gainVsKeep: number;
@@ -1857,7 +1890,24 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
           (hit > 0 ? 0 : Math.max(0, state.ft - used)) + 1
         );
         const xi = xiAt(applied.players, gw);
-        const gwScore = xi.totalXp * decayAt(gw) - hit;
+        /*
+         * THE HIT IS DISCOUNTED WITH THE GAMEWEEK IT IS PAID IN, and it was
+         * not. `xi.totalXp * decayAt(gw) - hit` weighted the benefit by
+         * `0.88 ** offset` and charged the cost at face value — and here the
+         * index is WHEN THE TRANSFER IS MADE, not the horizon, so the penalty
+         * grew the further out the planner looked:
+         *
+         *   hit taken at offset   0      2      4      5
+         *   gain weight         1.000  0.774  0.600  0.527
+         *   what a −4 cost      4.00   5.17   6.67   7.59   plain points
+         *
+         * So the six-gameweek planner refused a −4 in GW+5 that gained 7 plain
+         * points, on the section whose own copy advertises "when a −4 actually
+         * pays for itself". Weighting both sides by the same factor makes the
+         * trade offset-independent, which is what the decay was for: a
+         * preference over TIME, not a surcharge on patience.
+         */
+        const gwScore = (xi.totalXp - hit) * decayAt(gw);
         const key =
           applied.players
             .map((p) => p.element.id)
@@ -1938,11 +1988,37 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
     };
   });
   const totalHits = steps.reduce((s, st) => s + st.hit, 0);
+  /*
+   * Undiscounted, for display — see `SeasonPlan.plainTotalXp`. The plan's own
+   * XIs are already reconstructed above, so this is a sum over `steps`; the
+   * baseline is the held squad over the same gameweeks.
+   */
+  const plainTotalXp = steps.reduce((s, st) => s + st.xi.totalXp, 0) - totalHits;
+  const plainKeepXp = gws.reduce((s, gw) => s + xiAt(beam[0].players, gw).totalXp, 0);
   return {
     steps,
     totalXp: best.score,
+    plainTotalXp,
+    plainKeepXp,
     totalHits,
     keepXp,
+    /*
+     * DECAYED, AND DELIBERATELY. The single-week card's hit arithmetic moved to
+     * plain points because mixing units there created an effective hit cost
+     * nobody chose. Here the mixing is gone — `gwScore` now discounts the hit
+     * with the gameweek it is paid in — so the objective is internally
+     * consistent, and this stays the quantity the beam actually maximises.
+     *
+     * Making it plain was tried and reverted in the same sitting: the beam
+     * searches on the decayed score, so a plain gain can come out NEGATIVE on a
+     * plan the planner has just chosen — measured at −2.97 on the demo at
+     * horizon 6 — which breaks "the plan never scores worse than doing
+     * nothing" and would put a minus sign on the app's own recommendation.
+     * Reporting one number while optimising another is the defect this round
+     * was fixing, not a fix for it. `plainTotalXp` and `plainKeepXp` are what
+     * the panel prints, side by side, so the reader still has figures they can
+     * add up.
+     */
     gainVsKeep: best.score - keepXp,
   };
 }

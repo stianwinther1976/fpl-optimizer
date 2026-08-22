@@ -481,14 +481,29 @@ describe("the origin absorbs a launch draft, and only a launch draft", () => {
     // `fetchCache` not having one is a defect this repo already recorded.
     const original = globalThis.fetch;
     resetMemo();
-    okFetch();
+    const calls = okFetch();
     try {
       const { GET } = await import("./[...path]/route");
       const req = { nextUrl: { searchParams: new URLSearchParams() } } as unknown as Parameters<typeof GET>[0];
-      for (let i = 1; i <= 950; i++) {
+      for (let i = 1; i <= 900; i++) {
         await GET(req, { params: Promise.resolve({ path: ["element-summary", String(i)] }) });
       }
       expect(memoSize()).toBe(900);
+      /*
+       * AND LEAST RECENTLY *USED*, WHICH THIS TEST DID NOT CHECK. It was named
+       * for the property and asserted only the size, so a plain
+       * insertion-ordered map with no promotion on read would have passed.
+       * Touch #1, then overflow: #1 must survive and #2 must go.
+       */
+      await GET(req, { params: Promise.resolve({ path: ["element-summary", "1"] }) });
+      await GET(req, { params: Promise.resolve({ path: ["element-summary", "901"] }) });
+      expect(memoSize()).toBe(900);
+      // #2 was evicted, so asking for it goes upstream again; #1 did not.
+      const before = calls();
+      await GET(req, { params: Promise.resolve({ path: ["element-summary", "1"] }) });
+      expect(calls()).toBe(before);
+      await GET(req, { params: Promise.resolve({ path: ["element-summary", "2"] }) });
+      expect(calls()).toBe(before + 1);
     } finally {
       globalThis.fetch = original;
       resetMemo();

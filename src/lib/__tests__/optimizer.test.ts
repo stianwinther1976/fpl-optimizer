@@ -1172,7 +1172,7 @@ describe("captaincy against the field", () => {
      * team the reader was being advised not to field.
      */
     const r = run();
-    const best = [...r.plans].sort((a, b) => b.netXp - a.netXp)[0];
+    const best = [...r.plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
     const shown = best && best.gainVsKeep > 0.05 ? best.nextXi : r.keepXi;
     const total = shown.starters.reduce((a, s) => a + s.xp, 0);
     expect(r.fieldSplit.total).toBeCloseTo(total, 6);
@@ -1881,7 +1881,7 @@ describe("'Against the field' describes the XI the panel recommends", () => {
   })();
 
   it("totals the same eleven the pitch draws by default", () => {
-    const best = [...res.plans].sort((a, b) => b.netXp - a.netXp)[0];
+    const best = [...res.plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
     const shown = best && best.gainVsKeep > 0.05 ? best.nextXi : res.keepXi;
     const sum = shown.starters.reduce((s, x) => s + x.xp, 0);
     // `splitByField` drops players whose ownership FPL has not published, so
@@ -1891,7 +1891,7 @@ describe("'Against the field' describes the XI the panel recommends", () => {
   });
 
   it("says which eleven it is describing", () => {
-    const best = [...res.plans].sort((a, b) => b.netXp - a.netXp)[0];
+    const best = [...res.plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
     expect(res.fieldXiIsPlan).toBe(Boolean(best && best.gainVsKeep > 0.05));
   });
 
@@ -2006,5 +2006,162 @@ describe("a −4 hit costs 4, not 4 divided by the decay", () => {
     expect(hit).toBeTruthy();
     const decayedGain = hit!.netXp - res.keepHorizonXp;
     expect(hit!.gainVsKeep).toBeGreaterThan(decayedGain + 1);
+  });
+});
+
+describe("one answer to 'which plan is best'", () => {
+  /*
+   * Moving `gainVsKeep` to plain points moved the Recommended badge with it and
+   * left `fieldXi` and the Line-up pitch ranking on the decayed `netXp`. The
+   * two disagree over a real band: with `p = keepHorizonXp / keepHorizonPlainXp`
+   * they differ whenever the extra transfer's plain gain is between 4 and 4/p —
+   * 4 to 5.99 at horizon 8, 4 to 7.36 at 12. Inside it the reader saw
+   * "Recommended" on the two-transfer card while the pitch below it and the
+   * ownership figure beside it both described the one-transfer eleven.
+   *
+   * The fixture is the demo squad with £4.5m in the bank — a manager who has
+   * just sold a premium — which puts the second transfer's gross gain at 4.63
+   * and lands it squarely in the band. Measured there, the two rankings pick
+   * different plans at horizons 8 and 12 and at both free-transfer counts.
+   */
+  const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+  const inBand = (horizon: number, freeTransfers: number) => {
+    const u = makeDemoUniverse(NOW);
+    const bootstrap = u.bootstrap;
+    const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
+      const element = bootstrap.elements.find((e) => e.id === p.element)!;
+      return {
+        element,
+        sellPrice: element.now_cost,
+        purchasePrice: element.now_cost,
+        pickPosition: i + 1,
+        isCaptain: p.is_captain,
+        isViceCaptain: p.is_vice_captain,
+      };
+    });
+    return optimize({
+      bootstrap,
+      fixtures: u.fixtures,
+      owned,
+      bank: 45,
+      freeTransfers,
+      nextEvent: bootstrap.events.find((e) => e.is_next)!.id,
+      horizon,
+    });
+  };
+
+  it("is a fixture where the two rankings really do disagree", () => {
+    // Or everything below is satisfied by a state that cannot tell them apart.
+    for (const [horizon, ft] of [[8, 1], [12, 1], [8, 0]] as const) {
+      const res = inBand(horizon, ft);
+      const byPlain = [...res.plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
+      const byDecay = [...res.plans].sort((a, b) => b.netXp - a.netXp)[0];
+      expect(byPlain.transfers.length, `h=${horizon} ft=${ft}`).not.toBe(byDecay.transfers.length);
+    }
+  });
+
+  it("badges, draws and describes the same eleven", () => {
+    for (const [horizon, ft] of [[8, 1], [12, 1], [8, 0]] as const) {
+      const res = inBand(horizon, ft);
+      const badged = [...res.plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
+      // The same rule `fieldXi` uses inside `optimize`.
+      const shown = badged && badged.gainVsKeep > 0.05 ? badged.nextXi : res.keepXi;
+      const sum = shown.starters.reduce((s, x) => s + x.xp, 0);
+      expect(res.fieldSplit.total, `h=${horizon} ft=${ft}`).toBeCloseTo(sum, 6);
+      expect(res.fieldXiIsPlan, `h=${horizon} ft=${ft}`).toBe(
+        Boolean(badged && badged.gainVsKeep > 0.05)
+      );
+    }
+  });
+
+  it("never prefers a plan the reader can see is behind", () => {
+    for (const [horizon, ft] of [[8, 1], [12, 1], [8, 0]] as const) {
+      const res = inBand(horizon, ft);
+      const best = [...res.plans].sort((a, b) => b.plainNetXp - a.plainNetXp)[0];
+      for (const p of res.plans) {
+        expect(p.gainVsKeep, `h=${horizon} ft=${ft}`).toBeLessThanOrEqual(best.gainVsKeep + 1e-9);
+      }
+    }
+  });
+});
+
+describe("the season planner charges a hit at 4, whenever it is taken", () => {
+  /*
+   * `xi.totalXp * decayAt(gw) - hit` weighted the benefit by `0.88 ** offset`
+   * and charged the cost at face value — and here the index is WHEN THE
+   * TRANSFER IS MADE, not the horizon, so the penalty grew the further out the
+   * planner looked:
+   *
+   *   hit taken at offset   0      2      4      5
+   *   gain weight         1.000  0.774  0.600  0.527
+   *   what a −4 cost      4.00   5.17   6.67   7.59   plain points
+   *
+   * The section's own copy advertises "when a −4 actually pays for itself".
+   */
+  const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+  const plan = (horizon: number, freeTransfers = 1) => {
+    const u = makeDemoUniverse(NOW);
+    const bootstrap = u.bootstrap;
+    const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
+      const element = bootstrap.elements.find((e) => e.id === p.element)!;
+      return {
+        element,
+        sellPrice: element.now_cost,
+        purchasePrice: element.now_cost,
+        pickPosition: i + 1,
+        isCaptain: p.is_captain,
+        isViceCaptain: p.is_vice_captain,
+      };
+    });
+    return planHorizon({
+      bootstrap,
+      fixtures: u.fixtures,
+      owned,
+      bank: 45,
+      freeTransfers,
+      nextEvent: bootstrap.events.find((e) => e.is_next)!.id,
+      horizon,
+    });
+  };
+
+  it("prints totals the reader can add up, beside the score it decides on", () => {
+    /*
+     * `gainVsKeep` stays the beam's own decayed objective — making it plain was
+     * tried and reverted, because the beam searches on the decayed score, so a
+     * plain gain comes out NEGATIVE on a plan the planner has just chosen
+     * (−2.97 on the demo at horizon 6). What the panel prints as POINTS are
+     * these two, and they have to be real sums.
+     */
+    for (const horizon of [4, 6, 8]) {
+      const p = plan(horizon);
+      const fromSteps = p.steps.reduce((s, st) => s + st.xi.totalXp, 0) - p.totalHits;
+      expect(p.plainTotalXp, `h=${horizon}`).toBeCloseTo(fromSteps, 6);
+      // Every hit shown in the steps is in the total, once.
+      expect(p.totalHits, `h=${horizon}`).toBe(p.steps.reduce((s, st) => s + st.hit, 0));
+      expect(p.plainKeepXp, `h=${horizon}`).toBeGreaterThan(0);
+    }
+  });
+
+  it("weighs a hit against the gameweek it is paid in, not against gameweek one", () => {
+    /*
+     * The property, stated on the search key rather than on an outcome: a
+     * gameweek's contribution must be a single decayed quantity, so that the
+     * hit/gain trade is the same at every offset. Pinned at source because the
+     * quantity is internal to the beam.
+     */
+    const src = fs.readFileSync(path.join(__dirname, "../optimizer.ts"), "utf8");
+    expect(src).toMatch(/const gwScore = \(xi\.totalXp - hit\) \* decayAt\(gw\);/);
+    // In the CODE — the note above it quotes the old expression.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    expect(code).not.toMatch(/xi\.totalXp \* decayAt\(gw\) - hit/);
+  });
+
+  it("keeps the decayed score as the objective, and says so", () => {
+    // The panel prints the plain totals as points and the decayed gain as "the
+    // planner's weighted score". They must stay distinguishable quantities.
+    const p = plan(6);
+    expect(p.totalXp).not.toBeCloseTo(p.plainTotalXp, 1);
+    expect(p.keepXp).not.toBeCloseTo(p.plainKeepXp, 1);
+    expect(p.gainVsKeep).toBeCloseTo(p.totalXp - p.keepXp, 9);
   });
 });

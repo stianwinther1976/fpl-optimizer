@@ -162,9 +162,15 @@ export default function PlayerModal({
     return () => {
       cancelled = true;
     };
-  // `asOfGw` is a dependency: switching gameweeks in the time machine with the
-  // sheet open must re-cut the list, or it keeps the previous week's rounds.
-  }, [element.id, asOfGw]);
+  /*
+   * `element.id` ONLY. `asOfGw` was in this array because the fetch used to do
+   * the cutting; the memos below do it now, off the same rounds. Leaving it
+   * here re-ran `setPlayed(null)` on every step of the time machine, so the
+   * season block flashed "Loading this player's rounds…" and the recent chips
+   * vanished each time the reader moved one gameweek — a refetch of data the
+   * component already had.
+   */
+  }, [element.id]);
   /*
    * Two different cuts of the same rounds, and they are NOT the same cut.
    *
@@ -185,10 +191,16 @@ export default function PlayerModal({
     return [...rows].slice(-5).reverse();
   }, [played, asOfGw]);
   /*
-   * The season as the viewed gameweek knew it. Only reached in the time
-   * machine, where `played` is already cut to `round < asOfGw`; on the live
-   * sheet the `element` row is both cheaper and more complete, so it is used
-   * instead.
+   * The season as the viewed gameweek knew it — INCLUDING that gameweek, which
+   * is the cut the heading above it names and the one FPL's own site shows.
+   * `played` is the full played history now; the recent-form list takes its own
+   * exclusive cut. An earlier version of this note said `played` was "already
+   * cut to `round < asOfGw`", which was true of the array both blocks used to
+   * share and is what made the season total short by exactly the headline
+   * gameweek.
+   *
+   * Only reached in the time machine: on the live sheet the `element` row is
+   * both cheaper and more complete, so it is used instead.
    */
   const toDate = useMemo(() => {
     if (!played) return null;

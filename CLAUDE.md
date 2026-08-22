@@ -371,7 +371,7 @@ Two rules the tests pin, both of which produce actively wrong advice if broken:
 `wcGain` is the best of three things minus keeping: the greedily-built squad
 within team value, the squad itself, and every squad the transfer beam already
 evaluated (a wildcard can make those moves without the hit). It is therefore
-bounded below by zero and by the best transfer plan on screen — which it was
+bounded below by zero and by the best transfer plan's own score — which it was
 NOT before, because the builder maximises the sum of `totalDiscounted` over all
 fifteen while `horizonScore` counts only the best XI, so its squad is a local
 optimum of the wrong objective. Measured on the demo, unclamped: 0.269 / 3.164
@@ -379,7 +379,10 @@ optimum of the wrong objective. Measured on the demo, unclamped: 0.269 / 3.164
 of 0.375 / 1.199 / 1.143 / 1.283 / 2.663 — the chip losing to one free transfer
 at three of the five. The floor removes the contradiction; it does not repair
 the objective mismatch, which is the "known gap" above. It remains the size of
-a gap, not a reason to play the chip, and the copy says so.
+a gap, not a reason to play the chip, and the copy says so. The floor is in
+the DECAYED currency, while the transfer card beside it now prints a plain gain
+net of the hit, so the guarantee is over the objective rather than over the two
+numbers on screen — 4.598 against +4.626 on the demo at horizon 8.
 
 Pre-season there are no blanks or doubles at all: the opening calendar is 380
 fixtures, one per club per gameweek. They appear later as cup runs and

@@ -1407,8 +1407,12 @@ describe("the player sheet in the gameweek time machine", () => {
     // The cut moved out of the fetch and into a memo, so the SEASON block can
     // take its own (inclusive) cut of the same rounds — see the test below.
     expect(modal).toMatch(/played\.filter\(\(r\) => r\.round < asOfGw\)/);
-    // And re-cuts it when the reader moves the time machine with the sheet open.
+    // And re-cuts it when the reader moves the time machine with the sheet
+    // open — in a MEMO. The fetch keys on `element.id` alone; keying it on
+    // `asOfGw` too re-ran `setPlayed(null)` on every step, so the season block
+    // flashed "Loading…" and the chips vanished for data already in hand.
     expect(modal).toContain("}, [played, asOfGw]);");
+    expect(modal).toContain("}, [element.id]);");
   });
 
   it("drops every block that has no past-tense reading", () => {
@@ -1684,7 +1688,25 @@ describe("the recommendation badge follows the number beside it", () => {
   it("ranks on the plain net, not the decayed one", () => {
     const src = read("OptimizePanel.tsx");
     expect(src).toMatch(/plan\.plainNetXp === Math\.max\(\.\.\.result\.plans\.map\(\(p\) => p\.plainNetXp\)\)/);
-    expect(src).not.toMatch(/plan\.netXp === Math\.max\(/);
+    /*
+     * EVERY reader of "which plan is best", not just the equality form. The
+     * first version of this guard pinned `plan.netXp === Math.max(` and let a
+     * surviving `sort((a, b) => b.netXp - a.netXp)` through — which is what
+     * still chose the Line-up pitch's eleven and the "Against the field"
+     * figure, so the badge and the pitch under it described different teams.
+     */
+    for (const f of ["OptimizePanel.tsx"]) {
+      const code = read(f)
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/[^\n]*/g, "");
+      expect(code, f).not.toMatch(/\bnetXp\b/);
+    }
+    const opt = fs
+      .readFileSync(path.join(DIR, "../lib/optimizer.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // `optimizer.ts` still computes `netXp`; what it must not do is rank on it.
+    expect(opt).not.toMatch(/sort\(\(a, b\) => b\.netXp - a\.netXp\)/);
   });
 });
 
@@ -1707,5 +1729,39 @@ describe("every tab computes a live score the same way", () => {
     const src = read("Dashboard.tsx");
     expect(src).toMatch(/liveBonus\?\.byElement\.get\(e\.id\) \?\? 0/);
     expect(src).toMatch(/provisionalBonus\(/);
+  });
+
+  it("moves the Team pitch's armband under every chip, as FPL does", () => {
+    /*
+     * THE OTHER HALF, WHICH THE GUARD ABOVE COULD NOT SEE — it pinned the bonus
+     * term, which is the half the code had already fixed.
+     *
+     * `autoSubs` bailed to null for `bboost` and `freehit`, and `out` is what
+     * fires the vice-captain takeover. So the armband stopped moving in exactly
+     * the two weeks a reader is most invested in. `LiveTab` states the rule:
+     * "Bench Boost cancels the substitution but not the vice-captain rule,
+     * which FPL applies in every week regardless of chip". Measured on a
+     * constructed universe at full time with bonus unconfirmed, captain
+     * blanked: Bench Boost 39 on the Live tab against 37 on the pitch, Free Hit
+     * 28 against 23, and 27 against 18 with a starter blanked as well.
+     */
+    const src = read("Dashboard.tsx");
+    // The XI split still bails; the blanked set does not.
+    expect(src).toMatch(/xi: noSubs \? null : new Set\(effectiveXi\), out: new Set\(out\)/);
+    expect(src).not.toMatch(/if \(data\.picks\.active_chip === "bboost"\) return null;/);
+    expect(src).not.toMatch(/if \(data\.picks\.active_chip === "freehit"\) return null;/);
+  });
+
+  it("takes auto-subs under Free Hit, and only cancels them under Bench Boost", () => {
+    /*
+     * FPL applies auto-substitutions under Free Hit exactly as in an ordinary
+     * gameweek; Bench Boost is the one that cancels them, because all fifteen
+     * already score. The bail covered both, so under a Free Hit the pitch
+     * counted the picked eleven while every other surface counted the
+     * substituted one — 90 against 96 on the constructed universe, 84 against
+     * 96 with a starter blanked as well.
+     */
+    const src = read("Dashboard.tsx");
+    expect(src).toMatch(/const noSubs = data\.picks\.active_chip === "bboost";/);
   });
 });
