@@ -83,6 +83,7 @@ export function makeMockBootstrap(): Bootstrap {
     finished: i + 1 <= 10,
     is_current: i + 1 === 10,
     is_next: i + 1 === 11,
+    is_previous: i + 1 === 9,
     average_entry_score: 50,
     highest_score: 100,
   }));

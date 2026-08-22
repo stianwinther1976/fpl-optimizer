@@ -765,7 +765,31 @@ export function buildSquadState(
 export async function entryNotFoundMessage(): Promise<string> {
   try {
     const b = await api.bootstrap();
-    const seasonStarted = b.events.some((e) => e.finished);
+    /*
+     * "STARTED" IS ABOUT MATCHES, NOT ABOUT BONUS — and this asked `finished`,
+     * which per CLAUDE.md means bonus confirmed. Those are three days apart at
+     * the one moment it matters. Read off the two live snapshots that straddle
+     * the transition:
+     *
+     *                          GW1 is_current   GW1 finished
+     *   2026-08-19 (pre)           false            false
+     *   2026-08-21 (playing)       true             false
+     *
+     * So through the whole of the opening weekend — the busiest the app will
+     * ever be — a mistyped ID was answered with "that's normal in pre-season:
+     * FPL retires ALL team IDs over the summer. Register your squad for the new
+     * season", to a manager whose squad was on the pitch. `is_current` flips at
+     * the GW1 deadline, which is exactly the line being drawn, and `finished`
+     * covers the end-of-season window before FPL rolls the bootstrap over.
+     *
+     * `is_previous` IS NOT PINNED BY A TEST AND NOTHING OBSERVED REACHES IT.
+     * FPL moves it onto the last completed gameweek, which by then is also
+     * `finished`, so removing it leaves the suite green — it is kept only for
+     * the rescheduling case where a gameweek's bonus is still unconfirmed when
+     * the next one becomes current. Read it as defence, not as a measured
+     * requirement.
+     */
+    const seasonStarted = b.events.some((e) => e.finished || e.is_current || e.is_previous);
     if (!seasonStarted) {
       return (
         "That ID isn't in FPL's system right now — and that's normal in pre-season: " +

@@ -87,6 +87,15 @@ export interface Event {
   finished: boolean;
   is_current: boolean;
   is_next: boolean;
+  /**
+   * The gameweek before the current one. Published on every event and, like
+   * `finished_provisional` and `minutes` before it, unread — modelled here so
+   * the next person asking "has a gameweek been played?" can see what the feed
+   * already says rather than inferring it from `finished`, which means bonus
+   * confirmed and is three days later. `entryNotFoundMessage` is where that
+   * cost something.
+   */
+  is_previous: boolean;
   average_entry_score: number;
   highest_score: number | null;
   /*

@@ -174,6 +174,17 @@ export function chipWindow(
     const used = (usedChips ?? []).filter(
       (u) => u.name === chipName && u.event >= c.start_event && u.event <= c.stop_event
     ).length;
+    /*
+     * `number` IS A COUNT, NOT AN ORDINAL — checked rather than assumed.
+     *
+     * The ordinal reading ("this is the 2nd wildcard") would make `spent`
+     * demand two uses of a window that allows one, so a chip the reader had
+     * already played would never be marked spent and the advisor would go on
+     * recommending it. Both readings fit a field whose value is 1, so the
+     * distinguishing case is the SECOND window: on the 2026-08-19 and
+     * 2026-08-21 snapshots every one of the eight entries carries `number: 1`,
+     * including the GW20-38 wildcard. An ordinal would have said 2 there.
+     */
     return used >= (c.number ?? 1);
   };
   // Windows the reader still holds a chip for. If they hold none, fall back to

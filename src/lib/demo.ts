@@ -388,6 +388,7 @@ export function makeDemoUniverse(now: number) {
       finished: gw < CURRENT_GW,
       is_current: gw === CURRENT_GW,
       is_next: gw === CURRENT_GW + 1,
+      is_previous: gw === CURRENT_GW - 1,
       /*
        * A gameweek nobody has played has no average and no highest score. FPL
        * reports 0 and `null` until it kicks off; the demo reported a full set of

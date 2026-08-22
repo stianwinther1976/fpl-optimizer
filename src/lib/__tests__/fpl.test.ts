@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   api,
   buildSquadState,
+  entryNotFoundMessage,
   fetchCacheSize,
   fetchPastSeason,
   fetchRecentForm,
@@ -498,5 +499,68 @@ describe("the in-memory memo does not grow for the life of the page", () => {
     } finally {
       now.mockRestore();
     }
+  });
+});
+
+describe("what a 404 on an entry means depends on the month", () => {
+  /*
+   * "The season has started" IS ABOUT MATCHES, and the check asked `finished`,
+   * which per CLAUDE.md means bonus confirmed. The two live snapshots straddle
+   * the transition and show how far apart those are:
+   *
+   *                          GW1 is_current   GW1 finished
+   *   2026-08-19 (pre)           false            false
+   *   2026-08-21 (playing)       true             false
+   *
+   * So for the whole opening weekend a mistyped ID was answered with the
+   * summer-reset explanation, to a manager whose squad was on the pitch.
+   */
+  const ev = (over: Partial<Bootstrap["events"][number]>) => ({
+    id: 1,
+    name: "Gameweek 1",
+    deadline_time: "2026-08-21T17:30:00Z",
+    finished: false,
+    is_current: false,
+    is_next: false,
+    is_previous: false,
+    average_entry_score: 0,
+    highest_score: null,
+    ...over,
+  });
+
+  const withEvents = async (events: unknown[]) => {
+    const original = globalThis.fetch;
+    resetFetchCache();
+    globalThis.fetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ events, teams: [], elements: [] }),
+    })) as unknown as typeof fetch;
+    try {
+      return await entryNotFoundMessage();
+    } finally {
+      globalThis.fetch = original;
+      resetFetchCache();
+    }
+  };
+
+  it("explains the summer reset only while no gameweek has begun", async () => {
+    const msg = await withEvents([ev({ is_next: true })]);
+    expect(msg).toMatch(/pre-season/);
+  });
+
+  it("does not call it pre-season once GW1 is being played", async () => {
+    // GW1 current, bonus days away — the state on 2026-08-21.
+    const msg = await withEvents([ev({ is_current: true }), ev({ id: 2, is_next: true })]);
+    expect(msg).not.toMatch(/pre-season/);
+    expect(msg).toMatch(/check that the FPL ID is correct/);
+  });
+
+  it("still knows the season is running between gameweeks", async () => {
+    const msg = await withEvents([
+      ev({ id: 1, finished: true, is_previous: true }),
+      ev({ id: 2, is_current: true }),
+    ]);
+    expect(msg).not.toMatch(/pre-season/);
   });
 });

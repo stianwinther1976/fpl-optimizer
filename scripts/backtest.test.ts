@@ -333,6 +333,7 @@ function buildStateAt(
       finished: i + 1 < g,
       is_current: i + 1 === g - 1,
       is_next: i + 1 === g,
+      is_previous: i + 1 === g - 2,
       average_entry_score: 0,
       highest_score: null,
     })),
