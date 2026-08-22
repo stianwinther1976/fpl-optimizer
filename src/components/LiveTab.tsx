@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type TeamData } from "@/lib/fpl";
 import type { EventLive, Fixture, Pick } from "@/lib/types";
 import { matchMinute, projectAutoSubs, provisionalBonus, isInPlay, LIVE_REFRESH_MS } from "@/lib/live";
-import { autoSubView, benchPoints, kickoffLabel } from "@/lib/display";
+import { autoSubView, benchPoints, kickoffLabel, publishedAverage } from "@/lib/display";
 import { ErrorBox, Skeleton, Badge } from "./ui";
 import MatchModal from "./MatchModal";
 
@@ -294,8 +294,9 @@ export default function LiveTab({
     })),
     effXi
   );
-  const gwAvg =
-    data.bootstrap.events.find((e) => e.id === currentEvent)?.average_entry_score ?? null;
+  // Null while FPL has not published one — it is 0 for a gameweek in progress,
+  // and this tab is only ever open during one. See `publishedAverage`.
+  const gwAvg = publishedAverage(data.bootstrap.events.find((e) => e.id === currentEvent));
 
   return (
     <div className="space-y-4">
@@ -368,8 +369,21 @@ export default function LiveTab({
           </button>
         </div>
 
-        {/* Safety score: median live score of ~20 managers at your overall-rank
-            band when available; falls back to the GW average estimate. */}
+        {/*
+          Safety score: median live score of ~20 managers at your overall-rank
+          band when available; falls back to FPL's own gameweek average.
+
+          THAT FALLBACK IS NOT AVAILABLE DURING PLAY, and it used to look as
+          though it were. `average_entry_score` is 0 until FPL publishes it
+          (see `publishedAverage`), so a failed rank-band sample mid-gameweek
+          produced "Safety score (est.): 0 pts — you're 34 above; on course to
+          climb". With the 0 read as "unpublished" the box simply does not
+          render then, which is the honest answer: nothing in the official API
+          says what the field is scoring right now except the sample this tab
+          takes itself. The fallback still has a real state — after the
+          gameweek, where the average is published and the box explains the
+          final margin.
+        */}
         {(bandSafety ?? gwAvg) != null &&
           (() => {
             const needed = bandSafety ?? gwAvg!;

@@ -1426,3 +1426,26 @@ describe("the player sheet in the gameweek time machine", () => {
     expect(dash).toContain('asOfGw={tab === "team" && hist ? hist.gw : null}');
   });
 });
+
+describe("nobody reads FPL's gameweek average raw", () => {
+  /*
+   * `publishedAverage` is tested properly in `display.test.ts`. What cannot be
+   * tested there is that the components CALL it — the bug was three separate
+   * `?? null` expressions inline in JSX, each of which reads FPL's 0-for-not-
+   * published as a real score. Extracting the helper and leaving any one of
+   * them behind would pass every test in `display.test.ts` while shipping the
+   * original bug on that screen, which is exactly the failure mode this file
+   * exists for.
+   */
+  it("routes every average through the helper", () => {
+    for (const f of ["LiveTab.tsx", "HistoryChart.tsx", "KpiHistoryModal.tsx"]) {
+      const src = read(f);
+      expect(src, f).toMatch(/publishedAverage\(/);
+      // No raw read left in the CODE. The comments explaining the fix name the
+      // field, so they are stripped first — matching the bare token would pin
+      // the prose rather than the call.
+      const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+      expect(code.match(/average_entry_score/g) ?? [], f).toHaveLength(0);
+    }
+  });
+});

@@ -11,6 +11,7 @@ import {
   fdrSortKey,
   kickoffLabel,
   liveCornerNote,
+  publishedAverage,
   netEventPoints,
   netGwDelta,
   netGwPoints,
@@ -531,5 +532,33 @@ describe("the live pitch's corner note", () => {
   it("says nothing when there is no hit, rather than saying zero", () => {
     expect(liveCornerNote(52, 0)).toBeNull();
     expect(liveCornerNote(0, 0)).toBeNull();
+  });
+});
+
+describe("FPL's gameweek average is not published while the gameweek runs", () => {
+  /*
+   * Measured on the 2026-08-21 snapshot, taken with GW1 current and its
+   * opening fixture fully played — 90 minutes, `finished_provisional`, real
+   * points awarded — `average_entry_score` was still exactly 0. Three screens
+   * read it and all three printed the 0 as a score: the Live tab's headline
+   * comparison, its safety score ("you need 0 pts to hold your rank"), and the
+   * season chart, whose average line dropped to the axis on the gameweek in
+   * progress.
+   */
+  it("reads a zero as unpublished rather than as a score", () => {
+    expect(publishedAverage({ average_entry_score: 0 })).toBeNull();
+    expect(publishedAverage({ average_entry_score: 51 })).toBe(51);
+  });
+
+  it("has nothing to say about a gameweek it was not given", () => {
+    expect(publishedAverage(undefined)).toBeNull();
+    expect(publishedAverage(null)).toBeNull();
+  });
+
+  it("refuses a value that is not a finite number", () => {
+    // It arrives from the network. `NaN > 0` is false, but so is every
+    // comparison, so saying so explicitly is cheaper than reasoning about it.
+    expect(publishedAverage({ average_entry_score: NaN })).toBeNull();
+    expect(publishedAverage({ average_entry_score: -3 })).toBeNull();
   });
 });

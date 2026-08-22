@@ -11,7 +11,7 @@ import {
   ReferenceDot,
 } from "recharts";
 import type { TeamData } from "@/lib/fpl";
-import { netGwPoints } from "@/lib/display";
+import { netGwPoints, publishedAverage } from "@/lib/display";
 import { CHIP_LABELS } from "@/lib/rules";
 import { SectionTitle } from "./ui";
 import PastSeasons from "./PastSeasons";
@@ -24,7 +24,9 @@ export default function HistoryChart({ data, entryId }: { data: TeamData; entryI
     // manager took a hit — by exactly the size of the hit, on the one chart
     // whose whole job is "did I beat the average".
     points: netGwPoints(r),
-    average: data.bootstrap.events.find((e) => e.id === r.event)?.average_entry_score ?? null,
+    // Null, not 0, for the gameweek in progress: recharts breaks the line at a
+    // null and plots a nosedive to the axis at a 0. See `publishedAverage`.
+    average: publishedAverage(data.bootstrap.events.find((e) => e.id === r.event)),
     total: r.total_points,
     rank: r.overall_rank,
   }));

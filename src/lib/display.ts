@@ -370,3 +370,38 @@ export function liveCornerNote(gross: number, hit: number): string | null {
   if (hit <= 0) return null;
   return `The eleven on the pitch have scored ${gross}; the corner shows ${gross - hit} after a −${hit} hit.`;
 }
+
+/**
+ * FPL's own average score for a gameweek — or null while it has not published
+ * one.
+ *
+ * ZERO MEANS "NOT PUBLISHED", AND WAS BEING PRINTED AS A SCORE. FPL leaves
+ * `average_entry_score` at 0 until a gameweek's scores are in; it does not
+ * track it live. Measured on the 2026-08-21 snapshot, taken with GW1 current
+ * and its opening fixture fully played — 90 minutes, `finished_provisional`,
+ * real points awarded to nine million squads — `average_entry_score` was still
+ * exactly 0.
+ *
+ * Three screens read it and all three took the 0 at face value:
+ *
+ *  - The Live tab printed "GW average: 0 pts (+34)" beside a live total,
+ *    which is the tab's headline comparison and it was against nothing.
+ *  - Its safety score falls back to the average when the rank-band sample is
+ *    unavailable, so it told a reader they needed 0 points to hold their rank
+ *    and were "on course to climb".
+ *  - The season chart plots the average as a line, so mid-season it ran along
+ *    at fifty and then dropped to the axis on the gameweek in progress —
+ *    exactly the point the reader is looking at, on the chart whose whole job
+ *    is "did I beat the average".
+ *
+ * `> 0` is the whole test and needs no second field: an average of exactly
+ * zero is impossible for a gameweek in which any football has been played, so
+ * "published" and "positive" are the same question. It also stays right for a
+ * gameweek that has not kicked off, where 0 is true and useless.
+ */
+export function publishedAverage(
+  ev: { average_entry_score: number } | null | undefined
+): number | null {
+  const v = ev?.average_entry_score;
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
+}
