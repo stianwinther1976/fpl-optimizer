@@ -58,8 +58,8 @@ export default function ModelAccuracy({ demo }: { demo: boolean }) {
             presses the button. */}
         How much to trust this app&apos;s projections: before every deadline the app saves what it
         predicted, then compares against the real points once the gameweek finishes and adjusts
-        its own weights. Whether that has helped is the line under the table, and it is
-        reported either way.
+        its own weights. The line under the table says whether the average miss has moved
+        since the first graded gameweek, in whichever direction it moved.
       </p>
 
       {log.length === 0 ? (

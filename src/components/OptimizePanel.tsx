@@ -162,18 +162,34 @@ export default function OptimizePanel({
      * pre-selection above needs the same answer — and because a tie has to be
      * shown as a tie rather than resolved into a winner. Read its note.
      */
+    // Has any football been played? `is_current` flips at the GW1 deadline;
+    // `finished` means bonus confirmed and is three days later.
+    const seasonUnderway = data.bootstrap.events.some(
+      (e) => e.finished || e.is_current || e.is_previous
+    );
     const launchLeaders = launch ? rankLaunchVariants(launch).leaders : new Set<string>();
     const chosen = launch?.[launchPick] ?? null;
     return (
       <div className="space-y-4">
         <div className="card p-5">
           <div className="text-lg font-bold">🚀 Season launch: build your £100m squad</div>
+          {/*
+            DO NOT SAY NOBODY HAS KICKED A BALL. This branch fires whenever an
+            entry has no picks, not only in July: with the real feed at GW1
+            current and GW2 next it greeted a reader over a GW2–GW6 fixture
+            window while the Live tab in the same app was rendering a played
+            match. Whether football has started is a fact the app already knows
+            — the same `is_current` test `entryNotFoundMessage` uses — so it
+            says the true one.
+          */}
           <p className="mt-1 text-sm text-muted">
-            No squad registered yet — perfect timing. Pre-season there isn&apos;t one single
-            &quot;best&quot; team (nobody&apos;s kicked a ball yet), so the drafter gives you a
-            few viable structures within the £100.0m budget — built from prices, FPL&apos;s own
-            projections, team strength and the GW{upcomingEvent}–{upcomingEvent + 4} fixtures.
-            Pick the approach you like.
+            No squad registered yet — perfect timing.{" "}
+            {seasonUnderway
+              ? "There is no single \u201cbest\u201d team, so the drafter gives you a few viable structures"
+              : "Pre-season there isn\u2019t one single \u201cbest\u201d team (nobody\u2019s kicked a ball yet), so the drafter gives you a few viable structures"}{" "}
+            within the £100.0m budget — built from prices, FPL&apos;s own projections, team
+            strength and the GW{upcomingEvent}–{upcomingEvent + 4} fixtures. Pick the
+            approach you like.
           </p>
           <button onClick={runLaunch} disabled={launchRunning} className="btn-primary mt-3 rounded-lg px-5 py-2.5">
             {launchRunning ? "Drafting…" : launch ? "Re-draft" : "Build my launch squads"}
@@ -873,9 +889,10 @@ export default function OptimizePanel({
             */}
             {horizon > 1 && (
               <p className="mt-1 text-xs text-muted">
-                Plans are ranked on a weighted total: a gameweek {horizon} weeks out counts
-                for less than the next one, because the projection is less certain that far
-                ahead. The points totals below are the plain sums.
+                Which players to move is chosen on a weighted total — a gameweek {horizon}{" "}
+                weeks out counts for less than the next one, because the projection is less
+                certain that far ahead. The points and the −4 hits below are plain sums, so
+                a hit costs what FPL charges for it.
               </p>
             )}
             <div className="mt-3 grid gap-3">
@@ -900,7 +917,7 @@ export default function OptimizePanel({
                   key={plan.transfers.length}
                   className={`card p-4 ${
                     plan.gainVsKeep > 0.05 &&
-                    plan.netXp === Math.max(...result.plans.map((p) => p.netXp))
+                    plan.plainNetXp === Math.max(...result.plans.map((p) => p.plainNetXp))
                       ? "border-accent/60"
                       : ""
                   }`}
@@ -911,8 +928,13 @@ export default function OptimizePanel({
                       {plan.hitCost > 0 && (
                         <span className="text-danger"> (−{plan.hitCost} hit)</span>
                       )}
+                      {/* Both halves on the same quantity as the number
+                          printed beside them — see `TransferPlan.plainNetXp`.
+                          Ranking on the decayed `netXp` while the card showed a
+                          plain gain could badge a plan the reader could not see
+                          was ahead. */}
                       {plan.gainVsKeep > 0.05 &&
-                        plan.netXp === Math.max(...result.plans.map((p) => p.netXp)) && (
+                        plan.plainNetXp === Math.max(...result.plans.map((p) => p.plainNetXp)) && (
                           <span className="ml-2">
                             <Badge tone="green">Recommended</Badge>
                           </span>

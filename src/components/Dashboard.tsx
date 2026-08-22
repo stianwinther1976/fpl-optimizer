@@ -7,7 +7,7 @@ import { api, entryNotFoundMessage, FplApiError, loadTeamData, fmtNum, fmtRank, 
 import type { Element, EntryEventPicks, EventLive, Fixture } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
 import { projectAll } from "@/lib/xp";
-import { projectAutoSubs, LIVE_REFRESH_MS } from "@/lib/live";
+import { projectAutoSubs, provisionalBonus, LIVE_REFRESH_MS } from "@/lib/live";
 import {
   benchBadgeFor,
   benchSortKey,
@@ -462,11 +462,31 @@ export default function Dashboard({
     };
   }, [viewGw, entryId, data, histRetry]);
 
+  /*
+   * THE SAME POINTS THE LIVE TAB SHOWS, PROVISIONAL BONUS INCLUDED.
+   *
+   * This map is what the Team pitch draws its per-player scores and its corner
+   * total from, and it was `stats.total_points` alone while `LiveTab` adds
+   * `provisionalBonus` — so between the final whistle and bonus confirmation,
+   * hours after a Saturday, the two tabs disagreed about the same squad by two
+   * to eight points. Invisible on the demo, whose in-play fixtures itemise
+   * bonus into `explain` so `provisionalBonus` returns an empty map, which is
+   * why it survived every browser sweep.
+   */
+  const liveBonus = useMemo(
+    () =>
+      liveData && currentEvent != null
+        ? provisionalBonus(data!.bootstrap, data!.fixtures, liveData, currentEvent)
+        : null,
+    [liveData, data, currentEvent]
+  );
   const livePointsOf = useMemo(() => {
     const m = new Map<number, number>();
-    for (const e of liveData?.elements ?? []) m.set(e.id, e.stats.total_points);
+    for (const e of liveData?.elements ?? []) {
+      m.set(e.id, e.stats.total_points + (liveBonus?.byElement.get(e.id) ?? 0));
+    }
     return m;
-  }, [liveData]);
+  }, [liveData, liveBonus]);
 
   // xP for the pitch view's "xP" mode (next gameweek). calVersion re-projects
   // after the calibration factors update; callsVersion after the reader

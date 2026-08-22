@@ -69,12 +69,32 @@ const LABELS: Record<PriceTrend, string> = {
  * Read the predictor for one player. Returns null when FPL hasn't published a
  * figure — pre-season, and for any player the feed omits — so callers can leave
  * the UI empty rather than claim "unlikely to change" on missing data.
+ *
+ * A FLAT ZERO IS MISSING DATA, AND WAS BEING READ AS A FORECAST. `PlayerModal`
+ * says in so many words that "silence is honest, 'unlikely to change' on
+ * missing data isn't" — and then rendered "Price change — Unlikely to change ·
+ * Hasn't moved toward either" for every player in the game, because FPL sends
+ * the string "0" while the predictor is switched off rather than omitting the
+ * field. Counted on both live snapshots: 595/595 and 600/600 players returned
+ * `steady`, zero nulls, every one of them also carrying
+ * `price_change_hourly_rate: 0`.
+ *
+ * Zero progress AND zero rate is the honest "nothing to say" state: it is what
+ * a stopped predictor looks like, and it is also what a player who has just
+ * changed price looks like, for whom "unlikely to change" is equally wrong. A
+ * player the predictor is actually tracking has a non-zero one or the other.
+ * `hourly_rate` absent is treated as zero, which errs toward silence — the
+ * direction this block's own comment asks for.
  */
-export function readPriceChange(el: Pick<Element, "price_change_percent">): PriceChangeRead | null {
+export function readPriceChange(
+  el: Pick<Element, "price_change_percent" | "price_change_hourly_rate">
+): PriceChangeRead | null {
   const raw = el.price_change_percent;
   if (raw == null || raw === "") return null;
   const n = Number(raw);
   if (!Number.isFinite(n)) return null;
+  const rate = el.price_change_hourly_rate ?? 0;
+  if (n === 0 && (!Number.isFinite(rate) || rate === 0)) return null;
   const percent = Math.max(-200, Math.min(200, n));
   const mag = Math.abs(percent);
 

@@ -1558,9 +1558,13 @@ describe("the transfer card prints the plain horizon total", () => {
     expect(src).not.toMatch(/net=\{result\.keepHorizonXp\}/);
   });
 
-  it("says once that the ranking is weighted", () => {
+  it("says once what the weighting does, and what it does not", () => {
+    // The decay chooses WHICH players to move; the points and the hits are
+    // plain sums. Saying "plans are ranked on a weighted total" was true of
+    // the version that charged a −4 as 5.99.
     const src = read("OptimizePanel.tsx");
-    expect(src).toMatch(/ranked on a weighted total/);
+    expect(src).toMatch(/chosen on a weighted total/);
+    expect(src).toMatch(/a hit costs what FPL charges for it/);
   });
 });
 
@@ -1667,5 +1671,41 @@ describe("the Stats table says its xP will move", () => {
     expect(stats).toMatch(/recentFormApplied = false,/);
     expect(stats).toMatch(/xP sharpens once you run Optimize/);
     expect(stats).toMatch(/matches the Optimize tab exactly/);
+  });
+});
+
+describe("the recommendation badge follows the number beside it", () => {
+  /*
+   * `gainVsKeep` is now a plain-points quantity net of the hit. Ranking the
+   * plans on the decayed `netXp` while printing the plain gain could badge a
+   * plan the reader cannot see is ahead — the same split that let a −4 hit be
+   * charged as 5.99 plain points at horizon 8.
+   */
+  it("ranks on the plain net, not the decayed one", () => {
+    const src = read("OptimizePanel.tsx");
+    expect(src).toMatch(/plan\.plainNetXp === Math\.max\(\.\.\.result\.plans\.map\(\(p\) => p\.plainNetXp\)\)/);
+    expect(src).not.toMatch(/plan\.netXp === Math\.max\(/);
+  });
+});
+
+describe("every tab computes a live score the same way", () => {
+  /*
+   * `liveEntryScore` is tested properly in `live.test.ts`. What cannot be
+   * tested there is that the components USE it. Three tabs had three different
+   * answers for one manager: the Live tab with provisional bonus and the
+   * vice-captain takeover, the Team pitch corner with the takeover and no
+   * bonus, the Mini-league row with neither.
+   */
+  it("gives the Mini-league the shared definition", () => {
+    const src = read("MiniLeague.tsx");
+    expect(src).toMatch(/liveEntryScore\(/);
+    // And no hand-rolled loop left behind.
+    expect(src).not.toMatch(/pointsOf\.get\(p\.element\) \?\? 0\) \* mult/);
+  });
+
+  it("gives the Team pitch the provisional bonus the Live tab shows", () => {
+    const src = read("Dashboard.tsx");
+    expect(src).toMatch(/liveBonus\?\.byElement\.get\(e\.id\) \?\? 0/);
+    expect(src).toMatch(/provisionalBonus\(/);
   });
 });

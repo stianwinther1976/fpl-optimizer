@@ -1926,3 +1926,85 @@ describe("'Against the field' describes the XI the panel recommends", () => {
     expect(noMoves.fieldSplit.total).toBeCloseTo(sum, 6);
   });
 });
+
+describe("a −4 hit costs 4, not 4 divided by the decay", () => {
+  /*
+   * `horizonScore` weights gameweek `i` by `gwDecay ** i` (0.88) and `hitCost`
+   * is a flat 4, so the benefit was shrunk and the cost charged at face value.
+   * The ratio `keepHorizonXp / keepHorizonPlainXp` is what a −4 really cost,
+   * measured on the demo:
+   *
+   *   horizon        1      3      5      8
+   *   ratio        1.000  0.885  0.787  0.668
+   *   a −4 hit     4.00   4.52   5.08   5.99   plain points
+   *
+   * At horizon 8 a two-transfer move had to gain 6.0 before the "the hit
+   * doesn't pay off" warning cleared. That is a constant nobody chose and no
+   * sweep supports.
+   */
+  const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+  const run = (horizon: number) => {
+    const u = makeDemoUniverse(NOW);
+    const bootstrap = u.bootstrap;
+    const owned: OwnedPlayer[] = u.picks!.picks.map((p, i) => {
+      const element = bootstrap.elements.find((e) => e.id === p.element)!;
+      return {
+        element,
+        sellPrice: element.now_cost,
+        purchasePrice: element.now_cost,
+        pickPosition: i + 1,
+        isCaptain: p.is_captain,
+        isViceCaptain: p.is_vice_captain,
+      };
+    });
+    return optimize({
+      bootstrap,
+      fixtures: u.fixtures,
+      owned,
+      bank: 5,
+      freeTransfers: 1,
+      nextEvent: bootstrap.events.find((e) => e.is_next)!.id,
+      horizon,
+    });
+  };
+
+  it("charges exactly the hit, in the same currency as the gain", () => {
+    for (const horizon of [1, 3, 5, 8]) {
+      const res = run(horizon);
+      const free = res.plans.find((p) => p.hitCost === 0);
+      const hit = res.plans.find((p) => p.hitCost === 4);
+      if (!free || !hit) continue;
+      // The gap between the two plans' gains is their gross difference minus
+      // exactly 4 — no more, whatever the horizon.
+      const grossGap = hit.plainNetXp + hit.hitCost - (free.plainNetXp + free.hitCost);
+      expect(hit.gainVsKeep - free.gainVsKeep, `h=${horizon}`).toBeCloseTo(grossGap - 4, 6);
+    }
+  });
+
+  it("states the gain in the same units as the baseline beside it", () => {
+    // `keepHorizonPlainXp` is what the "Keep the team" row prints. A gain
+    // measured against `keepHorizonXp` could not be added to it.
+    for (const horizon of [3, 8]) {
+      const res = run(horizon);
+      for (const p of res.plans) {
+        expect(p.gainVsKeep, `h=${horizon}`).toBeCloseTo(
+          p.plainNetXp - res.keepHorizonPlainXp,
+          6
+        );
+      }
+    }
+  });
+
+  it("does not let the decay inflate the hit as the horizon grows", () => {
+    /*
+     * The signature of the old defect: a two-transfer plan whose plain
+     * arithmetic clears the −4 while the decayed one does not. At horizon 8 the
+     * demo's two-transfer plan showed +0.16 and is now +3.18.
+     */
+    const res = run(8);
+    const hit = res.plans.find((p) => p.hitCost === 4);
+    expect(hit).toBeTruthy();
+    const decayedGain = hit!.netXp - res.keepHorizonXp;
+    expect(hit!.gainVsKeep).toBeGreaterThan(decayedGain + 1);
+  });
+});

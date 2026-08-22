@@ -162,10 +162,20 @@ function DerivedDetail({
             value={`${diff > 0 ? "+" : diff < 0 ? "−" : ""}${Math.abs(diff).toLocaleString("en-GB")}`}
           />
         )}
+        {/*
+          NOT A TWO-WAY TERNARY. Two identical ranks rendered "▼ 0" — an
+          unchanged rank shown as a fall, with a zero beside the arrow saying
+          it did not move. `display.signedPrice` exists to document exactly this
+          shape; a third case costs one line.
+        */}
         {prevRank != null && (
           <Chip
             label="Rank move"
-            value={`${rank < prevRank ? "▲" : "▼"} ${Math.abs(prevRank - rank).toLocaleString("en-GB")}`}
+            value={
+              rank === prevRank
+                ? "— unchanged"
+                : `${rank < prevRank ? "▲" : "▼"} ${Math.abs(prevRank - rank).toLocaleString("en-GB")}`
+            }
           />
         )}
       </div>

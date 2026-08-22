@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { api, DEMO_ENTRY_ID, fmtNum, type TeamData } from "@/lib/fpl";
 import type { EventLive, LeagueStandings } from "@/lib/types";
 import { CHIP_LABELS } from "@/lib/rules";
-import { projectAutoSubs } from "@/lib/live";
+import { liveEntryScore, provisionalBonus } from "@/lib/live";
 import { ErrorBox, Skeleton } from "./ui";
 
 const MAX_RIVAL_DETAILS = 20;
@@ -147,7 +147,21 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
     try {
       const rivals = s.standings.results.slice(0, MAX_RIVAL_DETAILS);
       const live: EventLive = await api.live(currentEvent);
-      const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
+      /*
+       * THE SAME SCORE AS THE OTHER TWO TABS. This loop had neither the
+       * provisional bonus nor the vice-captain takeover, so between the final
+       * whistle and bonus confirmation — hours, after a Saturday — the reader's
+       * own row here disagreed with the Live tab by the bonus, and with both
+       * tabs by the vice's entire raw score whenever a captain blanked.
+       * `liveEntryScore` is now the one definition; see its note for the three
+       * numbers this produced.
+       */
+      const bonus = provisionalBonus(data.bootstrap, data.fixtures, live, currentEvent);
+      const ev = data.bootstrap.events.find((e) => e.id === currentEvent);
+      const gwDone =
+        (ev?.finished ?? false) ||
+        (data.fixtures.some((f) => f.event === currentEvent) &&
+          data.fixtures.filter((f) => f.event === currentEvent).every((f) => f.finished));
       const eoCount = new Map<number, number>();
       let eoSample = 0;
       const results = await Promise.all(
@@ -155,15 +169,17 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
           try {
             const picks = await api.picks(r.entry, currentEvent);
             const bboost = picks.active_chip === "bboost";
-            // Auto-subs projected so live scores match what FPL will process.
-            const subs = projectAutoSubs(picks.picks, elementById, live, data.fixtures, currentEvent);
-            const effXi = new Set(subs.effectiveXi);
-            let pts = 0;
-            for (const p of picks.picks) {
-              if (!bboost && !effXi.has(p.element)) continue;
-              const mult = p.multiplier > 1 ? p.multiplier : 1;
-              pts += (pointsOf.get(p.element) ?? 0) * mult;
-            }
+            // Auto-subs, provisional bonus and the vice-captain takeover all
+            // live in `liveEntryScore`, which returns the score NET of the hit.
+            const net = liveEntryScore(
+              picks,
+              elementById,
+              live,
+              data.fixtures,
+              currentEvent,
+              bonus.byElement,
+              gwDone
+            );
             const hits = picks.entry_history.event_transfers_cost;
             const cap = picks.picks.find((p) => p.is_captain);
             const vice = picks.picks.find((p) => p.is_vice_captain);
@@ -180,7 +196,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               captain: cap ? (elementName.get(cap.element) ?? null) : null,
               viceCaptain: vice ? (elementName.get(vice.element) ?? null) : null,
               chip: picks.active_chip,
-              livePoints: pts - hits,
+              livePoints: net,
               hits,
             };
             return [r.entry, detail] as const;

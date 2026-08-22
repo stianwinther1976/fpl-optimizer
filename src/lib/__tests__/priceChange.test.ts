@@ -33,8 +33,28 @@ describe("readPriceChange", () => {
     expect(readPriceChange(p("nonsense"))).toBeNull();
   });
 
-  it("treats a published zero as real data, not missing data", () => {
-    expect(readPriceChange(p("0"))?.trend).toBe("steady");
+  it("treats a flat zero as a stopped predictor, not as a forecast", () => {
+    /*
+     * THIS TEST USED TO ASSERT THE OPPOSITE, and the belief it shared with the
+     * code was measurable and wrong. FPL sends the string "0" while the
+     * predictor is switched off rather than omitting the field, so on both live
+     * snapshots every player came back `steady` — 595/595 and 600/600, zero
+     * nulls — and `PlayerModal` rendered "Price change — Unlikely to change ·
+     * Hasn't moved toward either" for the entire game, under a comment saying
+     * "silence is honest, 'unlikely to change' on missing data isn't". Every
+     * one of them also carried `price_change_hourly_rate: 0`.
+     */
+    expect(readPriceChange(p("0"))).toBeNull();
+    expect(readPriceChange({ price_change_percent: "0", price_change_hourly_rate: 0 })).toBeNull();
+  });
+
+  it("still speaks for a player the predictor IS tracking at zero progress", () => {
+    // Zero progress with a live hourly rate is a real reading: he has just
+    // changed price and is being watched again. It is the pair of zeroes that
+    // means nothing is running.
+    const r = readPriceChange({ price_change_percent: "0", price_change_hourly_rate: 3 });
+    expect(r?.trend).toBe("steady");
+    expect(r?.direction).toBe(0);
   });
 
   it("clamps absurd values so the bar can't overflow", () => {

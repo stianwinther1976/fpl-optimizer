@@ -55,9 +55,36 @@ export interface TransferMove {
 export interface TransferPlan {
   transfers: TransferMove[];
   hitCost: number;
-  grossXp: number; // horizon xP of resulting best XIs
-  netXp: number; // grossXp - hitCost
-  gainVsKeep: number; // netXp - keep-team xP
+  grossXp: number; // horizon xP of resulting best XIs, DECAYED (the ranking key)
+  netXp: number; // grossXp - hitCost, decayed
+  /**
+   * The same XIs summed without the gameweek decay, net of the hit — and the
+   * number `gainVsKeep` is built from.
+   *
+   * THE GAIN WAS DISCOUNTED AND THE HIT WAS NOT. `horizonScore` weights
+   * gameweek `i` by `gwDecay ** i` (0.88); `hitCost` is a flat 4. So the
+   * benefit was shrunk and the cost charged at face value, and the ratio
+   * `keepHorizonXp / keepHorizonPlainXp` is what a −4 really cost the reader:
+   *
+   *   horizon        1      3      5      8
+   *   ratio        1.000  0.885  0.787  0.668
+   *   a −4 hit     4.00   4.52   5.08   5.99   plain points
+   *
+   * At the eight-gameweek horizon a two-transfer move had to gain 6.0 before
+   * the "⚠️ the hit doesn't pay off" warning cleared, when FPL charges 4. That
+   * is a constant nobody chose and no sweep supports — it fell out of mixing
+   * two units — which is precisely what CLAUDE.md's second convention forbids.
+   * Measured on the demo at horizon 8, the two-transfer plan showed −1.04 while
+   * its own per-player figures, which are plain sums, swing +4.8 against the
+   * −4.
+   *
+   * So the hit arithmetic is done in plain points, where FPL's 4 means 4. The
+   * decay keeps the job it was introduced for — preferring near-term certainty
+   * when the beam chooses WHICH players to move — and loses the one it acquired
+   * by accident.
+   */
+  plainNetXp: number;
+  gainVsKeep: number; // plainNetXp - keep-team plain xP
   bankAfter: number;
   nextXi: BestXi;
 }
@@ -458,12 +485,20 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     const hitCost = Math.max(0, count - freeTransfers) * TRANSFER_HIT;
     const netXp = score - hitCost;
     const els = s.players.map((p) => p.element);
+    // Undiscounted, so the hit is charged in the currency FPL charges it in —
+    // see `TransferPlan.plainNetXp`.
+    let plainXp = 0;
+    for (const gw of gws) {
+      plainXp += pickBestXi(els, (id) => xp.get(id)?.perGw.get(gw) ?? 0).totalXp;
+    }
+    const plainNetXp = plainXp - hitCost;
     plans.push({
       transfers: s.moves,
       hitCost,
       grossXp: score,
       netXp,
-      gainVsKeep: netXp - keepHorizonXp,
+      plainNetXp,
+      gainVsKeep: plainNetXp - keepHorizonPlainXp,
       bankAfter: s.bank,
       nextXi: pickBestXi(els, (id) => xp.get(id)?.next ?? 0),
     });

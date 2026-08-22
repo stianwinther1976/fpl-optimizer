@@ -505,49 +505,78 @@ export function bandMedianScore(
   gwDone = false,
   minSample = 5
 ): number | null {
-  const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
-  const minsOf = new Map(live.elements.map((e) => [e.id, e.stats.minutes]));
-  const scores: number[] = [];
-  for (const p of picks) {
-    const bb = p.active_chip === "bboost";
-    const subs = projectAutoSubs(p.picks, elements, live, fixtures, gw);
-    const effXi = new Set(subs.effectiveXi);
-    /*
-     * The same takeover rule the reader's own total uses, term for term: the
-     * captain is gone once the gameweek is done or the auto-sub projection has
-     * dropped him, he must be on zero minutes, and the vice must have played.
-     * `pk.multiplier` is what FPL recorded at the deadline and is therefore the
-     * pre-takeover answer.
-     */
-    const capMult = p.active_chip === "3xc" ? 3 : 2;
-    const blanked = new Set(subs.out);
-    const capPick = p.picks.find((k) => k.is_captain);
-    const vicePick = p.picks.find((k) => k.is_vice_captain);
-    const takeover =
-      capPick != null &&
-      vicePick != null &&
-      (gwDone || blanked.has(capPick.element)) &&
-      (minsOf.get(capPick.element) ?? 0) === 0 &&
-      (minsOf.get(vicePick.element) ?? 0) > 0;
-    let pts = 0;
-    for (const pk of p.picks) {
-      if (!bb && !effXi.has(pk.element)) continue;
-      /*
-       * The recorded multiplier stands unless the takeover fires. It is what
-       * FPL wrote at the deadline and already carries Triple Captain, so
-       * recomputing it from `active_chip` in the ordinary case would replace a
-       * fact with an inference.
-       */
-      let mult = pk.multiplier > 1 ? pk.multiplier : 1;
-      if (takeover) {
-        if (pk.element === capPick!.element) mult = 1;
-        else if (pk.element === vicePick!.element) mult = capMult;
-      }
-      pts += ((pointsOf.get(pk.element) ?? 0) + (bonusByElement?.get(pk.element) ?? 0)) * mult;
-    }
-    scores.push(pts - (p.entry_history?.event_transfers_cost ?? 0));
-  }
+  const scores = picks.map((p) =>
+    liveEntryScore(p, elements, live, fixtures, gw, bonusByElement, gwDone)
+  );
   if (scores.length < minSample) return null;
   scores.sort((a, b) => a - b);
   return scores[Math.floor(scores.length / 2)];
+}
+
+/**
+ * One manager's live gameweek score, net of hits — THE definition, used
+ * everywhere a manager's live score is shown.
+ *
+ * THREE TABS COMPUTED THIS THREE DIFFERENT WAYS. The Live tab had provisional
+ * bonus and the vice-captain takeover; the Team pitch corner had the takeover
+ * and no bonus; the Mini-league row had neither, for the reader and for every
+ * rival. Measured on the demo squad at GW20, identical inputs:
+ *
+ *                                          Live   Team pitch   Mini-league
+ *   demo as shipped                          48       48           48
+ *   bonus awarded but not yet confirmed      48       46           46
+ *   captain blanked, vice played             53       53           52
+ *
+ * The first row agrees only because `demo.ts` itemises bonus into `explain`
+ * for in-play fixtures — which FPL does not — so `provisionalBonus` returns an
+ * empty map and the divergence is invisible on the only feed that runs
+ * locally. The second row is the real state between the final whistle and
+ * bonus confirmation, which CLAUDE.md and `isInPlay` above both describe as
+ * hours long. The third row's gap is the vice's entire raw score, 4 to 15
+ * points on real data.
+ *
+ * `pk.multiplier` is what FPL recorded at the DEADLINE and already carries
+ * Triple Captain, so it stands unless the takeover fires — recomputing it from
+ * `active_chip` in the ordinary case would replace a fact with an inference.
+ */
+export function liveEntryScore(
+  p: EntryEventPicks,
+  elements: Map<number, Element>,
+  live: EventLive,
+  fixtures: Fixture[],
+  gw: number,
+  bonusByElement: Map<number, number> | null,
+  gwDone = false
+): number {
+  const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
+  const minsOf = new Map(live.elements.map((e) => [e.id, e.stats.minutes]));
+  const bb = p.active_chip === "bboost";
+  const subs = projectAutoSubs(p.picks, elements, live, fixtures, gw);
+  const effXi = new Set(subs.effectiveXi);
+  /*
+   * The takeover rule, term for term: the captain is gone once the gameweek is
+   * done or the auto-sub projection has dropped him, he must be on zero
+   * minutes, and the vice must have played.
+   */
+  const capMult = p.active_chip === "3xc" ? 3 : 2;
+  const blanked = new Set(subs.out);
+  const capPick = p.picks.find((k) => k.is_captain);
+  const vicePick = p.picks.find((k) => k.is_vice_captain);
+  const takeover =
+    capPick != null &&
+    vicePick != null &&
+    (gwDone || blanked.has(capPick.element)) &&
+    (minsOf.get(capPick.element) ?? 0) === 0 &&
+    (minsOf.get(vicePick.element) ?? 0) > 0;
+  let pts = 0;
+  for (const pk of p.picks) {
+    if (!bb && !effXi.has(pk.element)) continue;
+    let mult = pk.multiplier > 1 ? pk.multiplier : 1;
+    if (takeover) {
+      if (pk.element === capPick!.element) mult = 1;
+      else if (pk.element === vicePick!.element) mult = capMult;
+    }
+    pts += ((pointsOf.get(pk.element) ?? 0) + (bonusByElement?.get(pk.element) ?? 0)) * mult;
+  }
+  return pts - (p.entry_history?.event_transfers_cost ?? 0);
 }

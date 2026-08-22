@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   bandMedianScore,
+  liveEntryScore,
   fixtureLines,
   matchMinute,
   projectAutoSubs,
@@ -964,5 +965,67 @@ describe("the safety score compares like with like", () => {
     const bb = [1, 2, 3, 4, 5].map((i) => entry(i, "bboost"));
     // Four more players at two points each.
     expect(bandMedianScore(bb, elements, live, fixtures, 10, null)).toBe(plain + 8);
+  });
+});
+
+
+describe("one definition of a manager's live score", () => {
+  /*
+   * Three tabs computed this three different ways. The Live tab had provisional
+   * bonus and the vice-captain takeover; the Team pitch corner had the takeover
+   * and no bonus; the Mini-league row had neither, for the reader and for every
+   * rival. Measured on the demo squad at GW20, identical inputs:
+   *
+   *                                          Live   Team pitch   Mini-league
+   *   demo as shipped                          48       48           48
+   *   bonus awarded but not yet confirmed      48       46           46
+   *   captain blanked, vice played             53       53           52
+   *
+   * The first row agrees only because `demo.ts` itemises bonus into `explain`
+   * for in-play fixtures, so `provisionalBonus` returns an empty map there.
+   */
+  const elements = makeSquad();
+  const fixtures = makeFinishedFixtures();
+  const entry = (over: Partial<EntryEventPicks> = {}): EntryEventPicks =>
+    ({
+      active_chip: null,
+      picks: makePicks().map((pk) => (pk.element === 8 ? { ...pk, multiplier: 2 } : pk)),
+      entry_history: { event: 10, points: 0, event_transfers_cost: 0 },
+      entry: 1,
+      ...over,
+    }) as unknown as EntryEventPicks;
+
+  it("counts provisional bonus", () => {
+    const live = makeLive({});
+    const plain = liveEntryScore(entry(), elements, live, fixtures, 10, null);
+    const withBonus = liveEntryScore(entry(), elements, live, fixtures, 10, new Map([[1, 3]]));
+    expect(withBonus - plain).toBe(3);
+  });
+
+  it("moves the armband, and doubles the bonus under it", () => {
+    const blank = makeLive({ 8: 0 });
+    const noTakeover = liveEntryScore(entry(), elements, blank, fixtures, 10, null, false);
+    // The auto-sub already drops the captain, so what the takeover adds is the
+    // vice's second multiple.
+    const withVice = new Map([[9, 3]]);
+    expect(liveEntryScore(entry(), elements, blank, fixtures, 10, withVice, false)).toBe(
+      noTakeover + 6
+    );
+  });
+
+  it("is net of the hit", () => {
+    const live = makeLive({});
+    const plain = liveEntryScore(entry(), elements, live, fixtures, 10, null);
+    const hit = entry({
+      entry_history: { event: 10, points: 0, event_transfers_cost: 8 },
+    } as Partial<EntryEventPicks>);
+    expect(liveEntryScore(hit, elements, live, fixtures, 10, null)).toBe(plain - 8);
+  });
+
+  it("is what bandMedianScore takes the median of", () => {
+    const live = makeLive({});
+    const five = [1, 2, 3, 4, 5].map(() => entry());
+    const one = liveEntryScore(five[0], elements, live, fixtures, 10, null);
+    expect(bandMedianScore(five, elements, live, fixtures, 10, null)).toBe(one);
   });
 });

@@ -332,8 +332,19 @@ export default function PointsBreakdown({
               <td className="sticky left-0 z-10 bg-[var(--panel)] px-3 py-2 font-semibold">
                 {gwView ? `GW${gwFilter} total` : "Squad total"}
               </td>
+              {/*
+                THE COLUMN SUM, NOT THE ROW COUNT. Every other cell in this
+                footer sums its column; this one printed `rows.length`. In the
+                season view the header says "Apps" and the number on screen was
+                24 — the number of players — against a true 213, which is
+                19 gameweeks x 11 plus the four bench slots a Bench Boost added
+                in GW15. The per-gameweek view was right only because its header
+                changes to "Pl" and one appearance per row is the same thing.
+              */}
               <td className="px-2 py-2 text-right font-mono text-muted">
-                {rows.length}
+                {gwView
+                  ? rows.filter((r) => r.byGw.has(gwFilter as number)).length
+                  : rows.reduce((n, r) => n + r.apps, 0)}
               </td>
               {activeCats.map((c) => (
                 <td key={c} className="px-2 py-2 text-right">
