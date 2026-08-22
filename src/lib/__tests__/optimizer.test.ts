@@ -1656,3 +1656,53 @@ describe("the chip sheet names a gameweek the chip can be played in", () => {
     expect(clipped.gain).toBeGreaterThan(0);
   });
 });
+
+describe("the horizon total on screen is points, not the ranking key", () => {
+  /*
+   * `horizonScore` weights gameweek `i` by `gwDecay ** i` (0.88). That is what
+   * makes the planner prefer near-term certainty and it stays — but it was
+   * ALSO the number the card printed, under a heading saying "next N GWs" and
+   * beside a first-gameweek figure it could not be reconciled with. Measured on
+   * the demo, keep-the-team, the same XIs both ways: 0% / 11% / 21% / 33% low
+   * at horizons 1 / 3 / 5 / 8.
+   */
+  const run = (horizon: number) => {
+    const bootstrap = makeMockBootstrap();
+    return optimize({
+      bootstrap,
+      fixtures: makeMockFixtures(),
+      owned: makeMockOwned(bootstrap),
+      bank: 5,
+      freeTransfers: 1,
+      nextEvent: 11,
+      horizon,
+    });
+  };
+
+  it("agrees with the weighted total only at horizon 1, where the weight is 1", () => {
+    const one = run(1);
+    expect(one.keepHorizonPlainXp).toBeCloseTo(one.keepHorizonXp, 9);
+    // And at horizon 1 both are just the first gameweek's XI.
+    expect(one.keepHorizonPlainXp).toBeCloseTo(one.keepXi.totalXp, 9);
+  });
+
+  it("is strictly larger over a real horizon, by roughly the decay", () => {
+    const five = run(5);
+    expect(five.keepHorizonPlainXp).toBeGreaterThan(five.keepHorizonXp);
+    // A plain sum of five gameweeks cannot average less than the weighted one.
+    expect(five.keepHorizonPlainXp / 5).toBeGreaterThan(five.keepHorizonXp / 5);
+    // The gap grows with the horizon: that is the whole shape of the defect.
+    const three = run(3);
+    const gap = (r: { keepHorizonPlainXp: number; keepHorizonXp: number }) =>
+      1 - r.keepHorizonXp / r.keepHorizonPlainXp;
+    expect(gap(five)).toBeGreaterThan(gap(three));
+  });
+
+  it("stays reconcilable with the first gameweek the card quotes", () => {
+    // The reader can divide. At horizon 5 the plain total must not average
+    // wildly below the GW1 figure printed beside it on the same card — the
+    // weighted one did, by a fifth.
+    const five = run(5);
+    expect(five.keepHorizonPlainXp / 5).toBeGreaterThan(five.keepXi.totalXp * 0.85);
+  });
+});

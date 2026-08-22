@@ -1516,3 +1516,24 @@ describe("a recent-form load is stamped with the feed it started under", () => {
     expect(src).toMatch(/publishRecentForm\(map, feed\)/);
   });
 });
+
+describe("the transfer card prints the plain horizon total", () => {
+  /*
+   * `keepHorizonXp` is the ranking key and is weighted by `gwDecay ** i`.
+   * Printing it as "327.0 xp" under "next 8 GWs", beside "best XI projects
+   * 61.1 xp in GW21", gave the reader two numbers on one card that cannot be
+   * reconciled — 40.9 a week against a stated 61.1, with no falling fixtures
+   * and nothing anywhere mentioning weighting. `optimizer.test.ts` pins the two
+   * quantities apart; this pins which one reaches the screen.
+   */
+  it("hands PlanRow the undiscounted sum", () => {
+    const src = read("OptimizePanel.tsx");
+    expect(src).toMatch(/net=\{result\.keepHorizonPlainXp\}/);
+    expect(src).not.toMatch(/net=\{result\.keepHorizonXp\}/);
+  });
+
+  it("says once that the ranking is weighted", () => {
+    const src = read("OptimizePanel.tsx");
+    expect(src).toMatch(/ranked on a weighted total/);
+  });
+});

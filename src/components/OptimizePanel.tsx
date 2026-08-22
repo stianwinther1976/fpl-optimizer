@@ -864,11 +864,34 @@ export default function OptimizePanel({
           {/* Transfer plans */}
           <div>
             <SectionTitle>🔄 Transfer plans (next {horizon} GWs)</SectionTitle>
+            {/*
+              SAY THAT THE RANKING IS WEIGHTED, once, where the plans are.
+              Nothing in the app mentioned it and the "+x.x xp vs keeping"
+              figures are the weighted quantity — a reader comparing them
+              against the per-player totals two lines below, which are not, had
+              no way to recover the difference.
+            */}
+            {horizon > 1 && (
+              <p className="mt-1 text-xs text-muted">
+                Plans are ranked on a weighted total: a gameweek {horizon} weeks out counts
+                for less than the next one, because the projection is less certain that far
+                ahead. The points totals below are the plain sums.
+              </p>
+            )}
             <div className="mt-3 grid gap-3">
+              {/*
+                THE UNDISCOUNTED TOTAL, BECAUSE THIS ONE IS READ AS POINTS.
+                `keepHorizonXp` is the ranking key and weights gameweek `i` by
+                `gwDecay ** i` — so at horizon 8 the card read "best XI projects
+                61.1 xp in GW21 … 327.0 xp", which is 40.9 a week against a
+                stated 61.1 for the first, with no falling fixtures to explain
+                it and nothing in the UI mentioning weighting. Measured on the
+                demo the gap runs 0% / 11% / 21% / 33% at horizons 1 / 3 / 5 / 8.
+              */}
               <PlanRow
                 title="Keep the team"
                 sub={`0 transfers · best XI projects ${result.keepXi.totalXp.toFixed(1)} xp in GW${squad.nextEvent}`}
-                net={result.keepHorizonXp}
+                net={result.keepHorizonPlainXp}
                 gain={0}
                 best={!result.plans.some((p) => p.gainVsKeep > 0.05)}
               />

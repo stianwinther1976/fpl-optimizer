@@ -283,6 +283,29 @@ export interface OptimizerResult {
   xp: Map<number, PlayerXp>;
   keepXi: BestXi; // best XI with 0 transfers, next GW
   keepHorizonXp: number;
+  /**
+   * The same XIs, summed WITHOUT the gameweek decay.
+   *
+   * `keepHorizonXp` is the ranking key: `horizonScore` weights gameweek `i` by
+   * `gwDecay ** i` (0.88), which is what makes the planner prefer near-term
+   * certainty. That is a modelling choice and it stays. What it must not do is
+   * appear on screen as a points total, and it did — the card read
+   * "Transfer plans (next 8 GWs) … best XI projects 61.1 xp in GW21 … 327.0 xp",
+   * which is 40.9 a week against a stated 61.1 for the first one, with no
+   * falling fixtures to explain it and nothing in the UI mentioning weighting.
+   * Measured on the demo, keep-the-team, same XIs both ways:
+   *
+   *   horizon   card showed   undiscounted   low by
+   *      1          61.1          61.1          0%
+   *      3         163.1         184.3         11%
+   *      5         241.9         307.3         21%
+   *      8         327.0         489.4         33%
+   *
+   * So this is the number to print and `keepHorizonXp` is the number to rank
+   * on, and the two are given different names so a later reader cannot confuse
+   * them again.
+   */
+  keepHorizonPlainXp: number;
   plans: TransferPlan[]; // for 1..maxTransfers transfers (best per count)
   captainRanking: XiSlot[]; // top of current squad by next-GW xp
   /**
@@ -342,6 +365,11 @@ export function optimize(input: OptimizerInput): OptimizerResult {
   // --- Keep-team baseline ---
   const keepXi = pickBestXi(squadEls, (id) => xp.get(id)?.next ?? 0);
   const keepHorizonXp = horizonScore(squadEls, xp, gws);
+  // Undiscounted, for display — see `keepHorizonPlainXp`.
+  let keepHorizonPlainXp = 0;
+  for (const gw of gws) {
+    keepHorizonPlainXp += pickBestXi(squadEls, (id) => xp.get(id)?.perGw.get(gw) ?? 0).totalXp;
+  }
 
   // --- Candidate pool: top N per position by horizon xP (available players only) ---
   const candidates = new Map<ElementType, Element[]>();
@@ -708,6 +736,7 @@ export function optimize(input: OptimizerInput): OptimizerResult {
     xp,
     keepXi,
     keepHorizonXp,
+    keepHorizonPlainXp,
     plans,
     captainRanking,
     captainReads,
