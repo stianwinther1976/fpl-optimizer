@@ -13,7 +13,7 @@ entry id.
 ```bash
 npm run dev               # local dev server
 npm run build             # production build — run before claiming anything is done
-npm test                  # vitest run — the main suite (~709 tests)
+npm test                  # vitest run — the main suite (~791 tests)
 npm run lint              # eslint
 npx tsc --noEmit          # typecheck the app
 npm run typecheck:scripts # typecheck scripts/ — a separate tsconfig
@@ -169,6 +169,18 @@ starting or benched, and `projectAll` applies it last. Two things about it:
   calibration that the MODEL over-rates defenders — a real correction, applied
   globally, sourced from somebody else's mistake.
 
+  That exception is for the READER's opinion and nothing else. Everything the
+  model itself consumes — last season's record, recent line-ups — must be in the
+  graded run, or the calibration is grading a projection the app does not ship.
+  That failure has now happened twice, once per input.
+- **It expires with its gameweek.** The stored payload carries the gameweek it
+  was made for (`squad.nextEvent`, the same anchor `projectAll` calls offset 0)
+  and is dropped once that gameweek is behind. Nothing expired it before, and
+  the round that scoped the override to offset 0 made that sharper rather than
+  milder: it now lands entirely on ONE gameweek, so if that gameweek is the
+  wrong one there is nothing left to dilute it — a median 0.94 and up to 2.85
+  off `next` on the 2026-08-21 snapshot.
+
 ## FPL data conventions worth knowing
 
 - `history.current[].points` is **gross**, with `event_transfers_cost` beside it.
@@ -225,13 +237,31 @@ Two related habits that follow:
 
 ### Live data must not be cached by the browser
 
-`Cache-Control` on the proxy carries `max-age=0` as well as `s-maxage`. This is
-load-bearing and was missing: `s-maxage` binds shared caches only, so with
-`public` and no `max-age` a browser is given no freshness lifetime, falls back to
-heuristic caching and picks its own — iOS Safari picked minutes. The 30-second
-live poll was answered from the phone's own store while `updatedAt` was stamped
-"now" on every hit, so the app reported refreshing and had not. The client sends
-`cache: "no-store"` for `fixtures/` and `event/{id}/live/` as the second belt.
+`Cache-Control` on the proxy carries `no-cache` as well as `s-maxage`, and the
+CDN gets its own `CDN-Cache-Control` (RFC 9213) because the two layers want
+opposite things and one header cannot say both. The browser half was missing and
+took four attempts: `s-maxage` binds shared caches only, so with `public` and no
+`max-age` a browser is given no freshness lifetime, falls back to heuristic
+caching and picks its own — iOS Safari picked minutes. The 30-second live poll
+was answered from the phone's own store while `updatedAt` was stamped "now" on
+every hit, so the app reported refreshing and had not. `max-age=0` did not
+finish the job either, because `stale-while-revalidate` binds private caches
+too; `proxy-revalidate` was backwards on both counts (RFC 9111 §5.2.2.9). The
+client sends `cache: "no-store"` for `fixtures/` and `event/{id}/live/` as the
+second belt.
+
+**The origin does not cache at all any more, deliberately.** The upstream fetch
+carries `cache: "no-store"` rather than `next: { revalidate }`, because Next
+awaits its own background revalidation before completing the request
+(`withExecuteRevalidates` in `next/dist/server/revalidation-utils.js`) while
+`patch-fetch` has stripped the caller's abort signal from it. Measured against a
+stub that accepts the connection and never answers: a cold miss returned 502 at
+10.01s and a STALE entry was still open at 120s. All caching is therefore at the
+edge, where `stale-while-revalidate` serves a reader through an origin failure
+without holding anyone's response open. The one thing the Data Cache did that is
+worth keeping — folding concurrent readers of the same path into one upstream
+fetch — is an explicit in-flight map in the route; 20 concurrent identical
+requests produce exactly one upstream fetch.
 
 A "Refresh now" control must also bypass the in-memory memo in `fpl.ts`
 (`get(path, force)`), or it returns the promise the caller already had — a
