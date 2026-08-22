@@ -2051,3 +2051,31 @@ describe("the KPI modal cannot contradict the card that opens it", () => {
     );
   });
 });
+
+describe("the league error says which failure it was", () => {
+  /*
+   * A bare catch answered every failure with "League not found — check the ID."
+   * Reported against a league the reader had just picked out of his OWN list,
+   * where the ID was the one thing that could not be wrong.
+   *
+   * It matters more since the proxy stopped serving a cached body behind a
+   * failed upstream: FPL's 503s reach the reader now instead of being papered
+   * over, and a Saturday teatime is when they happen.
+   */
+  const src = read("MiniLeague.tsx");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  it("branches on the status rather than assuming a bad id", () => {
+    expect(code).toMatch(/catch \(err\)/);
+    expect(code).toContain("err instanceof FplApiError ? err.status : null");
+    expect(code).toMatch(/status === 404/);
+    expect(code).toMatch(/status === 503/);
+  });
+
+  it("does not send the reader to check an id they did not type", () => {
+    // The 404 wording is right FOR a 404 and wrong for everything else, so it
+    // must appear exactly once and behind that branch.
+    const hits = code.match(/League not found — check the ID\./g) ?? [];
+    expect(hits).toHaveLength(1);
+  });
+});
