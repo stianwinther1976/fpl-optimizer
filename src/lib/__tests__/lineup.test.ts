@@ -90,25 +90,6 @@ describe("a projection with no overrides is unchanged", () => {
 
   it("reads the module-level set when the caller passes none", () => {
     const target = bootstrap.elements.find((e) => e.element_type === 3)!;
-  /*
-   * A SEPARATE TARGET FOR THE RAISING DIRECTION, because `target` cannot test
-   * it. Every player `makeMockBootstrap` builds has started every gameweek the
-   * mock has played — `minutes: 2000, starts: 22` for a club's first-choice and
-   * `900/10` for the rest, against ten finished gameweeks — so the in-season
-   * model clamps `pStart` to 1.0 for all of them, and `applyStartCall(_,
-   * "starts")` is a `Math.max` against 0.97: a no-op by construction. Measured
-   * on `target`: `gainNext` 0, `gainTotal` 0, so the assertion below was
-   * `expect(0).toBeCloseTo(0)` and stayed green with `applyStartCall` replaced
-   * by the identity function.
-   *
-   * Cutting one midfielder to two starts in 240 minutes gives the model
-   * somewhere to move from: base 3.544, "starts" 5.886, "benched" 3.013.
-   */
-  const rotator = bootstrap.elements.find(
-    (e) => e.element_type === 3 && !e.web_name.endsWith("1")
-  )!;
-  rotator.minutes = 240;
-  rotator.starts = 2;
     const before = project().get(target.id)!.next;
     setActiveStartCalls(new Map([[target.id, "benched"]]));
     const after = projectAll({
@@ -417,7 +398,9 @@ describe("the calibration snapshot is taken without overrides", () => {
     const at = src.indexOf("snapshotPredictions(");
     expect(at).toBeGreaterThan(0);
     // The projectAll that feeds it is the one immediately above.
-    const before = src.slice(Math.max(0, at - 1400), at);
+    // Wide enough to reach past the note explaining what else that call
+    // passes — the window was 1400 and the comment outgrew it.
+    const before = src.slice(Math.max(0, at - 2600), at);
     const call = before.lastIndexOf("projectAll({");
     expect(call).toBeGreaterThanOrEqual(0);
     expect(before.slice(call)).toMatch(/startCalls:\s*new Map\(\)/);

@@ -1591,3 +1591,55 @@ describe("the accuracy card reports itself in both directions", () => {
     expect(src).not.toContain("Systematic misses shrink automatically over time");
   });
 });
+
+describe("the calibration grades the projection the app ships", () => {
+  /*
+   * `pastSeasonStore` records the original of this failure: "calibration was
+   * grading predictions the shipped drafter never made". It came back for a
+   * different input — once `OptimizePanel` has run, the pitch and the Stats
+   * table are built WITH recent form while the calibration snapshot was built
+   * without it, and the calibration's output is a per-position multiplier
+   * applied to every player in the game.
+   *
+   * Recent form is model input from the official API, not a reader's opinion,
+   * so it belongs in the graded run. `startCalls` is the deliberate exception
+   * and `lineup.test.ts` pins that separately.
+   */
+  it("hands the snapshot the same recent form the pitch uses", () => {
+    const dash = read("Dashboard.tsx");
+    const at = dash.indexOf("snapshotPredictions(");
+    expect(at).toBeGreaterThan(0);
+    const before = dash.slice(Math.max(0, at - 2600), at);
+    const call = before.lastIndexOf("projectAll({");
+    expect(call).toBeGreaterThanOrEqual(0);
+    expect(before.slice(call)).toMatch(/recentForm: cachedRecentForm\(\) \?\? undefined/);
+  });
+
+  it("re-takes the snapshot when recent form lands", () => {
+    // Without the dependency the snapshot is taken once, before the fetch, and
+    // never revisited — so the fix above would be inert.
+    const dash = read("Dashboard.tsx");
+    const at = dash.indexOf("snapshotPredictions(");
+    const deps = dash.indexOf("}, [data, entryId, recentReady]);", at);
+    expect(deps).toBeGreaterThan(at);
+  });
+});
+
+describe("the Stats table says its xP will move", () => {
+  /*
+   * Recent form is fetched by `OptimizePanel`, published to `recentFormStore`
+   * and picked up by the Dashboard's projection, so a reader who looks at
+   * Stats, presses Optimize and comes back sees a different xP for the same
+   * player in one page load (measured on the demo: ARS Back 3, 19.5 then
+   * 19.4). The convergence is the point — the two tabs used to disagree
+   * permanently — but an unannounced change to the number the reader is
+   * comparing players on is its own defect.
+   */
+  it("is told whether recent form is in the projection", () => {
+    expect(read("Dashboard.tsx")).toMatch(/recentFormApplied=\{cachedRecentForm\(\) != null\}/);
+    const stats = read("StatsTable.tsx");
+    expect(stats).toMatch(/recentFormApplied = false,/);
+    expect(stats).toMatch(/xP sharpens once you run Optimize/);
+    expect(stats).toMatch(/matches the Optimize tab exactly/);
+  });
+});

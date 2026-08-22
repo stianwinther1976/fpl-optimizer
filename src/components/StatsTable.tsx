@@ -19,6 +19,7 @@ export default function StatsTable({
   data,
   onSelect,
   xp: sharedXp,
+  recentFormApplied = false,
 }: {
   data: TeamData;
   onSelect?: (el: import("@/lib/types").Element) => void;
@@ -43,6 +44,20 @@ export default function StatsTable({
    * caller's business to decide, not this table's to guess around.
    */
   xp: Map<number, PlayerXp> | null;
+  /**
+   * True once the app has fetched recent line-ups and the projection above is
+   * built with them.
+   *
+   * THE NUMBER IN THIS COLUMN CHANGES MID-SESSION AND NOTHING SAID SO. Recent
+   * form is fetched by `OptimizePanel`, published to `recentFormStore`, and
+   * picked up by the Dashboard's projection — so a reader who looks at Stats,
+   * presses Optimize, and comes back sees a different xP for the same player
+   * in one page load (measured on the demo: ARS Back 3, 19.5 then 19.4). The
+   * convergence is the point — the two tabs used to disagree permanently — but
+   * an unannounced change to a number the reader is comparing players on is
+   * its own defect.
+   */
+  recentFormApplied?: boolean;
 }) {
   const [posFilter, setPosFilter] = useState<0 | ElementType>(0);
   const [sortKey, setSortKey] = useState<SortKey>("xp");
@@ -281,7 +296,10 @@ export default function StatsTable({
           ? "No players match these filters."
           : view.total > rows.length
             ? `Showing ${rows.length} of ${view.total} — narrow the filters, or sort by the column you care about.`
-            : `Showing all ${view.total}.`}
+            : `Showing all ${view.total}.`}{" "}
+        {recentFormApplied
+          ? "xP includes recent line-ups, so it matches the Optimize tab exactly."
+          : "xP sharpens once you run Optimize, which fetches recent line-ups for the players it considers."}
       </p>
     </div>
   );

@@ -320,6 +320,25 @@ export default function Dashboard({
            * here is the model's bias, and an override is not the model.
            */
           startCalls: new Map(),
+          /*
+           * RECENT FORM IS NOT AN OVERRIDE, AND WAS BEING TREATED AS ONE BY
+           * OMISSION. It is model input fetched from the official API, not a
+           * reader's opinion, so leaving it out here graded a projection the
+           * app does not ship: once `OptimizePanel` has run, the pitch and the
+           * Stats table are built WITH it while the calibration snapshot was
+           * built without. That is verbatim the failure `pastSeasonStore`
+           * records — "calibration was grading predictions the shipped drafter
+           * never made" — reintroduced for a different input, and the
+           * calibration's output is a per-position multiplier applied to every
+           * player in the game.
+           *
+           * `recentReady` is in this effect's dependency array for the same
+           * reason: without it the snapshot is taken once, before the fetch
+           * lands, and never revisited. `snapshotPredictions` overwrites, so
+           * the last projection before the deadline wins — which is the most
+           * informed one.
+           */
+          recentForm: cachedRecentForm() ?? undefined,
         });
         snapshotPredictions(demo, nextEv, xp, currentSeasonName(data.bootstrap.events));
       }
@@ -328,7 +347,7 @@ export default function Dashboard({
     return () => {
       cancelled = true;
     };
-  }, [data, entryId]);
+  }, [data, entryId, recentReady]);
 
   const currentEventObj = data?.bootstrap.events.find((e) => e.is_current) ?? null;
   const currentEvent = currentEventObj?.id ?? data?.squad?.currentEvent ?? null;
@@ -1201,7 +1220,12 @@ export default function Dashboard({
         )}
         {visited.has("stats") && (
           <div hidden={tab !== "stats"} role="tabpanel" id="panel-stats" aria-labelledby="tab-stats">
-            <StatsTable data={data} onSelect={setSelected} xp={xpOf} />
+            <StatsTable
+              data={data}
+              onSelect={setSelected}
+              xp={xpOf}
+              recentFormApplied={cachedRecentForm() != null}
+            />
           </div>
         )}
         {visited.has("fixtures") && (
