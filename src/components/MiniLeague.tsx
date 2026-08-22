@@ -6,6 +6,7 @@ import { markNavigation } from "@/lib/nav";
 import { api, DEMO_ENTRY_ID, FplApiError, fmtNum, type TeamData } from "@/lib/fpl";
 import type { EventLive, LeagueStandings } from "@/lib/types";
 import { CHIP_LABELS } from "@/lib/rules";
+import { liveLeagueTotal } from "@/lib/display";
 import { liveEntryScore, provisionalBonus, squadMatchState } from "@/lib/live";
 import { ErrorBox, Skeleton } from "./ui";
 
@@ -462,7 +463,20 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                         </div>
                       )}
                     </td>
-                    <td className="px-2 py-1.5 text-right font-mono font-bold">{fmtNum(r.total)}</td>
+                    <td className="px-2 py-1.5 text-right font-mono font-bold">
+                      {/*
+                        LIVE ON BOTH SIDES OR NEITHER. The GW column beside this
+                        one is the live score; `r.total` is FPL's stored
+                        cumulative, refreshed on their schedule. In GW1, where
+                        the two are by definition the same number, the row read
+                        7 beside 3. See `liveLeagueTotal`.
+                      */}
+                      {fmtNum(
+                        d?.livePoints != null
+                          ? liveLeagueTotal(r.total, r.event_total, d.livePoints)
+                          : r.total
+                      )}
+                    </td>
                   </tr>
                 );
               })}
