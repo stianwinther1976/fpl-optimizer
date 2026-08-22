@@ -93,7 +93,7 @@ export function applyStartCall(mm: MinutesLike, call: StartCall): MinutesLike {
    * `pStartFor("starts")` is the PRE-SEASON ceiling, 0.97. In season the model
    * blends observed start share and clamps to 1.0, so an ever-present carries
    * 1.0 — and taking the override neat then DEMOTED him for being named in the
-   * eleven. Measured on the demo's mid-season universe: 141 of 300 players sit
+   * eleven. Measured on the demo's mid-season universe: 143 of 300 players sit
    * above 0.97, and every one sampled lost points when told he starts (element
    * 8: 5.961 to 5.932 next, 18.570 to 18.467 over three gameweeks).
    *
@@ -224,9 +224,15 @@ export function loadStartCalls(demo: boolean): Map<number, StartCall> {
     const obj = JSON.parse(raw) as Record<string, string>;
     const out = new Map<number, StartCall>();
     for (const [id, v] of Object.entries(obj)) {
-      // Anything unrecognised is dropped rather than coerced. A stored value
-      // this build does not understand is not evidence of anything.
-      if (v === "starts" || v === "benched") out.set(Number(id), v);
+      // Anything unrecognised is dropped rather than coerced — THE KEY AS WELL
+      // AS THE VALUE, which this used to say and not do. `Number("x")` is
+      // `NaN`, and a `NaN` key can never match `startCalls.get(el.id)`, so it
+      // was invisible to the projection and permanent everywhere else: it
+      // inflated `active.size`, which is half of `startCallsVersion()`, and
+      // `setStartCall` re-persisted it as `"NaN"` on the next write.
+      const n = Number(id);
+      if (!Number.isInteger(n) || n <= 0) continue;
+      if (v === "starts" || v === "benched") out.set(n, v);
     }
     return out;
   } catch {

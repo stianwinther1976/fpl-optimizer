@@ -92,3 +92,29 @@ describe("removeRecentTeam", () => {
     expect(getRecentTeams().map((t) => t.id)).toEqual([1]);
   });
 });
+
+describe("a stored id of the wrong type", () => {
+  it("is dropped rather than coerced into one that cannot be removed", () => {
+    /*
+     * `t.id > 0` coerces, so `{"id": "5"}` passed the shape filter — and then
+     * survived `removeRecentTeam(5)`, which compares `t.id !== id` and finds
+     * `"5" !== 5`. The team stayed on the landing page after being removed,
+     * permanently, with the remove button doing nothing each time.
+     */
+    store.set("fpl-recent-teams", JSON.stringify([{ id: "5", name: "Team 5", manager: "M", at: 1 }]));
+    expect(getRecentTeams()).toEqual([]);
+    expect(removeRecentTeam(5)).toEqual([]);
+  });
+
+  it("keeps a well-formed neighbour in the same list", () => {
+    store.set(
+      "fpl-recent-teams",
+      JSON.stringify([
+        { id: "5", name: "Bad", manager: "M", at: 1 },
+        { id: 6, name: "Good", manager: "M", at: 2 },
+      ])
+    );
+    expect(getRecentTeams().map((t) => t.id)).toEqual([6]);
+    expect(removeRecentTeam(6)).toEqual([]);
+  });
+});

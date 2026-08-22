@@ -220,3 +220,37 @@ describe("the allowlist, which is the security-relevant half of this route", () 
     expect(allowed(normalise(["fixtures\n"]))).toBe(false);
   });
 });
+
+describe("an error is never a cached one", () => {
+  it("routes every error return through the no-store helper", () => {
+    /*
+     * The four error returns carried NO cache directive at all — measured on a
+     * production build, only `vary:`. That is the same shape as the bug the
+     * note on `cacheControl` is about: with no freshness lifetime a browser may
+     * fall back to heuristic caching and pick its own, and "FPL is updating the
+     * game" is the one answer that must not be remembered.
+     */
+    const route = fs.readFileSync(
+      path.resolve(__dirname, "[...path]/route.ts"),
+      "utf8"
+    );
+    expect(route).toContain('headers: { "Cache-Control": "no-store" }');
+    // Four error paths: unknown endpoint, upstream not-ok, non-JSON, unreachable.
+    expect((route.match(/return errorJson\(/g) ?? []).length).toBe(4);
+    // And no error path bypasses it.
+    expect(route).not.toMatch(/return NextResponse\.json\(\s*\{ error:/);
+  });
+
+  it("keeps a hard bound on how long the upstream may take", () => {
+    // There was no signal at all: against a stub that never answers, this route
+    // never answered either — measured at 45 seconds and still waiting — and it
+    // kept the upstream socket after the client gave up at 3.
+    const route = fs.readFileSync(path.resolve(__dirname, "[...path]/route.ts"), "utf8");
+    expect(route).toContain("signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)");
+    expect(route).toMatch(/const UPSTREAM_TIMEOUT_MS = [\d_]+;/);
+    // And never follows a redirect: the upstream is fixed, so a 302 can only
+    // come from FPL itself, and following one serves an off-host body under our
+    // origin labelled publicly cacheable at the edge.
+    expect(route).toContain('redirect: "error"');
+  });
+});

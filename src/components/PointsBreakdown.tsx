@@ -76,8 +76,16 @@ export default function PointsBreakdown({
         // Archive it: FPL deletes picks and live scoring when the season rolls
         // over, so this snapshot is the only way the breakdown survives into
         // next season's "Past seasons" view.
+        /*
+         * NEVER ARCHIVE AN INCOMPLETE READ. `saveSeasonArchive`'s only guard is
+         * `existing.gwsPlayed > a.gwsPlayed`, so a later run that dropped two
+         * gameweeks to a 503 but covered more of the season overwrites an
+         * earlier complete one, permanently and silently. A run with a hole in
+         * it is not a snapshot of the season; it is a snapshot of what the
+         * network managed that afternoon.
+         */
         const season = currentSeasonName(data.bootstrap.events);
-        if (season && res.gws.length > 0) {
+        if (season && res.gws.length > 0 && res.missing.length === 0) {
           saveSeasonArchive(
             toArchive(entryId, season, res, elementById, data.bootstrap.teams, Date.now())
           );
@@ -164,6 +172,19 @@ export default function PointsBreakdown({
             Captain, Triple Captain, Bench Boost and auto-subs are all applied. A
             gameweek joins this once its bonus is confirmed.
           </p>
+          {/*
+            A HOLE IN THE MIDDLE IS OTHERWISE INVISIBLE. The heading above is
+            built from the first and last gameweek that loaded, so a failure in
+            between reads as a complete range — probed at 70 points missing from
+            a five-gameweek total with progress reporting 5 of 5.
+          */}
+          {bd.missing.length > 0 && (
+            <p role="alert" className="mt-1 text-xs text-warn">
+              Couldn&apos;t load GW
+              {bd.missing.join(", GW")} — {bd.missing.length === 1 ? "it is" : "they are"} missing
+              from these totals. Reopen the tab to try again.
+            </p>
+          )}
         </div>
         <select
           aria-label="Filter the breakdown by gameweek"

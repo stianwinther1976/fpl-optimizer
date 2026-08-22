@@ -16,7 +16,18 @@ export function getRecentTeams(): RecentTeam[] {
     const raw = localStorage.getItem(KEY);
     if (!raw) return [];
     const list = JSON.parse(raw) as RecentTeam[];
-    return Array.isArray(list) ? list.filter((t) => t && t.id > 0 && t.name) : [];
+    /*
+     * `typeof t.id === "number"`, because `t.id > 0` COERCES. A stored
+     * `{"id": "5"}` passed this filter and then survived `removeRecentTeam(5)`,
+     * which compares `t.id !== id` — and `"5" !== 5`. The team stayed on the
+     * landing page after being removed, permanently, with the remove button
+     * doing nothing each time. Not reachable from this app's own writes, which
+     * pass a `parseInt` result; reachable from corrupt or foreign storage under
+     * a key this simple.
+     */
+    return Array.isArray(list)
+      ? list.filter((t) => t && typeof t.id === "number" && t.id > 0 && t.name)
+      : [];
   } catch {
     return [];
   }
@@ -37,8 +48,13 @@ export function saveRecentTeam(t: Omit<RecentTeam, "at">): void {
  * and re-parses storage, so a caller that removed and then re-read would be
  * trusting a second read to agree with the first — and in the one case that
  * matters, a `setItem` that threw on a full or blocked store, it would not.
- * Returning the list the caller is about to render keeps the screen and the
- * storage telling the same story even when the write fails.
+ * Returning the list the caller is about to render keeps the SCREEN honest
+ * about what the reader just asked for even when the write fails. It does not
+ * make the screen and the storage agree — an earlier version of this sentence
+ * claimed it did, and they cannot: if `setItem` throws, the page shows the
+ * shorter list and the store keeps the longer one, so the team returns on the
+ * next visit. Which is the right trade in that order: the button must appear to
+ * work now, and the paragraph below already says removal does not last.
  *
  * Removal is not a deletion in any lasting sense: this list is a convenience
  * cache of ids the reader has typed, and opening the team again re-adds it.

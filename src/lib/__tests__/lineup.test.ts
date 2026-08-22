@@ -277,6 +277,22 @@ describe("persistence", () => {
     expect(loadStartCalls(true).get(42)).toBe("starts");
   });
 
+  it("drops a key that is not a player id, rather than coercing it to NaN", () => {
+    /*
+     * `Number("x")` is `NaN`, and a `NaN` key can never match
+     * `startCalls.get(el.id)` — so it was invisible to the projection and
+     * permanent everywhere else: it inflated `active.size`, which is half of
+     * `startCallsVersion()`, and `setStartCall` re-persisted it as `"NaN"` on
+     * the next write. The comment beside it already said keys were dropped
+     * rather than coerced; only the value was.
+     */
+    store.set(
+      "fpl-start-calls",
+      JSON.stringify({ "8": "starts", x: "benched", "0": "starts", "-3": "benched", "1.5": "starts" })
+    );
+    expect([...loadStartCalls(false)]).toEqual([[8, "starts"]]);
+  });
+
   it("drops a stored value it does not recognise rather than coercing it", () => {
     store.set("fpl-start-calls", JSON.stringify({ 7: "starts", 8: "maybe", 9: null }));
     const m = loadStartCalls(false);

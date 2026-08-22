@@ -48,10 +48,19 @@ export default function Home() {
   }
 
   useEffect(() => {
-    const saved = localStorage.getItem("fpl-id");
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring persisted input on mount
-    if (saved) setId(saved);
-     
+    /*
+     * WRAPPED, LIKE EVERY OTHER STORAGE ACCESS IN THIS TREE. The ACCESSOR
+     * itself throws where site data is blocked — Safari's "Block All Cookies",
+     * some embedded webviews — not just the write. Unguarded, this effect threw
+     * before `setRecent` ran, so the recent-teams list never rendered and the
+     * mount errored. It was the only bare `localStorage` call in the repo; the
+     * `removeItem` five lines up is already inside a `try`.
+     */
+    try {
+      const saved = localStorage.getItem("fpl-id");
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring persisted input on mount
+      if (saved) setId(saved);
+    } catch {}
     setRecent(getRecentTeams());
   }, []);
 
@@ -68,7 +77,16 @@ export default function Home() {
       setDemoMode(num === DEMO_ENTRY_ID);
       const e = await api.entry(num);
       setEntry(e);
-      localStorage.setItem("fpl-id", String(num));
+      /*
+       * Its own `try`, because it is inside the fetch's. A `QuotaExceededError`
+       * here — after the team has already loaded and rendered — fell into the
+       * catch below and put "Something went wrong. Please try again." beside a
+       * team that came back perfectly. Remembering the id is a convenience; it
+       * is not worth reporting the lookup as failed.
+       */
+      try {
+        localStorage.setItem("fpl-id", String(num));
+      } catch {}
     } catch (err) {
       if (err instanceof FplApiError && err.status === 404) {
         setError(await entryNotFoundMessage());

@@ -2760,6 +2760,8 @@ export function makeDemoUniverse(now: number) {
     transfersFor,
     picks: picksFor(DEMO_ENTRY_ID, CURRENT_GW),
     picksFor,
+    /** The last gameweek the demo has picks for — the route bounds on it. */
+    currentEvent: CURRENT_GW,
     history,
     historyFor,
     transfers,

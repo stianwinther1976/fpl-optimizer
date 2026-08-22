@@ -85,6 +85,7 @@ describe("toArchive", () => {
     catTotals: { minutes: 6, goals_scored: 10, bonus: 6, assists: 4, clean_sheets: 4 },
     playersTotal: 30,
     hits: 8,
+    missing: [],
     perGw: new Map(),
   };
 

@@ -142,6 +142,22 @@ export function cdnCacheControl(path: string): string {
   return `public, s-maxage=${cacheSeconds(path)}, stale-while-revalidate=${staleSeconds(path)}`;
 }
 
+/**
+ * An error, and never a cached one.
+ *
+ * The four error returns below carried NO cache directive at all — measured on
+ * a production build, only `vary:`. That is the same shape as the bug the note
+ * on `cacheControl` is about: with no freshness lifetime a browser is free to
+ * fall back to heuristic caching and pick its own, and the one thing that must
+ * not be remembered is "FPL is updating the game". Chromium was measured NOT
+ * doing it — three fetches of a 404 made three requests — but that is one
+ * browser, and `no-store` removes the guesswork rather than leaving it as a
+ * belief about somebody else's software.
+ */
+function errorJson(body: { error: string }, status: number) {
+  return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
@@ -151,7 +167,7 @@ export async function GET(
   if (!joined.endsWith("/")) joined += "/";
 
   if (!ALLOWED.some((re) => re.test(joined))) {
-    return NextResponse.json({ error: "Unknown endpoint" }, { status: 400 });
+    return errorJson({ error: "Unknown endpoint" }, 400);
   }
 
   // Rebuild the upstream URL canonically — never forward raw query strings.
@@ -198,15 +214,12 @@ export async function GET(
     if (!upstream.ok) {
       // FPL returns 503/maintenance pages while the game updates.
       const status = upstream.status === 404 ? 404 : 503;
-      return NextResponse.json(
-        { error: status === 404 ? "Not found" : "FPL is updating the game" },
-        { status }
-      );
+      return errorJson({ error: status === 404 ? "Not found" : "FPL is updating the game" }, status);
     }
 
     const contentType = upstream.headers.get("content-type") ?? "";
     if (!contentType.includes("application/json")) {
-      return NextResponse.json({ error: "FPL is updating the game" }, { status: 503 });
+      return errorJson({ error: "FPL is updating the game" }, 503);
     }
 
     const data = await upstream.json();
@@ -217,6 +230,6 @@ export async function GET(
       },
     });
   } catch {
-    return NextResponse.json({ error: "Could not reach the FPL API" }, { status: 502 });
+    return errorJson({ error: "Could not reach the FPL API" }, 502);
   }
 }
