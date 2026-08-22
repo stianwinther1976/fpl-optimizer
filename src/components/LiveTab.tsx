@@ -15,6 +15,7 @@ import {
   autoSubView,
   benchPoints,
   kickOffPassed,
+  liveStaleMinutes,
   kickoffLabel,
   publishedAverage,
 } from "@/lib/display";
@@ -37,6 +38,9 @@ export default function LiveTab({
   const [fixtures, setFixtures] = useState<Fixture[]>(data.fixtures);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  // 0 until the first tick, which reads as "not stale" — correct, because
+  // `updatedAt` is still null then and there is nothing on screen to be stale.
+  const [nowMs, setNowMs] = useState(0);
   const [bandPicks, setBandPicks] = useState<EntryEventPicks[] | null>(null);
   const bandTried = useRef(false);
   const [matchOpen, setMatchOpen] = useState<Fixture | null>(null);
@@ -102,6 +106,19 @@ export default function LiveTab({
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [refresh, currentEvent, gwDone, active]);
+
+  /*
+   * The staleness clock. Runs only while the gameweek can still change, so a
+   * finished gameweek and the off-season repaint nothing. A third of the poll
+   * interval, which is what makes "N min old" tick up rather than jump.
+   */
+  useEffect(() => {
+    if (gwDone) return;
+    // No eager set: `nowMs` starts at 0, which reads as "not stale", and that
+    // is the right answer for the first tick's worth of a freshly opened tab.
+    const t = setInterval(() => setNowMs(Date.now()), LIVE_REFRESH_MS / 3);
+    return () => clearInterval(t);
+  }, [gwDone]);
 
   const elementById = useMemo(
     () => new Map(data.bootstrap.elements.map((e) => [e.id, e])),
@@ -250,7 +267,16 @@ export default function LiveTab({
       </div>
     );
   }
-  if (error)
+  /*
+   * BLANK THE TAB ONLY WHEN THERE IS NOTHING TO BLANK. This used to return the
+   * error box on any failed poll, which threw away a working live view — fifteen
+   * rows, the scores, the bench — because one request out of a hundred timed
+   * out. During a match that is the worst possible moment to have the screen
+   * replaced by a message. With data in hand the failure is reported by the
+   * staleness strip below instead, which says how old the numbers are rather
+   * than hiding them.
+   */
+  if (error && !live)
     return (
       <ErrorBox
         message={`${error}${gwDone ? "" : " Retrying automatically every 30s."}`}
@@ -338,6 +364,21 @@ export default function LiveTab({
   // and this tab is only ever open during one. See `publishedAverage`.
   const gwAvg = publishedAverage(data.bootstrap.events.find((e) => e.id === currentEvent));
 
+  /*
+   * HOW OLD THE NUMBERS ARE, which is not the same question as whether the
+   * last request succeeded. See `liveStaleMinutes`.
+   *
+   * IT NEEDS ITS OWN CLOCK, for two reasons that both bite. Reading `Date.now()`
+   * during render is impure and `react-hooks/purity` rejects it outright — and
+   * the tempting answer, "a failing poll calls `setError` so the tab repaints
+   * anyway", is wrong: `setError` is handed the SAME string every time, and
+   * React bails out of a re-render when the next state is identical. A feed
+   * that stops answering therefore produces no repaints at all, which is
+   * precisely the case this has to detect.
+   */
+  const staleMin = gwDone ? null : liveStaleMinutes(updatedAt, nowMs, LIVE_REFRESH_MS);
+  const stale = staleMin !== null;
+
   return (
     <div className="space-y-4">
       {/*
@@ -398,8 +439,24 @@ export default function LiveTab({
           )}
         </div>
         <div className="ml-auto text-right text-xs text-muted">
-          {updatedAt && <div>Updated {updatedAt.toLocaleTimeString("en-GB")}</div>}
-          <div>{gwDone ? "Gameweek complete — auto-refresh off" : "Auto-refresh every 30s"}</div>
+          {updatedAt && (
+            <div className={stale ? "font-semibold text-warn" : undefined}>
+              Updated {updatedAt.toLocaleTimeString("en-GB")}
+            </div>
+          )}
+          {/*
+            "Auto-refresh every 30s" IS A CLAIM ABOUT THE REQUEST, and while the
+            feed was refusing it sat there unchanged next to numbers that had
+            not moved for an hour. Once the data is stale the line says what is
+            actually known: polling continues, and it is not getting through.
+          */}
+          <div className={stale ? "font-semibold text-warn" : undefined}>
+            {gwDone
+              ? "Gameweek complete — auto-refresh off"
+              : stale
+                ? `Not updating — ${staleMin} min old`
+                : "Auto-refresh every 30s"}
+          </div>
           <button
             type="button"
             onClick={() => refresh(true)}
@@ -469,7 +526,14 @@ export default function LiveTab({
         >
           {gwFixtures.map((f) => {
             const minute = matchMinute(f, updatedAt ?? undefined);
-            const liveNow = isInPlay(f);
+            /*
+              `isInPlay` IS A FACT ABOUT THE PAYLOAD, not about the screen. A
+              fixture kept its green border and its accent-coloured clock while
+              the number in it was an hour old, because the flag it reads was
+              itself an hour old. Nothing here can be styled as live unless the
+              data behind it is current.
+            */
+            const liveNow = isInPlay(f) && !stale;
             const hs = f.team_h_score ?? 0;
             const as = f.team_a_score ?? 0;
             // Result colors (live and FT): winner green, loser red, draw yellow.
@@ -517,7 +581,9 @@ export default function LiveTab({
                 */}
                 <div className={`text-xs ${liveNow ? "font-semibold text-accent" : "text-muted"}`}>
                   {f.started
-                    ? minute
+                    ? stale
+                      ? `${minute} · ${staleMin}m old`
+                      : minute
                     : kickOffPassed(f, (updatedAt ?? new Date()).getTime())
                       ? "waiting on FPL"
                       : kickoffLabel(f, (iso) =>

@@ -442,3 +442,33 @@ export function kickOffPassed(
   if (!Number.isFinite(at)) return false;
   return now - at > graceMs;
 }
+
+/**
+ * How old the numbers on screen are, in whole minutes, or null while current.
+ *
+ * `updatedAt` advances only on a SUCCESSFUL refresh, so this is the age of the
+ * data and not the age of the last attempt — which is the distinction the Live
+ * tab had no way to draw. A reader watched a match reach the hour mark with
+ * the card still reading 2', beside a stamp that said "Updated" with the
+ * current time and "Auto-refresh every 30s". Every one of those was true about
+ * the REQUEST and none of them was true about the DATA.
+ *
+ * The threshold is two and a half poll intervals: one missed poll is a dropped
+ * packet, three in a row is a feed that has stopped answering, and only the
+ * second is worth telling anyone about.
+ *
+ * Whole minutes, floored, so it never claims precision it does not have — and
+ * it is deliberately allowed to read "0 min" for the window between the
+ * threshold and sixty seconds, because "0 min old" alongside a visible warning
+ * still says the right thing: not moving.
+ */
+export function liveStaleMinutes(
+  updatedAt: Date | null,
+  now: number,
+  pollMs: number
+): number | null {
+  if (!updatedAt) return null;
+  const age = now - updatedAt.getTime();
+  if (!Number.isFinite(age) || age < pollMs * 2.5) return null;
+  return Math.floor(age / 60_000);
+}

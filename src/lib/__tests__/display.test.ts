@@ -13,6 +13,7 @@ import {
   liveCornerNote,
   publishedAverage,
   kickOffPassed,
+  liveStaleMinutes,
   netEventPoints,
   netGwDelta,
   netGwPoints,
@@ -607,5 +608,43 @@ describe("a kick-off that has passed while FPL still says not started", () => {
   it("says nothing when there is no kick-off time at all", () => {
     expect(kickOffPassed(f({ kickoff_time: null }), at(KO) + 600_000)).toBe(false);
     expect(kickOffPassed(f({ kickoff_time: "not a date" }), at(KO) + 600_000)).toBe(false);
+  });
+});
+
+describe("liveStaleMinutes", () => {
+  const POLL = 30_000;
+  const t = (ms: number) => new Date(1_700_000_000_000 + ms);
+  const NOW = 1_700_000_000_000;
+
+  it("is null before it has ever refreshed", () => {
+    expect(liveStaleMinutes(null, NOW, POLL)).toBeNull();
+  });
+
+  it("is null while polls are landing", () => {
+    // One missed poll is a dropped packet, not a dead feed.
+    expect(liveStaleMinutes(t(-29_000), NOW, POLL)).toBeNull();
+    expect(liveStaleMinutes(t(-60_000), NOW, POLL)).toBeNull();
+    expect(liveStaleMinutes(t(-74_999), NOW, POLL)).toBeNull();
+  });
+
+  it("fires at two and a half poll intervals", () => {
+    expect(liveStaleMinutes(t(-75_000), NOW, POLL)).toBe(1);
+  });
+
+  it("floors to whole minutes and never claims more precision", () => {
+    expect(liveStaleMinutes(t(-119_999), NOW, POLL)).toBe(1);
+    expect(liveStaleMinutes(t(-120_000), NOW, POLL)).toBe(2);
+    // The reader's case: a match at the hour mark, the card still on 2'.
+    expect(liveStaleMinutes(t(-58 * 60_000), NOW, POLL)).toBe(58);
+  });
+
+  it("scales with the poll interval rather than a hardcoded window", () => {
+    // A 10s poll must call it stale far sooner than a 30s one does.
+    expect(liveStaleMinutes(t(-30_000), NOW, 10_000)).toBe(0);
+    expect(liveStaleMinutes(t(-30_000), NOW, 30_000)).toBeNull();
+  });
+
+  it("does not report staleness from a clock that ran backwards", () => {
+    expect(liveStaleMinutes(t(60_000), NOW, POLL)).toBeNull();
   });
 });

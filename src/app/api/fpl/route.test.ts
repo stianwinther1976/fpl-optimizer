@@ -302,6 +302,23 @@ describe("a hung upstream cannot hold the response open", () => {
    *   entry stale, hung upstream, `no-store` ...... 502 at 10.01 s
    *   cold miss,   hung upstream, `no-store` ...... 502 at 10.01 s
    *
+   * A HANG IS NOT THE WORST OF IT. Measured again on 2026-08-22, same method,
+   * with the stub answering 200 once and then 503 the way a rate-limited FPL
+   * does on a Saturday afternoon. Production build, `fixtures/` polled every
+   * 4 s for 48 s against a 25 s TTL:
+   *
+   *   Data Cache on  ... 200 every time, body frozen at the one good read,
+   *                      `minutes` stuck on 23 for the whole window
+   *   `no-store` ....... 503 every time, which is what actually happened
+   *
+   * Six upstream attempts served twelve client requests and every failure was
+   * swallowed, so the route's own `!upstream.ok` branch never ran: the client
+   * was handed a 200 and had no way to know the numbers were an hour old. That
+   * is the defect a reader hit during GW1 — a match at the hour mark rendering
+   * 2' and 0-0 under a current "Updated" stamp. With a HEALTHY upstream the
+   * same build tracked correctly (`minutes` 1 then 27, three upstream reads in
+   * 40 s), so staleness required upstream failure and nothing else.
+   *
    * So the source guard below is the honest half: it pins the ONE decision the
    * measurement turned on, which is that this fetch does not enter the Data
    * Cache. The behavioural tests pin the parts that are this module's own.

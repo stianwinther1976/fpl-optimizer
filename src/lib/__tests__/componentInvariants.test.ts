@@ -1854,3 +1854,48 @@ describe("the fixture card can say FPL has not flagged kick-off", () => {
     expect(src).not.toMatch(/kickOffPassed\(f, Date\.now\(\)\)/);
   });
 });
+
+describe("the Live tab cannot present stale numbers as live", () => {
+  /*
+   * A reader watched Hull v Man Utd reach the hour mark with the fixture card
+   * still reading 2' and 0-0, in accent green with a live border, beside
+   * "Updated 14:45:14" and "Auto-refresh every 30s". Every one of those was
+   * true about the REQUEST. None of them was true about the DATA.
+   *
+   * The origin half is fixed in the proxy route (`cache: "no-store"`, measured
+   * below in `route.test.ts`) — Next's Data Cache was serving the last good
+   * body with a 200 while the upstream refused, so the route's own `!upstream.ok`
+   * branch never ran and the client had nothing to detect. These guards pin the
+   * client half: once the data IS known to be old, nothing on screen may keep
+   * claiming otherwise.
+   */
+  const src = read("LiveTab.tsx");
+
+  it("derives staleness from the shared helper, not inline arithmetic", () => {
+    expect(src).toContain("liveStaleMinutes(updatedAt, nowMs, LIVE_REFRESH_MS)");
+    // Its own clock, because `setError` gets the same string every poll and
+    // React bails out of the repaint. See the comment at the call site.
+    expect(src).toMatch(/setInterval\(\(\) => setNowMs\(Date\.now\(\)\), LIVE_REFRESH_MS \/ 3\)/);
+    expect(src).toMatch(/const stale = staleMin !== null;/);
+  });
+
+  it("suppresses live styling on a fixture whose data is stale", () => {
+    // `isInPlay` reads the payload; the payload is what went stale.
+    expect(src).toMatch(/const liveNow = isInPlay\(f\) && !stale;/);
+    expect(src).not.toMatch(/const liveNow = isInPlay\(f\);/);
+  });
+
+  it("labels the age on the fixture clock rather than asserting a bare minute", () => {
+    expect(src).toContain("m old`");
+  });
+
+  it("stops claiming a 30s refresh while the feed is not answering", () => {
+    expect(src).toMatch(/Not updating — \$\{staleMin\} min old/);
+  });
+
+  it("does not blank a populated live view because one poll failed", () => {
+    // `if (error)` threw away fifteen rows, the scores and the bench mid-match.
+    expect(src).toMatch(/if \(error && !live\)/);
+    expect(src).not.toMatch(/^\s*if \(error\)\s*$/m);
+  });
+});
