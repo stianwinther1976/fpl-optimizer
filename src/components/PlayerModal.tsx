@@ -136,8 +136,7 @@ export default function PlayerModal({
       .elementSummary(element.id)
       .then((s) => {
         if (!cancelled) {
-          // Only rounds the viewed gameweek could have known about.
-          const rows = asOfGw == null ? s.history : s.history.filter((r) => r.round < asOfGw);
+          const rows = s.history;
           /*
            * AND ONLY MATCHES THAT HAVE BEEN PLAYED.
            *
@@ -166,7 +165,25 @@ export default function PlayerModal({
   // `asOfGw` is a dependency: switching gameweeks in the time machine with the
   // sheet open must re-cut the list, or it keeps the previous week's rounds.
   }, [element.id, asOfGw]);
-  const recent = useMemo(() => (played ? [...played].slice(-5).reverse() : null), [played]);
+  /*
+   * Two different cuts of the same rounds, and they are NOT the same cut.
+   *
+   * The "Recent gameweeks" list must stop BEFORE the gameweek on screen: that
+   * one is already rendered as the headline above it, so including it would
+   * print the same round twice.
+   *
+   * The season total must INCLUDE it — and it did not. Both blocks shared the
+   * `round < asOfGw` array, so under a "GW15 points — 8 pts" heading the block
+   * beneath read "Season to GW15 — 87" when the true figure to GW15 is 95.
+   * Measured on demo element 28: 5 / 8 / 9 points short at GW10 / GW15 / GW20,
+   * always exactly the gameweek in the heading. FPL's own site shows the
+   * inclusive number, and the two blocks contradicted each other on one sheet.
+   */
+  const recent = useMemo(() => {
+    if (!played) return null;
+    const rows = asOfGw == null ? played : played.filter((r) => r.round < asOfGw);
+    return [...rows].slice(-5).reverse();
+  }, [played, asOfGw]);
   /*
    * The season as the viewed gameweek knew it. Only reached in the time
    * machine, where `played` is already cut to `round < asOfGw`; on the live
@@ -174,18 +191,19 @@ export default function PlayerModal({
    * instead.
    */
   const toDate = useMemo(() => {
+    if (!played) return null;
     let points = 0;
     let goals = 0;
     let assists = 0;
     let xgi = 0;
-    for (const r of played ?? []) {
+    for (const r of asOfGw == null ? played : played.filter((r) => r.round <= asOfGw)) {
       points += r.total_points;
       goals += r.goals_scored ?? 0;
       assists += r.assists ?? 0;
       xgi += parseFloat(r.expected_goal_involvements ?? "0") || 0;
     }
     return { points, goals, assists, xgi };
-  }, [played]);
+  }, [played, asOfGw]);
   const startsKnown = recent?.some((r) => r.starts != null) ?? false;
   const startedCount = recent?.filter((r) => (r.starts ?? 0) > 0).length ?? 0;
 
@@ -481,12 +499,23 @@ export default function PlayerModal({
           honest number to put in the box. That is the same rule 9dd8025 applied
           to the price predictor and `ep_next`.
         */}
+        {/*
+          A ZERO IS NOT A LOADING STATE. `toDate` is null until the rounds
+          arrive and stays null if the fetch fails — `.catch(() => {})`
+          swallows it — and summing an empty array gave a confident
+          "Season to GW15 — Points 0 / Goals 0 / xGI 0.00". That is a
+          fabricated number, unlike the live sheet, which reads a real
+          `element` row and can always be trusted to have one.
+        */}
         <div className="mt-4">
           <div className="text-sm font-semibold">
             {asOfGw == null ? "Season" : `Season to GW${asOfGw}`}
           </div>
+          {asOfGw != null && toDate == null ? (
+            <p className="mt-2 text-xs text-muted">Loading this player&apos;s rounds…</p>
+          ) : (
           <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-            {(asOfGw == null
+            {(asOfGw == null || toDate == null
               ? [
                   ["Points", String(element.total_points)],
                   ["Form", element.form],
@@ -508,6 +537,7 @@ export default function PlayerModal({
               </div>
             ))}
           </div>
+          )}
         </div>
       </div>
     </Sheet>

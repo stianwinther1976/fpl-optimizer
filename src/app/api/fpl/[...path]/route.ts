@@ -14,23 +14,34 @@ const UPSTREAM_TIMEOUT_MS = 10_000;
  * `AbortSignal.timeout` DOES NOT ALWAYS SURVIVE. Next patches `fetch` and, when
  * it is REVALIDATING a stale Data Cache entry, strips the caller's signal —
  * `next/dist/server/lib/patch-fetch.js`: "don't pass through signal when
- * revalidating", `...isStale ? [] : ['signal']`. Every path here is cached
- * after its first success, so the signal binds cold misses and nothing else.
+ * revalidating", `...isStale ? [] : ['signal']`. That mattered while every path
+ * here went through the Data Cache; the upstream fetch is `no-store` now, so
+ * nothing is ever revalidating and the signal binds every request. This
+ * paragraph is kept because it is why the deadline below exists at all, and
+ * because it is what a future `next: { revalidate }` would silently reinstate.
  *
- * AN EARLIER VERSION OF THIS COMMENT RECORDED A MEASUREMENT THAT DOES NOT
- * REPRODUCE, and the conclusion drawn from it was the opposite of the truth.
- * It read:
+ * AN EARLIER VERSION OF THIS COMMENT DREW THE OPPOSITE CONCLUSION FROM A
+ * MEASUREMENT THAT WAS ITSELF CORRECT. It read:
  *
  *   entry stale, hung upstream ....... 200 at 0.04 s, the stale body
  *
  * and concluded that the background refresh "cannot hold the response open".
+ * Both halves of that row reproduce — re-measured on the pre-fix build, the
+ * status line and the complete stale body arrive at 6.5 ms. What the row does
+ * not say is that the response is never TERMINATED: the transfer is chunked and
+ * the zero-length terminating chunk never arrives, so the connection was still
+ * open at 120 s and `fetch().json()` in a browser never resolves. A correction
+ * in an earlier commit called the figure unreproducible, which was itself
+ * wrong; the figure was right and the reading of it was not.
+ *
  * Re-measured from a clean `git archive HEAD` export, production build, with
  * `FPL_API_BASE` pointed at a stub that accepts the connection and never
  * answers — prime `fixtures/` (ttl 25 s), wait 28 s, flip the stub to hang,
  * request again:
  *
  *   cold miss, hung upstream ......... 502 at 10.01 s (the deadline fires)
- *   entry stale, hung upstream ....... STILL OPEN at 120 s, cut off by curl
+ *   entry stale, hung upstream ....... headers at 6.5 ms, never terminated,
+ *                                      still open at 120 s
  *
  * Next awaits it. `withExecuteRevalidates` in
  * `next/dist/server/revalidation-utils.js` wraps the route handler and, in its
@@ -171,8 +182,17 @@ export function cacheControl(path: string): string {
  * a CDN that understands it uses this and ignores `Cache-Control`, and one that
  * does not falls back to `Cache-Control` — where `no-cache` makes it
  * revalidate. That fallback is the conservative direction: more origin
- * requests, never staler data. And the origin is not FPL in that case, because
- * the upstream fetch below is itself cached by Next for `ttl`.
+ * requests, never staler data.
+ *
+ * WHAT ABSORBS THOSE ORIGIN REQUESTS is no longer Next. This used to read "the
+ * origin is not FPL in that case, because the upstream fetch below is itself
+ * cached by Next for `ttl`", and that stopped being true the moment the
+ * upstream fetch became `no-store`. For the live feeds it is now simply false
+ * and accepted: they are small, they are asked for once every thirty seconds,
+ * and answering "Refresh now" from a copy up to 25 seconds old is a defect the
+ * owner has already reported. For `element-summary/`, where one reader
+ * generates ~420 requests, `responseCache` above is what stands in the way —
+ * see its note for why that path and no other.
  *
  * WHAT IS VERIFIED, AND WHAT IS NOT. Both headers were read off a real 200
  * from a local dev server (`FPL_API_BASE` pointed at `/api/demo`), so Next
@@ -194,18 +214,6 @@ export function cdnCacheControl(path: string): string {
   return `public, s-maxage=${cacheSeconds(path)}, stale-while-revalidate=${staleSeconds(path)}`;
 }
 
-/**
- * An error, and never a cached one.
- *
- * The four error returns below carried NO cache directive at all — measured on
- * a production build, only `vary:`. That is the same shape as the bug the note
- * on `cacheControl` is about: with no freshness lifetime a browser is free to
- * fall back to heuristic caching and pick its own, and the one thing that must
- * not be remembered is "FPL is updating the game". Chromium was measured NOT
- * doing it — three fetches of a 404 made three requests — but that is one
- * browser, and `no-store` removes the guesswork rather than leaving it as a
- * belief about somebody else's software.
- */
 /** What one upstream read produced, reduced so it can be shared between callers. */
 type Upstream =
   | { kind: "ok"; data: unknown }
@@ -285,6 +293,90 @@ export function inflightSize(): number {
   return inflight.size;
 }
 
+/**
+ * A bounded origin-side memo, for element summaries and nothing else.
+ *
+ * DROPPING THE DATA CACHE TOOK THIS AWAY, and the comment on `cdnCacheControl`
+ * below still claimed it was there ("the origin is not FPL in that case,
+ * because the upstream fetch below is itself cached by Next"). Measured on a
+ * production build, two readers asking for the same fifty summaries back to
+ * back: 50 upstream fetches then 0 with the Data Cache, 50 then 50 without it.
+ * A launch draft is ~420 summaries per reader, and `route.test.ts` and
+ * CLAUDE.md both classify an FPL rate-limit here as a MODELLING failure — a
+ * refused summary falls back to the price prior, which is the guess the whole
+ * past-season path exists to replace — so this is not a latency question.
+ *
+ * ONLY `element-summary/`, deliberately. The live feeds are the reason the
+ * Data Cache could not simply be kept: a memo would answer "Refresh now" from
+ * a copy up to 25 seconds old, which is the defect the owner reported during a
+ * match. Summaries have none of that shape — they change when results land,
+ * `staleSeconds` already gives them a day of grace, and they are the only path
+ * where one reader generates hundreds of requests.
+ *
+ * Measured on a production build against the stub, 50 summaries each: reader
+ * one 50 upstream fetches, reader two 0. Five polls of `fixtures/` in the same
+ * run made five upstream fetches, which is the half of this that must NOT
+ * change. The ten-second deadline still binds every path — 502 at 10.01 s on a
+ * cold miss, on an uncached summary and on a live feed — while a fresh memo hit
+ * answers in 4 ms with the upstream hung, because it does not fetch at all.
+ *
+ * Sized from the payloads rather than guessed: on the 2026-08-21 snapshot the
+ * 600 summaries are a median of 2.8 KB and 1.85 MB in total, and a full
+ * season's rows are roughly ten times that, so a 900-entry ceiling is tens of
+ * megabytes at worst. Insertion order is the LRU: a re-set moves the key to the
+ * end, and the oldest is evicted from the front.
+ *
+ * Failures are never stored. That is the same rule `pastSeasonStore` states —
+ * recording a miss would take back the drafter's "try them again" button — and
+ * the same one `errorJson` follows for the browser.
+ */
+const MAX_CACHE_ENTRIES = 900;
+const responseCache = new Map<string, { at: number; result: Upstream }>();
+
+function memoable(path: string): boolean {
+  return path.startsWith("element-summary");
+}
+
+function memoGet(url: string): { at: number; result: Upstream } | undefined {
+  const hit = responseCache.get(url);
+  if (!hit) return undefined;
+  responseCache.delete(url);
+  responseCache.set(url, hit);
+  return hit;
+}
+
+function memoSet(url: string, result: Upstream): void {
+  responseCache.delete(url);
+  responseCache.set(url, { at: Date.now(), result });
+  while (responseCache.size > MAX_CACHE_ENTRIES) {
+    const oldest = responseCache.keys().next().value;
+    if (oldest === undefined) break;
+    responseCache.delete(oldest);
+  }
+}
+
+/** Test-only. */
+export function memoSize(): number {
+  return responseCache.size;
+}
+
+/** Test-only. */
+export function resetMemo(): void {
+  responseCache.clear();
+}
+
+/**
+ * An error, and never a cached one.
+ *
+ * The four error returns below carried NO cache directive at all — measured on
+ * a production build, only `vary:`. That is the same shape as the bug the note
+ * on `cacheControl` is about: with no freshness lifetime a browser is free to
+ * fall back to heuristic caching and pick its own, and the one thing that must
+ * not be remembered is "FPL is updating the game". Chromium was measured NOT
+ * doing it — three fetches of a 404 made three requests — but that is one
+ * browser, and `no-store` removes the guesswork rather than leaving it as a
+ * belief about somebody else's software.
+ */
 function errorJson(body: { error: string }, status: number) {
   return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
@@ -333,15 +425,49 @@ export async function GET(
      * body came back 200 with `cdn-cache-control: public, s-maxage`. A proxy
      * with one known upstream has no business following anything.
      */
+    const ok = (data: unknown) =>
+      NextResponse.json(data, {
+        headers: {
+          "Cache-Control": cacheControl(joined),
+          "CDN-Cache-Control": cdnCacheControl(joined),
+        },
+      });
+
+    /*
+     * The memo, on the one path that has one — see `responseCache`. The two
+     * windows are the same numbers the headers publish, so the origin, the edge
+     * and the browser all age an entry identically.
+     *
+     * The refresh behind a stale hit is deliberately NOT awaited: that is the
+     * whole difference between this and Next's Data Cache, which awaits its own
+     * background revalidation and held the response open for as long as FPL
+     * took to answer. Best-effort is the correct guarantee here — a serverless
+     * host may kill it, and the next request simply pays for the fetch.
+     */
+    const memo = memoable(joined) ? memoGet(url) : undefined;
+    const age = memo ? Date.now() - memo.at : Infinity;
+    const freshMs = cacheSeconds(joined) * 1000;
+    const staleMs = staleSeconds(joined) * 1000;
+    if (memo && memo.result.kind === "ok" && age < freshMs) return ok(memo.result.data);
+    if (memo && memo.result.kind === "ok" && age < freshMs + staleMs) {
+      void fetchUpstream(url)
+        .then((r) => {
+          if (r.kind === "ok") memoSet(url, r);
+        })
+        .catch(() => {});
+      return ok(memo.result.data);
+    }
+
     const result = await fetchUpstream(url);
-    if (result.kind === "error") return errorJson({ error: result.message }, result.status);
-    const data = result.data;
-    return NextResponse.json(data, {
-      headers: {
-        "Cache-Control": cacheControl(joined),
-        "CDN-Cache-Control": cdnCacheControl(joined),
-      },
-    });
+    if (result.kind === "error") {
+      // A stale copy beats an error, and this is the one place it exists.
+      if (memo && memo.result.kind === "ok" && age < freshMs + staleMs) {
+        return ok(memo.result.data);
+      }
+      return errorJson({ error: result.message }, result.status);
+    }
+    if (memoable(joined)) memoSet(url, result);
+    return ok(result.data);
   } catch {
     return errorJson({ error: "Could not reach the FPL API" }, 502);
   }

@@ -900,6 +900,50 @@ describe("the safety score compares like with like", () => {
     expect(noBonus).toBe(base + 2);
   });
 
+  it("moves the armband to the vice when the captain does not play", () => {
+    /*
+     * The reader's own total promotes the vice once the captain can no longer
+     * play; this used to take `pk.multiplier` off the picks payload, which is
+     * what FPL recorded at the DEADLINE. So the reader got the takeover and the
+     * benchmark never did — the same direction as the bonus gap that was fixed
+     * beside it, and the commit that fixed that asserted "everything else in
+     * this comparison is already symmetric".
+     *
+     * `makePicks` captains element 8 and vice-captains element 9, both at
+     * multiplier 1, so the armband is given explicitly here.
+     */
+    const capped = five.map((p) => ({
+      ...p,
+      picks: p.picks.map((pk) => (pk.element === 8 ? { ...pk, multiplier: 2 } : pk)),
+    }));
+    /*
+     * Captain (element 8) on zero minutes, vice (element 9) playing. The
+     * auto-sub projection already drops the captain out of the effective XI,
+     * so the takeover fires on `subs.out` alone and `gwDone` is not what
+     * decides it — eleven players count either way. What changes is that the
+     * VICE is doubled: 11 x 2 = 22 without the takeover, 24 with it.
+     */
+    const blank = makeLive({ 8: 0 });
+    expect(bandMedianScore(capped, elements, blank, fixtures, 10, null, false)).toBe(24);
+    expect(bandMedianScore(capped, elements, blank, fixtures, 10, null, true)).toBe(24);
+    // And with everyone playing there is no takeover, so the captain keeps the
+    // armband and the vice counts once — the same 24, by a different route.
+    expect(bandMedianScore(capped, elements, makeLive({}), fixtures, 10, null, false)).toBe(24);
+  });
+
+  it("does not promote a vice who has not played either", () => {
+    const capped = five.map((p) => ({
+      ...p,
+      picks: p.picks.map((pk) => (pk.element === 8 ? { ...pk, multiplier: 2 } : pk)),
+    }));
+    // Both blank: the captain's armband stays where it is and is simply worth
+    // nothing, which is what FPL does. Two players out of the eleven, both
+    // replaced by 2-point substitutes, so the total is the plain 22.
+    const bothBlank = makeLive({ 8: 0, 9: 0 });
+    expect(bandMedianScore(capped, elements, bothBlank, fixtures, 10, null, true)).toBe(22);
+    expect(bandMedianScore(capped, elements, bothBlank, fixtures, 10, null, false)).toBe(22);
+  });
+
   it("nets the hit off, on both sides of the comparison", () => {
     const live = makeLive({});
     const plain = bandMedianScore(five, elements, live, fixtures, 10, null)!;

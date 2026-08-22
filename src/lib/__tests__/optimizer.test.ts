@@ -222,7 +222,8 @@ describe("optimize", () => {
      * what the old clamp was hiding.
      */
     expect(src).toMatch(/const wcBase = Math\.max\(/);
-    expect(src).toMatch(/keepHorizonXp,\n\s*\.\.\.plans\.map\(\(p\) => p\.grossXp\)/);
+    expect(src).toMatch(/wcKeep,\n\s*\.\.\.\(wcOpenNow \? plans\.map\(\(p\) => p\.grossXp\) : \[\]\)/);
+    expect(src).toMatch(/const wcGain = wcBase - wcKeep;/);
     expect(src).toMatch(/projectedGain: Math\.max\(0, fhBest\.gain\)/);
   });
 
@@ -1662,17 +1663,64 @@ describe("the chip sheet names a gameweek the chip can be played in", () => {
     }
   });
 
-  it("still judges the Wildcard over the whole horizon", () => {
+  it("still judges the Wildcard past the close of its own window", () => {
     /*
      * It is not a one-week chip: it rebuilds the squad for the rest of the
-     * season, so scoring it only over the weeks it may be PLAYED in would
-     * charge it for a restriction it does not have. With the window closing
-     * after GW13 the gain must not fall, only the gameweek named may move.
+     * season, so clipping the TAIL would charge it for a restriction it does
+     * not have. With the window closing after GW13 the gain must not fall.
      */
     const unconstrained = chipScenario(inputWith([]), "wildcard");
     const clipped = chipScenario(inputWith(windows(11, 13)), "wildcard");
     expect(clipped.gain).toBeCloseTo(unconstrained.gain, 9);
     expect(clipped.gain).toBeGreaterThan(0);
+  });
+
+  it("does NOT credit the Wildcard with gameweeks before it opens", () => {
+    /*
+     * THE OTHER HALF, WHICH THE TEST ABOVE COULD NOT SEE. It exercises only
+     * the window-CLOSING case, so "judged over the whole horizon" passed while
+     * the head went unclipped too — and a rebuild cannot score in a gameweek
+     * the reader has no way to own that squad in. Measured on this fixture at
+     * `nextEvent: 11`, horizon 5, window GW14-20: the sheet reported 37.267,
+     * identical to having no window at all, of which 13.849 came from GW11-13.
+     */
+    const unconstrained = chipScenario(inputWith([]), "wildcard");
+    const later = chipScenario(inputWith(windows(14, 20)), "wildcard");
+    expect(later.bestGw).toBe(14);
+    expect(later.gain).toBeLessThan(unconstrained.gain - 1);
+  });
+
+  it("draws the Wildcard's XI for the gameweek in its own heading", () => {
+    /*
+     * `xiAt(squad, nextEvent)` survived the clipping commit untouched, so with
+     * the chip opening at GW14 the sheet printed "Best in GW14" over the GW11
+     * eleven — 59.113 against 65.149 on this fixture, with different starters.
+     */
+    const later = chipScenario(inputWith(windows(14, 20)), "wildcard");
+    const input = inputWith(windows(14, 20));
+    const xp = projectAll({
+      bootstrap: input.bootstrap,
+      fixtures: input.fixtures,
+      nextEvent: input.nextEvent,
+      horizon: input.horizon,
+      pastSeason: undefined,
+    });
+    const at = (gw: number) =>
+      pickBestXi(later.squad!, (id) => xp.get(id)?.perGw.get(gw) ?? 0).totalXp;
+    expect(later.xi!.totalXp).toBeCloseTo(at(later.bestGw!), 9);
+    // And the two gameweeks really do disagree, or the assertion above is
+    // satisfied by a fixture where every week is the same.
+    expect(at(input.nextEvent)).not.toBeCloseTo(at(later.bestGw!), 3);
+  });
+
+  it("keeps the card and the sheet on the same gameweeks", () => {
+    // The card names no gameweek, but it must not measure a gap over weeks the
+    // sheet has just excluded — that is the card/sheet split this whole
+    // describe exists for, one level up.
+    const input = inputWith(windows(14, 20));
+    const card = optimize(input).chipAdvice.find((c) => c.chip === "wildcard")!;
+    const sheet = chipScenario(input, "wildcard");
+    expect(card.projectedGain).toBeCloseTo(sheet.gain, 6);
   });
 });
 

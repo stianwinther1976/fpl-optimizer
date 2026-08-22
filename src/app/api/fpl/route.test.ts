@@ -9,6 +9,8 @@ import {
   staleSeconds,
   fetchUpstream,
   inflightSize,
+  memoSize,
+  resetMemo,
 } from "./[...path]/route";
 
 /*
@@ -252,7 +254,7 @@ describe("an error is never a cached one", () => {
      * ever leaves this file any other way.
      */
     expect((route.match(/return errorJson\(/g) ?? []).length).toBe(3);
-    expect(route).toMatch(/if \(result\.kind === "error"\) return errorJson\(/);
+    expect(route).toMatch(/if \(result\.kind === "error"\) \{/);
     // And no error path bypasses it.
     expect(route).not.toMatch(/return NextResponse\.json\(\s*\{ error:/);
   });
@@ -295,7 +297,13 @@ describe("a hung upstream cannot hold the response open", () => {
 
   it("opts the upstream fetch out of the Data Cache", () => {
     expect(route()).toContain('cache: "no-store"');
-    expect(route()).not.toMatch(/next:\s*\{\s*revalidate/);
+    // In the CODE. Two comments name `next: { revalidate }` — one explaining
+    // what it used to do, one warning what reinstating it would cost — and
+    // matching the bare token would pin the prose instead of the call.
+    const code = route()
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    expect(code).not.toMatch(/next:\s*\{\s*revalidate/);
   });
 
   it("reads the body inside the deadline, not after it", () => {
@@ -375,6 +383,115 @@ describe("a hung upstream cannot hold the response open", () => {
       expect(inflightSize()).toBe(0);
     } finally {
       globalThis.fetch = original;
+    }
+  });
+});
+
+describe("the origin absorbs a launch draft, and only a launch draft", () => {
+  /*
+   * Dropping Next's Data Cache took origin-side absorption away with it, and
+   * the note on `cdnCacheControl` still claimed it was there. Measured on a
+   * production build, two readers asking for the same fifty summaries back to
+   * back: 50 upstream fetches then 0 with the Data Cache, 50 then 50 without.
+   * A launch draft is ~420 summaries per reader and CLAUDE.md classifies an
+   * FPL rate-limit here as a MODELLING failure, not a slow page.
+   *
+   * The live feeds are deliberately NOT memoised: answering "Refresh now" from
+   * a copy up to 25 seconds old is a defect the owner has already reported.
+   */
+  const okFetch = () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => "application/json" },
+        json: async () => ({ n: calls }),
+      } as unknown as Response;
+    }) as typeof fetch;
+    return () => calls;
+  };
+
+  it("stores an element summary and serves the next reader from memory", async () => {
+    const original = globalThis.fetch;
+    resetMemo();
+    const calls = okFetch();
+    try {
+      const { GET } = await import("./[...path]/route");
+      const req = { nextUrl: { searchParams: new URLSearchParams() } } as unknown as Parameters<typeof GET>[0];
+      const params = Promise.resolve({ path: ["element-summary", "42"] });
+      const a = await GET(req, { params });
+      const b = await GET(req, { params: Promise.resolve({ path: ["element-summary", "42"] }) });
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(calls()).toBe(1);
+      expect(memoSize()).toBe(1);
+    } finally {
+      globalThis.fetch = original;
+      resetMemo();
+    }
+  });
+
+  it("does not memoise the live feeds, whatever their TTL says", async () => {
+    const original = globalThis.fetch;
+    resetMemo();
+    const calls = okFetch();
+    try {
+      const { GET } = await import("./[...path]/route");
+      const req = { nextUrl: { searchParams: new URLSearchParams() } } as unknown as Parameters<typeof GET>[0];
+      await GET(req, { params: Promise.resolve({ path: ["fixtures"] }) });
+      await GET(req, { params: Promise.resolve({ path: ["fixtures"] }) });
+      await GET(req, { params: Promise.resolve({ path: ["event", "7", "live"] }) });
+      await GET(req, { params: Promise.resolve({ path: ["event", "7", "live"] }) });
+      expect(calls()).toBe(4);
+      expect(memoSize()).toBe(0);
+    } finally {
+      globalThis.fetch = original;
+      resetMemo();
+    }
+  });
+
+  it("never stores a failure", async () => {
+    // `pastSeasonStore` states the rule this follows: recording a miss would
+    // take back the drafter's "try them again" button.
+    const original = globalThis.fetch;
+    resetMemo();
+    globalThis.fetch = (async () => ({
+      ok: false,
+      status: 503,
+      headers: { get: () => "application/json" },
+    })) as unknown as typeof fetch;
+    try {
+      const { GET } = await import("./[...path]/route");
+      const req = { nextUrl: { searchParams: new URLSearchParams() } } as unknown as Parameters<typeof GET>[0];
+      const res = await GET(req, { params: Promise.resolve({ path: ["element-summary", "9"] }) });
+      expect(res.status).toBe(503);
+      expect(memoSize()).toBe(0);
+    } finally {
+      globalThis.fetch = original;
+      resetMemo();
+    }
+  });
+
+  it("keeps the map bounded, evicting the least recently used", async () => {
+    // The 600 summaries on the 2026-08-21 snapshot are a median of 2.8 KB and
+    // 1.85 MB in total; a full season's rows are roughly ten times that, so the
+    // ceiling is tens of megabytes at worst — but it has to exist, because
+    // `fetchCache` not having one is a defect this repo already recorded.
+    const original = globalThis.fetch;
+    resetMemo();
+    okFetch();
+    try {
+      const { GET } = await import("./[...path]/route");
+      const req = { nextUrl: { searchParams: new URLSearchParams() } } as unknown as Parameters<typeof GET>[0];
+      for (let i = 1; i <= 950; i++) {
+        await GET(req, { params: Promise.resolve({ path: ["element-summary", String(i)] }) });
+      }
+      expect(memoSize()).toBe(900);
+    } finally {
+      globalThis.fetch = original;
+      resetMemo();
     }
   });
 });

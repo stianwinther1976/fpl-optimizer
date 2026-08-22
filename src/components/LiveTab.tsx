@@ -192,10 +192,11 @@ export default function LiveTab({
             live,
             fixtures,
             currentEvent,
-            bonus?.byElement ?? null
+            bonus?.byElement ?? null,
+            gwDone
           )
         : null,
-    [bandPicks, live, bonus, elementById, fixtures, currentEvent]
+    [bandPicks, live, bonus, elementById, fixtures, currentEvent, gwDone]
   );
 
   // Projected auto-subs: once a starter's matches have finished with 0

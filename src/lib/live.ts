@@ -480,7 +480,18 @@ export function matchMinute(f: Fixture, now: Date = new Date()): string {
  *    credited no one. The bonus map is per PLAYER, so it applies to a rival's
  *    picks unchanged.
  *
- * Everything else was already symmetric: both sides net of hits, both with
+ *  - THE ARMBAND DID NOT MOVE FOR RIVALS, and the commit that fixed the bonus
+ *    half asserted that "everything else in this comparison is already
+ *    symmetric". It was not. The reader's side promotes the vice-captain once
+ *    the captain can no longer play; this took `pk.multiplier` off the picks
+ *    payload, which is what FPL recorded at the deadline. Measured on one demo
+ *    squad whose captain played 0 minutes and whose vice scored 13: the reader
+ *    was credited 59 and the same squad scored here came to 46. It pushes the
+ *    same direction as the bonus gap — the reader gets the takeover and the
+ *    benchmark never does — and it also drags the median DOWN, because every
+ *    band rival whose captain blanks is scored too low.
+ *
+ * Everything else really is symmetric: both sides net of hits, both with
  * projected auto-subs. Returns null below `minSample`, because a median of
  * three managers is not a rank band.
  */
@@ -491,17 +502,47 @@ export function bandMedianScore(
   fixtures: Fixture[],
   gw: number,
   bonusByElement: Map<number, number> | null,
+  gwDone = false,
   minSample = 5
 ): number | null {
   const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
+  const minsOf = new Map(live.elements.map((e) => [e.id, e.stats.minutes]));
   const scores: number[] = [];
   for (const p of picks) {
     const bb = p.active_chip === "bboost";
-    const effXi = new Set(projectAutoSubs(p.picks, elements, live, fixtures, gw).effectiveXi);
+    const subs = projectAutoSubs(p.picks, elements, live, fixtures, gw);
+    const effXi = new Set(subs.effectiveXi);
+    /*
+     * The same takeover rule the reader's own total uses, term for term: the
+     * captain is gone once the gameweek is done or the auto-sub projection has
+     * dropped him, he must be on zero minutes, and the vice must have played.
+     * `pk.multiplier` is what FPL recorded at the deadline and is therefore the
+     * pre-takeover answer.
+     */
+    const capMult = p.active_chip === "3xc" ? 3 : 2;
+    const blanked = new Set(subs.out);
+    const capPick = p.picks.find((k) => k.is_captain);
+    const vicePick = p.picks.find((k) => k.is_vice_captain);
+    const takeover =
+      capPick != null &&
+      vicePick != null &&
+      (gwDone || blanked.has(capPick.element)) &&
+      (minsOf.get(capPick.element) ?? 0) === 0 &&
+      (minsOf.get(vicePick.element) ?? 0) > 0;
     let pts = 0;
     for (const pk of p.picks) {
       if (!bb && !effXi.has(pk.element)) continue;
-      const mult = pk.multiplier > 1 ? pk.multiplier : 1;
+      /*
+       * The recorded multiplier stands unless the takeover fires. It is what
+       * FPL wrote at the deadline and already carries Triple Captain, so
+       * recomputing it from `active_chip` in the ordinary case would replace a
+       * fact with an inference.
+       */
+      let mult = pk.multiplier > 1 ? pk.multiplier : 1;
+      if (takeover) {
+        if (pk.element === capPick!.element) mult = 1;
+        else if (pk.element === vicePick!.element) mult = capMult;
+      }
       pts += ((pointsOf.get(pk.element) ?? 0) + (bonusByElement?.get(pk.element) ?? 0)) * mult;
     }
     scores.push(pts - (p.entry_history?.event_transfers_cost ?? 0));

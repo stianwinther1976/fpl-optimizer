@@ -753,12 +753,29 @@ export function optimize(input: OptimizerInput): OptimizerResult {
    * CLAUDE.md's "known gaps"; it stops the number contradicting the card next
    * to it.
    */
+  /*
+   * AND SCORED FROM WHEN THE CHIP CAN BE PLAYED, matching `chipScenario`. A
+   * rebuild cannot pay in a gameweek before the window opens; the tail is left
+   * alone because the squad lasts past the window's close. When the window is
+   * already open — the ordinary case, and the only one in which the transfer
+   * plans below cover the same gameweeks — this is the whole horizon and
+   * nothing changes.
+   *
+   * The plans are a floor only in that case, for the same reason: those moves
+   * happen NOW, so their scores are over `gws`, and comparing them against a
+   * gap measured over a later sub-window would be the unit mismatch this file
+   * has already been caught making twice.
+   */
+  const wcWin = chipWindow("wildcard", bootstrap.chips, nextEvent, input.usedChips);
+  const wcGws = wcWin ? gws.filter((g) => g >= wcWin.start) : gws;
+  const wcOpenNow = wcGws.length === gws.length;
+  const wcKeep = wcOpenNow ? keepHorizonXp : horizonScore(squadEls, xp, wcGws, scoreCache);
   const wcBase = Math.max(
-    horizonScore(dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank)), xp, gws, scoreCache),
-    keepHorizonXp,
-    ...plans.map((p) => p.grossXp)
+    horizonScore(dreamSquadWithinValue(bootstrap.elements, xp, totalValue(owned, bank)), xp, wcGws, scoreCache),
+    wcKeep,
+    ...(wcOpenNow ? plans.map((p) => p.grossXp) : [])
   );
-  const wcGain = wcBase - keepHorizonXp;
+  const wcGain = wcBase - wcKeep;
   chipAdvice.push({
     chip: "wildcard",
     label: "Wildcard",
@@ -1976,13 +1993,21 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
   /*
    * `gws` is where the chip may be PLAYED. `allGws` is the horizon it is judged
    * over, and for the one-week chips those are the same thing — you play it in
-   * the week it pays. The Wildcard is the exception and keeps the full horizon:
-   * it rebuilds the squad for the rest of the season, so scoring it only over
-   * the weeks it can be played in would charge it for a restriction it does not
-   * have. That is the distinction `inChipWindow`'s note in `optimize` already
-   * draws; this file did not draw it at all.
+   * the week it pays.
+   *
+   * The Wildcard is the exception, and an earlier version of this note got the
+   * exception half right: it kept the FULL horizon, on the argument that the
+   * rebuild lasts the rest of the season so clipping would charge the chip for
+   * a restriction it does not have. True at the tail, false at the head — the
+   * new squad cannot score in a gameweek before the chip opens. Measured on the
+   * mock at `nextEvent: 11`, horizon 5, window GW14-20: the sheet reported the
+   * same 37.267 as with no window at all, of which 13.849 came from GW11-13,
+   * three gameweeks the reader cannot have that squad in. So the head is
+   * clipped and the tail is not.
    */
   const gws = win ? allGws.filter((g) => g >= win.start && g <= win.stop) : allGws;
+  /** The Wildcard's scoring horizon: from when it can be played, to the end. */
+  const wcGws = win ? allGws.filter((g) => g >= win.start) : allGws;
   const squadEls = owned.map((o) => o.element);
   const teamValue = owned.reduce((s, o) => s + o.sellPrice, 0) + bank;
   const label =
@@ -2027,7 +2052,7 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
     const { squad, cost } = buildSquadWithinBudget(bootstrap.elements, xp, teamValue);
     const gain = Math.max(
       0,
-      horizonScore(squad, xp, allGws) - horizonScore(squadEls, xp, allGws)
+      horizonScore(squad, xp, wcGws) - horizonScore(squadEls, xp, wcGws)
     );
     /*
      * `nextEvent` WAS PRINTED AS "Best in GW{n}" AND IS NOT ALWAYS PLAYABLE.
@@ -2038,15 +2063,24 @@ export function chipScenario(input: OptimizerInput, chip: string): ChipScenario 
      * earliest playable gameweek is the honest answer: it is the one thing
      * about timing this scenario actually knows.
      */
+    /*
+     * DRAWN AT THE GAMEWEEK IN THE HEADING, WHICH IT WAS NOT. `xiAt(squad,
+     * nextEvent)` survived the window fix untouched, so with the chip opening
+     * at GW14 the sheet printed "Best in GW14" over the GW11 eleven — measured
+     * on the mock at 59.113 against the GW14 eleven's 65.149, with different
+     * starters. Exactly the class of defect the commit that added the clipping
+     * was written to remove, left inside it.
+     */
+    const wcGw = gws[0] ?? null;
     return {
       chip,
       label,
-      bestGw: gws[0] ?? null,
+      bestGw: wcGw,
       gain,
       squad,
       cost,
       bank: teamValue - cost,
-      xi: xiAt(squad, nextEvent),
+      xi: xiAt(squad, wcGw ?? nextEvent),
       horizon,
     };
   }

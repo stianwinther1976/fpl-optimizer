@@ -1404,9 +1404,11 @@ describe("the player sheet in the gameweek time machine", () => {
   const modal = read("PlayerModal.tsx");
 
   it("cuts the recent list at the gameweek being viewed", () => {
-    expect(modal).toContain("s.history.filter((r) => r.round < asOfGw)");
+    // The cut moved out of the fetch and into a memo, so the SEASON block can
+    // take its own (inclusive) cut of the same rounds — see the test below.
+    expect(modal).toMatch(/played\.filter\(\(r\) => r\.round < asOfGw\)/);
     // And re-cuts it when the reader moves the time machine with the sheet open.
-    expect(modal).toContain("}, [element.id, asOfGw]);");
+    expect(modal).toContain("}, [played, asOfGw]);");
   });
 
   it("drops every block that has no past-tense reading", () => {
@@ -1431,6 +1433,30 @@ describe("the player sheet in the gameweek time machine", () => {
     // carry a second guard of their own — an unreachable branch reads as a
     // protection that is doing something.
     expect(modal).not.toContain("asOfGw == null && netTransfers");
+  });
+
+  it("includes the gameweek in its own heading, and excludes it from the form list", () => {
+    /*
+     * The two blocks shared one `round < asOfGw` array. Under a "GW15 points —
+     * 8 pts" heading the block beneath read "Season to GW15 — 87" when the
+     * inclusive figure is 95: measured on demo element 28, short by 5 / 8 / 9
+     * at GW10 / GW15 / GW20, always exactly the gameweek in the heading. FPL's
+     * own site shows the inclusive number.
+     *
+     * The recent list must keep the exclusive cut — that gameweek is already
+     * rendered above it as the headline, so including it would print the same
+     * round twice.
+     */
+    expect(modal).toMatch(/played\.filter\(\(r\) => r\.round < asOfGw\)/);
+    expect(modal).toMatch(/played\.filter\(\(r\) => r\.round <= asOfGw\)/);
+  });
+
+  it("does not print a summed zero before the rounds have arrived", () => {
+    // `toDate` is null until the fetch lands and stays null if it fails —
+    // `.catch(() => {})` swallows it — and summing an empty array gave a
+    // confident "Season to GW15 — Points 0 / Goals 0 / xGI 0.00".
+    expect(modal).toMatch(/if \(!played\) return null;/);
+    expect(modal).toMatch(/asOfGw != null && toDate == null \?/);
   });
 
   it("sums the season it is showing rather than printing today's", () => {
