@@ -52,6 +52,7 @@ export default function PlayerModal({
   teams,
   nextEvent = null,
   multiplier = 1,
+  asOfGw = null,
 }: {
   element: Element;
   team: Team | undefined;
@@ -72,6 +73,24 @@ export default function PlayerModal({
    * reader is given no way to know that.
    */
   multiplier?: number;
+  /**
+   * Set when the sheet is showing a PAST gameweek — the Team tab's time
+   * machine. Null on the live view.
+   *
+   * EVERYTHING BELOW THE SCORE IS PRESENT TENSE, and under a GW15 heading that
+   * is a sheet lying about which week it is describing. Read off the demo with
+   * the time machine on GW15: "Recent gameweeks — started 5 of last 5" listed
+   * GW20 through GW16, every one LATER than the gameweek on display and one of
+   * them still in play; the transfer badge was GW20's; and the price
+   * predictor, FPL's next-gameweek projection and "Upcoming fixtures GW21-23"
+   * were all about today.
+   *
+   * `element` is today's bootstrap row and cannot be anything else — FPL
+   * publishes no historic price or ownership per player — so the honest move is
+   * to cut the recent list at the gameweek being viewed and drop the blocks
+   * that have no past-tense reading at all.
+   */
+  asOfGw?: number | null;
 }) {
   // Re-render when the reader changes a call anywhere — the button state and
   // the note below it both have to follow the store rather than local state,
@@ -115,13 +134,19 @@ export default function PlayerModal({
     api
       .elementSummary(element.id)
       .then((s) => {
-        if (!cancelled) setRecent([...s.history].slice(-5).reverse());
+        if (!cancelled) {
+          // Only rounds the viewed gameweek could have known about.
+          const rows = asOfGw == null ? s.history : s.history.filter((r) => r.round < asOfGw);
+          setRecent([...rows].slice(-5).reverse());
+        }
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [element.id]);
+  // `asOfGw` is a dependency: switching gameweeks in the time machine with the
+  // sheet open must re-cut the list, or it keeps the previous week's rounds.
+  }, [element.id, asOfGw]);
   const startsKnown = recent?.some((r) => r.starts != null) ?? false;
   const startedCount = recent?.filter((r) => (r.starts ?? 0) > 0).length ?? 0;
 
@@ -160,8 +185,12 @@ export default function PlayerModal({
                     {d}
                   </Badge>
                 ))}
-                {netTransfers > 25000 && <Badge tone="green">▲ {Math.round(netTransfers / 1000)}k in this GW</Badge>}
-                {netTransfers < -25000 && <Badge tone="red">▼ {Math.round(-netTransfers / 1000)}k out this GW</Badge>}
+                {asOfGw == null && netTransfers > 25000 && (
+                  <Badge tone="green">▲ {Math.round(netTransfers / 1000)}k in this GW</Badge>
+                )}
+                {asOfGw == null && netTransfers < -25000 && (
+                  <Badge tone="red">▼ {Math.round(-netTransfers / 1000)}k out this GW</Badge>
+                )}
               </div>
             )}
           </div>
@@ -252,7 +281,7 @@ export default function PlayerModal({
         )}
 
         {/* Second opinion: FPL's own expected-points projection for the next GW */}
-        {element.ep_next != null && parseFloat(element.ep_next) >= 0 && (
+        {asOfGw == null && element.ep_next != null && parseFloat(element.ep_next) >= 0 && (
           <div className="mt-4 flex items-center justify-between rounded-lg border border-border-c bg-panel-2 px-3 py-2.5 text-sm">
             <span className="text-muted">
               FPL&apos;s own next-GW projection
@@ -264,7 +293,7 @@ export default function PlayerModal({
 
         {/* FPL's Price Change Predictor. Only rendered when the feed carries a
             figure — silence is honest, "unlikely to change" on missing data isn't. */}
-        {price && (
+        {asOfGw == null && price && (
           <div className="mt-4">
             <div className="flex items-baseline justify-between gap-2">
               <div className="text-sm font-semibold">Price change</div>
@@ -281,9 +310,18 @@ export default function PlayerModal({
               </div>
             </div>
             <PriceTrendBar percent={price.percent} />
+            {/*
+              ZERO IS NEITHER DIRECTION. `percent >= 0 ? "rise" : "fall"` reads
+              as exhaustive and is not — the same not-quite-ternary
+              `display.signedPrice` exists to document. A player who has not
+              moved read "0% of the way to a rise", which asserts a direction
+              the data does not support, under a heading already saying
+              "Unlikely to change".
+            */}
             <p className="mt-1.5 text-xs text-muted">
-              {Math.abs(price.percent).toFixed(0)}% of the way to a{" "}
-              {price.percent >= 0 ? "rise" : "fall"}
+              {price.percent === 0
+                ? "Hasn't moved toward either"
+                : `${Math.abs(price.percent).toFixed(0)}% of the way to a ${price.percent > 0 ? "rise" : "fall"}`}
               {price.imminent
                 ? " — past the threshold, so FPL expects the move at the next 00:00 UK update."
                 : ". Prices move at 00:00 UK, at most 0.1 a day."}
@@ -292,7 +330,7 @@ export default function PlayerModal({
         )}
 
         {/* Upcoming fixtures (next 3 GWs, like the official FPL view) */}
-        {upcoming.length > 0 && (
+        {asOfGw == null && upcoming.length > 0 && (
           <div className="mt-4">
             <div className="text-sm font-semibold">Upcoming fixtures</div>
             <div className="mt-2 flex flex-wrap gap-2">

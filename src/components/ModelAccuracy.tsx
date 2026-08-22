@@ -90,10 +90,22 @@ export default function ModelAccuracy({ demo }: { demo: boolean }) {
               ))}
             </tbody>
           </table>
+          {/*
+            NO CAUSAL CLAIM, AND SAY WHICH WINDOW. "The corrections are working"
+            was inferred from two numbers with no counterfactual — and the
+            corrections on this same card are ×0.99/×0.92/×0.95/×0.90, which
+            cannot plausibly account for a 0.45-point move in mean absolute
+            error. Under CLAUDE.md's own rule that is a claim nobody measured.
+
+            `first` is also the oldest RETAINED entry, and `CAL_CONFIG.maxLog`
+            is 12 — so after twelve graded gameweeks "since GW{n}" starts
+            sliding forward with nothing on screen saying so.
+          */}
           {improving && (
             <div className="mt-2 text-xs text-accent">
               ▼ Average miss down from {first.mae.toFixed(2)} to {last.mae.toFixed(2)} pts per
-              player since GW{first.gw} — the corrections are working.
+              player, over the {log.length} graded gameweeks kept here (GW{first.gw}–GW
+              {last.gw}).
             </div>
           )}
         </>

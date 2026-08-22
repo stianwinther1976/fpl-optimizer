@@ -1374,3 +1374,38 @@ describe("the vice-captain takes over on the same signal in both tabs", () => {
     }
   });
 });
+
+describe("the player sheet in the gameweek time machine", () => {
+  /*
+   * Everything below the score is present tense, and under a GW15 heading that
+   * is a sheet lying about which week it describes. Read off the demo before
+   * the fix: "Recent gameweeks — started 5 of last 5" listed GW20 down to
+   * GW16 — every one LATER than the gameweek on display, one still in play —
+   * the transfer badge was GW20's, and the price predictor, FPL's next-gameweek
+   * projection and "Upcoming fixtures GW21-23" were all about today.
+   */
+  const modal = read("PlayerModal.tsx");
+
+  it("cuts the recent list at the gameweek being viewed", () => {
+    expect(modal).toContain("s.history.filter((r) => r.round < asOfGw)");
+    // And re-cuts it when the reader moves the time machine with the sheet open.
+    expect(modal).toContain("}, [element.id, asOfGw]);");
+  });
+
+  it("drops every block that has no past-tense reading", () => {
+    for (const token of [
+      "{asOfGw == null && netTransfers > 25000",
+      "{asOfGw == null && netTransfers < -25000",
+      "{asOfGw == null && element.ep_next != null",
+      "{asOfGw == null && price && (",
+      "{asOfGw == null && upcoming.length > 0 && (",
+    ]) {
+      expect(modal, token).toContain(token);
+    }
+  });
+
+  it("is told which gameweek it is showing", () => {
+    const dash = read("Dashboard.tsx");
+    expect(dash).toContain('asOfGw={tab === "team" && hist ? hist.gw : null}');
+  });
+});

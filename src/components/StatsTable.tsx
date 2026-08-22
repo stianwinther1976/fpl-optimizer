@@ -12,6 +12,9 @@ type SortKey = "xp" | "total_points" | "form" | "now_cost" | "selected" | "xgi";
 /** Stable identity, so the row memo below does not rebuild on every render. */
 const NO_XP: Map<number, PlayerXp> = new Map();
 
+/** How many rows the table draws. Named so the caption can quote it. */
+const ROW_LIMIT = 60;
+
 export default function StatsTable({
   data,
   onSelect,
@@ -43,6 +46,15 @@ export default function StatsTable({
 }) {
   const [posFilter, setPosFilter] = useState<0 | ElementType>(0);
   const [sortKey, setSortKey] = useState<SortKey>("xp");
+  /*
+   * SORTING WAS DESCENDING-ONLY, on the one screen built for finding budget
+   * enablers. `setSortKey(key)` never toggled, `aria-sort` was hard-coded
+   * "descending", and a second click on the active header was a verified
+   * no-op — so there was no way to ask for the cheapest player, and at
+   * `Max price: £5.0m` the 59 cheapest were the ones the top-sixty cut threw
+   * away.
+   */
+  const [sortAsc, setSortAsc] = useState(false);
   // Slider max tracks the actual priciest player, so record-price premiums
   // (e.g. Haaland at £15.5m) are never cut off. null = show everyone.
   const priceCeiling = useMemo(() => {
@@ -62,18 +74,26 @@ export default function StatsTable({
 
   // Pre-season everyone is on 0 minutes/points — don't hide the whole game then.
   const playedGws = data.bootstrap.events.filter((e) => e.finished).length;
-  const rows = useMemo(() => {
+  const view = useMemo(() => {
     let els = data.bootstrap.elements.filter((e) => e.element_type >= 1 && e.element_type <= 4);
     if (playedGws > 0) els = els.filter((e) => e.minutes > 0 || e.total_points > 0);
     if (posFilter !== 0) els = els.filter((e) => e.element_type === posFilter);
     els = els.filter((e) => e.now_cost <= effMaxPrice);
     if (search) {
+      // ALSO THE CLUB CODE, WHICH IS THE ONE THE TABLE PRINTS. Every row shows
+      // `short_name` ("BOU", "NFO") while the filter matched only `web_name`
+      // and the full `name`, so typing the exact token visible in the column
+      // returned nothing. Invisible on the demo, whose `web_name`s embed the
+      // code ("NFO Striker 1"), which is why it survived.
       const q = search.toLowerCase();
-      els = els.filter(
-        (e) =>
+      els = els.filter((e) => {
+        const t = teams.get(e.team);
+        return (
           e.web_name.toLowerCase().includes(q) ||
-          teams.get(e.team)?.name.toLowerCase().includes(q)
-      );
+          t?.name.toLowerCase().includes(q) ||
+          t?.short_name.toLowerCase().includes(q)
+        );
+      });
     }
     const val = (e: (typeof els)[number]): number => {
       switch (sortKey) {
@@ -91,21 +111,32 @@ export default function StatsTable({
           return parseFloat(e.expected_goal_involvements) || 0;
       }
     };
-    return els.sort((a, b) => val(b) - val(a)).slice(0, 60);
-  }, [data, posFilter, sortKey, effMaxPrice, playedGws, search, teams, xp]);
+    const ordered = els.sort((a, b) => (sortAsc ? val(a) - val(b) : val(b) - val(a)));
+    // The count is returned beside the rows so the caption can say what was
+    // cut. It read the top sixty with nothing on screen to say so — with DEF
+    // selected, 100 qualify and 60 render.
+    return { rows: ordered.slice(0, ROW_LIMIT), total: ordered.length };
+  }, [data, posFilter, sortKey, sortAsc, effMaxPrice, playedGws, search, teams, xp]);
+  const rows = view.rows;
 
   const th = (key: SortKey, label: string) => (
     <th
       className="px-2 py-2 text-right"
-      aria-sort={sortKey === key ? "descending" : undefined}
+      aria-sort={sortKey === key ? (sortAsc ? "ascending" : "descending") : undefined}
     >
       <button
         type="button"
-        onClick={() => setSortKey(key)}
+        onClick={() => {
+          if (sortKey === key) setSortAsc((v) => !v);
+          else {
+            setSortKey(key);
+            setSortAsc(false);
+          }
+        }}
         className={`-m-1 min-h-11 p-1 uppercase hover:text-accent active:text-accent ${sortKey === key ? "text-accent" : ""}`}
       >
         {label}
-        {sortKey === key ? " ↓" : ""}
+        {sortKey === key ? (sortAsc ? " ↑" : " ↓") : ""}
       </button>
     </th>
   );
@@ -239,6 +270,19 @@ export default function StatsTable({
           </tbody>
         </table>
       </div>
+      {/*
+        SAY WHAT WAS CUT. The table drew the top sixty with nothing on screen to
+        say so — with DEF selected, 100 players qualify and 60 render, and at
+        `Max price: £5.0m` the 59 cheapest were exactly the ones thrown away, on
+        the screen built for finding budget enablers.
+      */}
+      <p className="text-xs text-muted" role="status">
+        {view.total === 0
+          ? "No players match these filters."
+          : view.total > rows.length
+            ? `Showing ${rows.length} of ${view.total} — narrow the filters, or sort by the column you care about.`
+            : `Showing all ${view.total}.`}
+      </p>
     </div>
   );
 }

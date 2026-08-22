@@ -1229,6 +1229,9 @@ export default function Dashboard({
           nextEvent={data.squad?.nextEvent ?? null}
           /* The card the reader tapped applies this; the sheet must agree. In
              the time machine the armband is that gameweek's, not today's. */
+          /* The time machine's gameweek, so the sheet stops describing today
+             under a past week's heading. */
+          asOfGw={tab === "team" && hist ? hist.gw : null}
           multiplier={
             tab === "team" && hist
               ? (hist.picks.picks.find((p) => p.element === selected.id)?.multiplier ?? 1)
