@@ -1975,3 +1975,37 @@ describe("the league table says how much football is left", () => {
     expect(src).not.toMatch(/\{d\.inPlay\}\s*·\s*\{d\.toStart\}/);
   });
 });
+
+describe("gameweek rank comes from the endpoint that is fresh", () => {
+  /*
+   * MEASURED, probe run 32581024633, FPL's own `age` header across a live
+   * gameweek:
+   *
+   *   entry/{id}/                   age never exceeded 61s
+   *   entry/{id}/event/{gw}/picks/  age reached 56,549s — 15.7 HOURS
+   *
+   * Picks do not change after the deadline, so FPL caching that document for
+   * most of a day is reasonable. But `entry_history` rides inside it, and its
+   * `points` and `rank` move all gameweek. On three entries at 15:33Z,
+   * `summary_event_points` read 27/51/44 where `entry_history.points` read
+   * 17/27/20.
+   *
+   * A reader saw two different gameweek ranks on one screen because of it.
+   */
+  const src = read("LiveTab.tsx");
+  // IN THE CODE. The comment at the call site names the field it replaced, and
+  // matching the bare token pinned that prose instead of the read — the same
+  // trap `route.test.ts` strips comments for.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  it("reads the rank from entry, not from the picks document", () => {
+    expect(code).toContain("data.entry.summary_event_rank");
+    expect(code).not.toMatch(/entry_history\.rank/);
+  });
+
+  it("still takes the transfer hit from picks, which is fixed at the deadline", () => {
+    // A hit cannot change once the gameweek starts, so a stale document is a
+    // perfectly good source for it. Only the moving fields were the problem.
+    expect(code).toContain("data.picks?.entry_history.event_transfers_cost");
+  });
+});
