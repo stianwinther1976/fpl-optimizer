@@ -192,6 +192,15 @@ export interface ElementSummary {
      * from "the game is on Monday". See `fetchRecentForm`.
      */
     team_h_score?: number | null;
+    /*
+     * The per-round figures the season summary needs. FPL sends all four on
+     * every history row; they were not modelled, so `PlayerModal` had nothing
+     * to build a season-to-date from and printed today's `element` totals
+     * under the time machine's past heading instead.
+     */
+    goals_scored?: number;
+    assists?: number;
+    expected_goal_involvements?: string;
   }[];
   history_past?: {
     season_name: string;

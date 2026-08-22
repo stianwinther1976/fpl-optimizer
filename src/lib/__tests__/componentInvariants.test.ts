@@ -1411,14 +1411,47 @@ describe("the player sheet in the gameweek time machine", () => {
 
   it("drops every block that has no past-tense reading", () => {
     for (const token of [
-      "{asOfGw == null && netTransfers > 25000",
-      "{asOfGw == null && netTransfers < -25000",
+      // FPL's next-gameweek projection, its price predictor, and the fixtures
+      // AFTER today — all three about a week later than the heading.
       "{asOfGw == null && element.ep_next != null",
       "{asOfGw == null && price && (",
       "{asOfGw == null && upcoming.length > 0 && (",
+      // Injury news and the set-piece depth chart are statements about now
+      // with no historic value published, so there is nothing to relabel.
+      "{asOfGw == null && element.news && (",
+      "{asOfGw == null && (duties.length > 0 || netTransfers !== 0) && (",
+      // The reader's team-news buttons: a press conference cannot be held
+      // about a match that has been played, and tapping them wrote a call
+      // stamped with TODAY'S gameweek from a sheet describing a past one.
+      "{asOfGw == null && nextEvent != null && (",
     ]) {
       expect(modal, token).toContain(token);
     }
+    // The transfer badges sit inside the duties wrapper, so they must not
+    // carry a second guard of their own — an unreachable branch reads as a
+    // protection that is doing something.
+    expect(modal).not.toContain("asOfGw == null && netTransfers");
+  });
+
+  it("sums the season it is showing rather than printing today's", () => {
+    /*
+     * The block read POINTS / FORM / OWNED / GOALS / ASSISTS / XGI straight
+     * off the `element` row, which is today's, under a past gameweek's
+     * heading. The sheet already fetches this player's rounds, so the four
+     * countable figures have a real past-tense reading; form and ownership do
+     * not, and are dropped rather than relabelled.
+     */
+    expect(modal).toContain("`Season to GW${asOfGw}`");
+    expect(modal).toMatch(/points \+= r\.total_points/);
+    expect(modal).not.toMatch(/\["Form", element\.form\][\s\S]{0,400}asOfGw != null/);
+  });
+
+  it("counts only matches that have been played", () => {
+    // FPL emits a history row from the DEADLINE with `minutes: 0` and
+    // `starts: 0`. 538 of 600 players on the 2026-08-21 snapshot carried one
+    // inside their last-five window, so "started 4 of last 5" was read off a
+    // match that had not kicked off — and the chip for it rendered a red 0'.
+    expect(modal).toMatch(/rows\.filter\(\(r\) => r\.team_h_score !== null\)/);
   });
 
   it("is told which gameweek it is showing", () => {

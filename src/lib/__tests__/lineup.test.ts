@@ -90,6 +90,25 @@ describe("a projection with no overrides is unchanged", () => {
 
   it("reads the module-level set when the caller passes none", () => {
     const target = bootstrap.elements.find((e) => e.element_type === 3)!;
+  /*
+   * A SEPARATE TARGET FOR THE RAISING DIRECTION, because `target` cannot test
+   * it. Every player `makeMockBootstrap` builds has started every gameweek the
+   * mock has played — `minutes: 2000, starts: 22` for a club's first-choice and
+   * `900/10` for the rest, against ten finished gameweeks — so the in-season
+   * model clamps `pStart` to 1.0 for all of them, and `applyStartCall(_,
+   * "starts")` is a `Math.max` against 0.97: a no-op by construction. Measured
+   * on `target`: `gainNext` 0, `gainTotal` 0, so the assertion below was
+   * `expect(0).toBeCloseTo(0)` and stayed green with `applyStartCall` replaced
+   * by the identity function.
+   *
+   * Cutting one midfielder to two starts in 240 minutes gives the model
+   * somewhere to move from: base 3.544, "starts" 5.886, "benched" 3.013.
+   */
+  const rotator = bootstrap.elements.find(
+    (e) => e.element_type === 3 && !e.web_name.endsWith("1")
+  )!;
+  rotator.minutes = 240;
+  rotator.starts = 2;
     const before = project().get(target.id)!.next;
     setActiveStartCalls(new Map([[target.id, "benched"]]));
     const after = projectAll({
@@ -107,6 +126,25 @@ describe("an override moves the projection and is labelled", () => {
     projectAll({ bootstrap, fixtures, nextEvent: 11, horizon: 3, pastSeason: undefined, startCalls: calls });
 
   const target = bootstrap.elements.find((e) => e.element_type === 3)!;
+  /*
+   * A SEPARATE TARGET FOR THE RAISING DIRECTION, because `target` cannot test
+   * it. Every player `makeMockBootstrap` builds has started every gameweek the
+   * mock has played — `minutes: 2000, starts: 22` for a club's first-choice and
+   * `900/10` for the rest, against ten finished gameweeks — so the in-season
+   * model clamps `pStart` to 1.0 for all of them, and `applyStartCall(_,
+   * "starts")` is a `Math.max` against 0.97: a no-op by construction. Measured
+   * on `target`: `gainNext` 0, `gainTotal` 0, so the assertion below was
+   * `expect(0).toBeCloseTo(0)` and stayed green with `applyStartCall` replaced
+   * by the identity function.
+   *
+   * Cutting one midfielder to two starts in 240 minutes gives the model
+   * somewhere to move from: base 3.544, "starts" 5.886, "benched" 3.013.
+   */
+  const rotator = bootstrap.elements.find(
+    (e) => e.element_type === 3 && !e.web_name.endsWith("1")
+  )!;
+  rotator.minutes = 240;
+  rotator.starts = 2;
 
   it("benching a player lowers his projection and starting him raises it", () => {
     const base = run(new Map()).get(target.id)!.next;
@@ -392,6 +430,25 @@ describe("a call is about the gameweek in front of the reader", () => {
   const run = (calls: Map<number, "starts" | "benched">) =>
     projectAll({ bootstrap, fixtures, nextEvent: 11, horizon: 5, pastSeason: undefined, startCalls: calls });
   const target = bootstrap.elements.find((e) => e.element_type === 3)!;
+  /*
+   * A SEPARATE TARGET FOR THE RAISING DIRECTION, because `target` cannot test
+   * it. Every player `makeMockBootstrap` builds has started every gameweek the
+   * mock has played — `minutes: 2000, starts: 22` for a club's first-choice and
+   * `900/10` for the rest, against ten finished gameweeks — so the in-season
+   * model clamps `pStart` to 1.0 for all of them, and `applyStartCall(_,
+   * "starts")` is a `Math.max` against 0.97: a no-op by construction. Measured
+   * on `target`: `gainNext` 0, `gainTotal` 0, so the assertion below was
+   * `expect(0).toBeCloseTo(0)` and stayed green with `applyStartCall` replaced
+   * by the identity function.
+   *
+   * Cutting one midfielder to two starts in 240 minutes gives the model
+   * somewhere to move from: base 3.544, "starts" 5.886, "benched" 3.013.
+   */
+  const rotator = bootstrap.elements.find(
+    (e) => e.element_type === 3 && !e.web_name.endsWith("1")
+  )!;
+  rotator.minutes = 240;
+  rotator.starts = 2;
 
   it("moves the next gameweek and leaves the rest of the horizon alone", () => {
     /*
@@ -418,9 +475,16 @@ describe("a call is about the gameweek in front of the reader", () => {
   });
 
   it("does the same in the raising direction", () => {
-    const base = run(new Map()).get(target.id)!;
-    const started = run(new Map([[target.id, "starts"]])).get(target.id)!;
+    const base = run(new Map()).get(rotator.id)!;
+    const started = run(new Map([[rotator.id, "starts"]])).get(rotator.id)!;
     const gainNext = started.next - base.next;
+    // The call has to MOVE him, or the equality below is 0 == 0 and would hold
+    // for a `applyStartCall` that did nothing at all.
+    expect(gainNext).toBeGreaterThan(1);
     expect(started.total - base.total).toBeCloseTo(gainNext, 6);
+    for (const [gw, v] of base.perGw) {
+      if (gw === 11) continue;
+      expect(started.perGw.get(gw), `GW${gw}`).toBeCloseTo(v, 9);
+    }
   });
 });
