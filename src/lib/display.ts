@@ -598,3 +598,37 @@ export function rankByLiveTotal<T extends { rank: number }>(
     })
     .map(({ row }, idx) => ({ row, position: idx + 1 }));
 }
+
+/**
+ * The short label for a `PlayerMatchStatus`, for a squad view.
+ *
+ * Deliberately terse: this sits under a player's name on a card 4.6rem wide,
+ * beside the opponent it already names. "Done" carries the minutes because
+ * that is the part a reader cannot infer — 90 and 62 are both done and only
+ * one of them kept a clean sheet the whole way.
+ *
+ * A blank gameweek returns the empty string rather than a dash: the card
+ * already shows no opponent, and two pieces of nothing is noise.
+ */
+export function matchStatusLabel(
+  status:
+    | { state: "live"; minutes: number }
+    | { state: "done"; minutes: number }
+    | { state: "dnp" }
+    | { state: "todo"; fixture: { kickoff_time: string | null; provisional_start_time?: boolean } }
+    | { state: "blank" },
+  fmtKickoff: (iso: string) => string
+): string {
+  switch (status.state) {
+    case "live":
+      return `${status.minutes}'`;
+    case "done":
+      return `Done (${status.minutes})`;
+    case "dnp":
+      return "Did not play";
+    case "todo":
+      return kickoffLabel(status.fixture, fmtKickoff);
+    case "blank":
+      return "";
+  }
+}

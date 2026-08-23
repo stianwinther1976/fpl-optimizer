@@ -8,6 +8,7 @@ import {
   provisionalBonus,
   isInPlay,
   squadMatchState,
+  playerMatchStatus,
   liveMatchMinutes,
   feedStallMs,
   advanceFeedWatch,
@@ -1432,5 +1433,74 @@ describe("squadMatchState — how much football is still to come", () => {
     );
     expect(st.inPlay).toBe(0);
     expect(st.blank).toBe(11);
+  });
+});
+
+describe("playerMatchStatus — where one player is in his gameweek", () => {
+  const fx = (over: Partial<Fixture>): Fixture =>
+    ({
+      id: 1,
+      event: 1,
+      started: false,
+      finished: false,
+      finished_provisional: false,
+      minutes: 0,
+      team_h: 1,
+      team_a: 2,
+      team_h_score: 0,
+      team_a_score: 0,
+      team_h_difficulty: 3,
+      team_a_difficulty: 3,
+      kickoff_time: "2026-08-22T14:00:00Z",
+      stats: [],
+      ...over,
+    }) as Fixture;
+
+  const live = fx({ started: true });
+  const done = fx({ started: true, finished: true, finished_provisional: true });
+  const todo = fx({});
+
+  it("is blank when the club has no fixture at all", () => {
+    expect(playerMatchStatus([], 0)).toEqual({ state: "blank" });
+  });
+
+  it("reports minutes while the match is running", () => {
+    expect(playerMatchStatus([live], 37)).toEqual({ state: "live", minutes: 37 });
+  });
+
+  it("separates finished-and-played from finished-and-didn't", () => {
+    expect(playerMatchStatus([done], 90)).toEqual({ state: "done", minutes: 90 });
+    expect(playerMatchStatus([done], 0)).toEqual({ state: "dnp" });
+  });
+
+  it("names the fixture still to come", () => {
+    const r = playerMatchStatus([todo], 0);
+    expect(r.state).toBe("todo");
+    expect(r.state === "todo" && r.fixture.kickoff_time).toBe("2026-08-22T14:00:00Z");
+  });
+
+  it("prefers PLAYING over waiting when a double has both", () => {
+    // The same ordering `squadMatchState` needs: a man on the pitch who also
+    // has a later match is playing, not waiting.
+    expect(playerMatchStatus([live, todo], 20)).toEqual({ state: "live", minutes: 20 });
+  });
+
+  it("waits on the second leg once the first is over", () => {
+    const later = fx({ id: 2, kickoff_time: "2026-08-25T19:00:00Z" });
+    const r = playerMatchStatus([done, later], 90);
+    expect(r.state).toBe("todo");
+    expect(r.state === "todo" && r.fixture.id).toBe(2);
+  });
+
+  it("picks the EARLIEST fixture still to come", () => {
+    const late = fx({ id: 2, kickoff_time: "2026-08-25T19:00:00Z" });
+    const early = fx({ id: 3, kickoff_time: "2026-08-23T11:30:00Z" });
+    const r = playerMatchStatus([late, early], 0);
+    expect(r.state === "todo" && r.fixture.id).toBe(3);
+  });
+
+  it("treats a non-numeric minutes off the network as zero", () => {
+    expect(playerMatchStatus([done], "90" as unknown as number)).toEqual({ state: "dnp" });
+    expect(playerMatchStatus([done], undefined)).toEqual({ state: "dnp" });
   });
 });

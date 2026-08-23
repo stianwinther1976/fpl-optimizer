@@ -15,6 +15,7 @@ import {
   kickOffPassed,
   liveStaleMinutes,
   liveOverallPoints,
+  matchStatusLabel,
   liveLeagueTotal,
   rankByLiveTotal,
   leagueRowTotal,
@@ -791,5 +792,37 @@ describe("leagueRowTotal — the sort key and the cell are one function", () => 
     const out = rankByLiveTotal(rows, (r) => leagueRowTotal(r, live.get(r.entry)));
     expect(out.map((o) => leagueRowTotal(o.row, live.get(o.row.entry)))).toEqual([27, 25]);
     expect(out[0].row.entry).toBe(4);
+  });
+});
+
+describe("matchStatusLabel", () => {
+  const fmt = () => "Sat 16:00";
+
+  it("labels each state the way a squad view needs", () => {
+    expect(matchStatusLabel({ state: "live", minutes: 37 }, fmt)).toBe("37'");
+    expect(matchStatusLabel({ state: "done", minutes: 90 }, fmt)).toBe("Done (90)");
+    expect(matchStatusLabel({ state: "dnp" }, fmt)).toBe("Did not play");
+    expect(
+      matchStatusLabel({ state: "todo", fixture: { kickoff_time: "2026-08-22T14:00:00Z" } }, fmt)
+    ).toBe("Sat 16:00");
+  });
+
+  it("keeps the minutes on a finished appearance", () => {
+    // 90 and 62 are both "done" and only one of them lasted the match.
+    expect(matchStatusLabel({ state: "done", minutes: 62 }, fmt)).toBe("Done (62)");
+  });
+
+  it("carries a TBC kick-off through", () => {
+    expect(
+      matchStatusLabel(
+        { state: "todo", fixture: { kickoff_time: "2026-08-22T14:00:00Z", provisional_start_time: true } },
+        fmt
+      )
+    ).toBe("Sat 16:00 (TBC)");
+  });
+
+  it("says nothing at all for a blank gameweek", () => {
+    // The card already shows no opponent; two pieces of nothing is noise.
+    expect(matchStatusLabel({ state: "blank" }, fmt)).toBe("");
   });
 });

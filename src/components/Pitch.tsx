@@ -127,6 +127,8 @@ function PlayerCard({
   teams,
   fixtures,
   nextEvent,
+  fixtureEvent,
+  statusOf,
   onSelect,
   info = "auto",
 }: {
@@ -134,15 +136,41 @@ function PlayerCard({
   teams: Map<number, Team>;
   fixtures: Fixture[];
   nextEvent: number | null;
+  /**
+   * The gameweek whose fixture the opponent line names, when that is NOT the
+   * one being planned for.
+   *
+   * A CARD MUST NOT MIX TWO GAMEWEEKS. While a gameweek is live the card shows
+   * that gameweek's points, and the opponent line under it was still naming the
+   * NEXT one's fixture — so Caicedo read "7 pts" beside "BHA (H)" for a Chelsea
+   * side playing Fulham that afternoon. Reported, and correct in both halves
+   * separately, which is what made it hard to see.
+   *
+   * The FDR strip deliberately keeps reading `nextEvent`: it is the planning
+   * view and is meant to look forward.
+   */
+  fixtureEvent?: number | null;
+  /**
+   * "Done (90)", "45'", "Did not play", or a kick-off time — where this player
+   * is in the gameweek the card is showing. See `playerMatchStatus`.
+   *
+   * A squad view tells you the score; without this it cannot tell you whether
+   * that score is SETTLED, and nine points with everyone done is a different
+   * position from nine with three still to kick off.
+   */
+  statusOf?: (el: Element) => string | null;
   onSelect?: (el: Element) => void;
   info?: PitchInfoMode;
 }) {
   const el = p.element;
   const team = teams.get(el.team);
   const flag = statusFlag(el);
+  // The gameweek the rest of this card is about. See `fixtureEvent`.
+  const fxEvent = fixtureEvent ?? nextEvent;
+  const status = statusOf?.(el) ?? null;
   const fx =
-    nextEvent != null
-      ? teamFixtures(fixtures, el.team, nextEvent)
+    fxEvent != null
+      ? teamFixtures(fixtures, el.team, fxEvent)
           .map((f) => {
             const home = f.team_h === el.team;
             const opp = teams.get(home ? f.team_a : f.team_h);
@@ -228,8 +256,19 @@ function PlayerCard({
           })()}
       </div>
       {fx && (
-        <div className="truncate rounded-b bg-black/50 px-1 py-0.5 text-[10px] text-zinc-200" title={fx}>
+        <div
+          className={`truncate ${status ? "" : "rounded-b"} bg-black/50 px-1 py-0.5 text-[10px] text-zinc-200`}
+          title={fx}
+        >
           {fx}
+        </div>
+      )}
+      {status && (
+        <div
+          className="truncate rounded-b bg-black/60 px-1 py-0.5 text-[10px] text-zinc-300"
+          title={status}
+        >
+          {status}
         </div>
       )}
     </Tag>
@@ -247,6 +286,8 @@ export default function Pitch({
   teams,
   fixtures,
   nextEvent,
+  fixtureEvent,
+  statusOf,
   formation,
   onSelect,
   cornerTotal,
@@ -256,6 +297,29 @@ export default function Pitch({
   teams: Map<number, Team>;
   fixtures: Fixture[];
   nextEvent: number | null;
+  /**
+   * The gameweek whose fixture the opponent line names, when that is NOT the
+   * one being planned for.
+   *
+   * A CARD MUST NOT MIX TWO GAMEWEEKS. While a gameweek is live the card shows
+   * that gameweek's points, and the opponent line under it was still naming the
+   * NEXT one's fixture — so Caicedo read "7 pts" beside "BHA (H)" for a Chelsea
+   * side playing Fulham that afternoon. Reported, and correct in both halves
+   * separately, which is what made it hard to see.
+   *
+   * The FDR strip deliberately keeps reading `nextEvent`: it is the planning
+   * view and is meant to look forward.
+   */
+  fixtureEvent?: number | null;
+  /**
+   * "Done (90)", "45'", "Did not play", or a kick-off time — where this player
+   * is in the gameweek the card is showing. See `playerMatchStatus`.
+   *
+   * A squad view tells you the score; without this it cannot tell you whether
+   * that score is SETTLED, and nine points with everyone done is a different
+   * position from nine with three still to kick off.
+   */
+  statusOf?: (el: Element) => string | null;
   formation?: [number, number, number];
   onSelect?: (el: Element) => void;
   /** Total GW points shown in the top-left corner of the pitch */
@@ -372,6 +436,8 @@ export default function Pitch({
                       teams={teams}
                       fixtures={fixtures}
                       nextEvent={nextEvent}
+                      fixtureEvent={fixtureEvent}
+                      statusOf={statusOf}
                       onSelect={onSelect}
                       info={info}
                     />
@@ -393,7 +459,16 @@ export default function Pitch({
                         {benchBadge(p, i)}
                       </span>
                     )}
-                    <PlayerCard p={p} teams={teams} fixtures={fixtures} nextEvent={nextEvent} onSelect={onSelect} info={info} />
+                    <PlayerCard
+                      p={p}
+                      teams={teams}
+                      fixtures={fixtures}
+                      nextEvent={nextEvent}
+                      fixtureEvent={fixtureEvent}
+                      statusOf={statusOf}
+                      onSelect={onSelect}
+                      info={info}
+                    />
                   </div>
                 ))}
               </div>
@@ -407,6 +482,8 @@ export default function Pitch({
           teams={teams}
           fixtures={fixtures}
           nextEvent={nextEvent}
+          fixtureEvent={fixtureEvent}
+          statusOf={statusOf}
           info={info}
           onSelect={onSelect}
           cornerTotal={cornerTotal}
@@ -423,6 +500,8 @@ function ListView({
   teams,
   fixtures,
   nextEvent,
+  fixtureEvent,
+  statusOf,
   info,
   onSelect,
   cornerTotal,
@@ -432,6 +511,10 @@ function ListView({
   teams: Map<number, Team>;
   fixtures: Fixture[];
   nextEvent: number | null;
+  /** See `PlayerCard`. The list names the same fixture the cards do. */
+  fixtureEvent?: number | null;
+  /** See `PlayerCard`. The list answers the same question the cards do. */
+  statusOf?: (el: Element) => string | null;
   info: PitchInfoMode;
   onSelect?: (el: Element) => void;
   cornerTotal?: { title: string; points: number; final: boolean } | null;
@@ -445,8 +528,9 @@ function ListView({
   ];
 
   const fixtureStr = (el: Element): string => {
-    if (nextEvent == null) return "";
-    return teamFixtures(fixtures, el.team, nextEvent)
+    const ev = fixtureEvent ?? nextEvent;
+    if (ev == null) return "";
+    return teamFixtures(fixtures, el.team, ev)
       .map((f) => {
         const home = f.team_h === el.team;
         return `${teams.get(home ? f.team_a : f.team_h)?.short_name ?? "?"} (${home ? "H" : "A"})`;
@@ -554,6 +638,8 @@ function ListView({
           <span className="block truncate text-[11px] text-muted">
             {teams.get(el.team)?.short_name}
             {fx ? ` · ${fx}` : ""}
+            {/* Whether the score is SETTLED, which the points alone cannot say. */}
+            {statusOf?.(el) ? ` · ${statusOf(el)}` : ""}
           </span>
         </span>
         <span className="shrink-0 whitespace-nowrap text-right font-mono text-sm">{metric(p)}</span>
