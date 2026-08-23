@@ -2167,3 +2167,76 @@ describe("the league table is ordered by the totals it prints", () => {
     expect(code).toMatch(/position < r\.last_rank/);
   });
 });
+
+describe("a pitch card names the fixture of the gameweek it is showing", () => {
+  /*
+   * Reported: Caicedo, a Chelsea player, read his live points beside "BHA (H)"
+   * on an afternoon Chelsea played Fulham. Both halves were correct on their
+   * own — the points were the LIVE gameweek's and the opponent line was the
+   * NEXT gameweek's — which is exactly what made it hard to see.
+   */
+  const pitch = read("Pitch.tsx");
+  const dash = read("Dashboard.tsx");
+  const strip = (t: string) =>
+    t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  it("resolves the opponent line against fixtureEvent, falling back to nextEvent", () => {
+    expect(strip(pitch)).toContain("const fxEvent = fixtureEvent ?? nextEvent;");
+    expect(strip(pitch)).toContain("teamFixtures(fixtures, el.team, fxEvent)");
+    // The list view answers the same question and must not drift from it.
+    expect(strip(pitch)).toContain("const ev = fixtureEvent ?? nextEvent;");
+  });
+
+  it("leaves BOTH FDR strips looking forward", () => {
+    /*
+     * Three gameweeks AHEAD is the planning view; it is not about this card's
+     * points and must keep reading `nextEvent`.
+     *
+     * BOTH of them. There is one in the pitch card and one in the list view,
+     * and a guard matching the loop once passed with the first rewritten —
+     * caught by mutation, and the reason this counts rather than matches.
+     */
+    const loops = [...strip(pitch).matchAll(/for \(let gw = (\w+); gw < \1 \+ 3; gw\+\+\)/g)];
+    expect(loops).toHaveLength(2);
+    for (const m of loops) expect(m[1]).toBe("nextEvent");
+  });
+
+  it("is handed the live gameweek while one is in play", () => {
+    expect(strip(dash)).toContain(
+      "fixtureEvent={liveData && currentEvent != null ? currentEvent : null}"
+    );
+    // And the historical pitch names its own gameweek, for the same reason.
+    expect(strip(dash)).toContain("fixtureEvent={hist.gw}");
+  });
+});
+
+describe("the squad view says whether a score is settled", () => {
+  /*
+   * Asked for after using a table that shows it. Opening a team tells you the
+   * score; it did not tell you whether that score is FINISHED. Nine points with
+   * everyone done is a different position from nine with three still to kick
+   * off, and the pitch had no way to say which.
+   */
+  const pitch = read("Pitch.tsx");
+  const dash = read("Dashboard.tsx");
+  const strip = (t: string) =>
+    t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  it("renders the status in BOTH the card and the list", () => {
+    // Two independent render paths for the same squad. Pinning one lets the
+    // other go quiet — which is how the fixture label drifted between them.
+    expect(strip(pitch)).toContain("const status = statusOf?.(el) ?? null;");
+    expect(strip(pitch)).toMatch(/statusOf\?\.\(el\) \? ` · \$\{statusOf\(el\)\}` : ""/);
+  });
+
+  it("is built from the live feed's minutes and this gameweek's fixtures", () => {
+    expect(strip(dash)).toContain("playerMatchStatus(");
+    expect(strip(dash)).toContain("matchStatusLabel(");
+    expect(strip(dash)).toMatch(/teamFixtures\(data!\.fixtures, el\.team, currentEvent\)/);
+  });
+
+  it("is absent when there is no live data to build it from", () => {
+    // Not an empty string on every card out of season.
+    expect(strip(dash)).toMatch(/if \(!liveData \|\| currentEvent == null\) return undefined;/);
+  });
+});

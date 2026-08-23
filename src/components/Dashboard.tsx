@@ -8,8 +8,16 @@ import dynamic from "next/dynamic";
 import { api, entryNotFoundMessage, FplApiError, loadTeamData, fmtNum, fmtRank, rankPercentile, DEMO_ENTRY_ID, type TeamData } from "@/lib/fpl";
 import type { Element, EntryEventPicks, EventLive, Fixture } from "@/lib/types";
 import { fmtPrice, remainingChips } from "@/lib/rules";
-import { projectAll } from "@/lib/xp";
-import { projectAutoSubs, provisionalBonus, liveEntryScore, LIVE_REFRESH_MS } from "@/lib/live";
+import { projectAll,
+  teamFixtures,
+} from "@/lib/xp";
+import {
+  projectAutoSubs,
+  provisionalBonus,
+  liveEntryScore,
+  playerMatchStatus,
+  LIVE_REFRESH_MS,
+} from "@/lib/live";
 import {
   benchBadgeFor,
   benchSortKey,
@@ -20,6 +28,7 @@ import {
   netGwPoints,
   valueDelta,
   liveOverallPoints,
+  matchStatusLabel,
 } from "@/lib/display";
 import { saveRecentTeam } from "@/lib/recent";
 import { currentSeasonName } from "@/lib/seasonArchive";
@@ -678,6 +687,29 @@ export default function Dashboard({
   const liveHitNote = liveCornerNote(liveGross, liveHit);
 
   /*
+   * "Done (90)", "45'", "Did not play", or a kick-off time, per player.
+   *
+   * Asked for after using a table that shows it: the squad view tells you the
+   * score and had no way to tell you whether that score is settled. Nine points
+   * with everyone done is a different position from nine with three still to
+   * kick off. See `playerMatchStatus`; the label is `matchStatusLabel`.
+   */
+  const statusOf = useMemo(() => {
+    if (!liveData || currentEvent == null) return undefined;
+    const minutesOf = new Map(liveData.elements.map((e) => [e.id, e.stats.minutes]));
+    return (el: Element): string | null =>
+      matchStatusLabel(
+        playerMatchStatus(teamFixtures(data!.fixtures, el.team, currentEvent), minutesOf.get(el.id)),
+        (iso) =>
+          new Date(iso).toLocaleString("en-GB", {
+            weekday: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+      ) || null;
+  }, [liveData, currentEvent, data]);
+
+  /*
    * THE HEADER'S OWN LIVE SCORE, and it is deliberately `liveEntryScore` and
    * not the `liveGross - liveHit` two lines up. That figure is built for the
    * corner note; this one has to agree, to the point, with the number the Live
@@ -1188,6 +1220,9 @@ export default function Dashboard({
                           teams={teams}
                           fixtures={data.fixtures}
                           nextEvent={null}
+                          // The gameweek this pitch IS: its points are GW`hist.gw`'s,
+                          // so the opponent line names that gameweek's fixture too.
+                          fixtureEvent={hist.gw}
                           onSelect={setSelected}
                           cornerTotal={{
                             title: `GW${hist.gw}`,
@@ -1267,6 +1302,15 @@ export default function Dashboard({
                 teams={teams}
                 fixtures={data.fixtures}
                 nextEvent={squad.nextEvent}
+                /*
+                  WHILE A GAMEWEEK IS LIVE THE CARDS SHOW ITS POINTS, so the
+                  opponent line under them must name ITS fixture. It named the
+                  next gameweek's, so a Chelsea player read "0 pts" beside
+                  "BHA (H)" on an afternoon Chelsea played Fulham — both halves
+                  correct, the card wrong. The FDR strip still looks forward.
+                */
+                fixtureEvent={liveData && currentEvent != null ? currentEvent : null}
+                statusOf={statusOf}
                 onSelect={setSelected}
                 cornerTotal={
                   liveData && currentEvent != null

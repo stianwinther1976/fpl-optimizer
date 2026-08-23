@@ -811,3 +811,44 @@ export function squadMatchState(
   }
   return { inPlay, toStart, played, blank };
 }
+
+/**
+ * Where one player is in his gameweek: still to come, on the pitch, finished,
+ * or finished without appearing.
+ *
+ * ASKED FOR AFTER USING A TABLE THAT SHOWS IT. Opening a rival's team tells you
+ * the score; it does not tell you whether that score is settled. Nine points
+ * with everyone done is a different position from nine with three still to
+ * kick off, and the squad view had no way to say which.
+ *
+ * The order of the checks is the same one `squadMatchState` uses and matters
+ * for the same reason: a man on the pitch who also has a second match later is
+ * PLAYING, not waiting. `todo` reports the earliest fixture that has not
+ * started, so the caller can name a kick-off time for it.
+ *
+ * `minutes` is `live.elements[].stats.minutes`, a GAMEWEEK TOTAL. In a double
+ * that is the sum across both legs, so a finished double reads its combined
+ * minutes — true, if surprising. It is deliberately not split: `explain`
+ * carries no per-fixture minutes, and inventing a split is the kind of
+ * estimate this file has three shipped defects from.
+ */
+export type PlayerMatchStatus =
+  | { state: "live"; minutes: number }
+  | { state: "done"; minutes: number }
+  | { state: "dnp" }
+  | { state: "todo"; fixture: Fixture }
+  | { state: "blank" };
+
+export function playerMatchStatus(
+  fixtures: Fixture[],
+  minutes: number | null | undefined
+): PlayerMatchStatus {
+  if (fixtures.length === 0) return { state: "blank" };
+  const mins = typeof minutes === "number" && Number.isFinite(minutes) ? minutes : 0;
+  if (fixtures.some((f) => isInPlay(f))) return { state: "live", minutes: mins };
+  const todo = fixtures
+    .filter((f) => !f.started)
+    .sort((a, b) => (a.kickoff_time ?? "").localeCompare(b.kickoff_time ?? ""))[0];
+  if (todo) return { state: "todo", fixture: todo };
+  return mins > 0 ? { state: "done", minutes: mins } : { state: "dnp" };
+}
