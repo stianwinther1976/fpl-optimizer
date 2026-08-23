@@ -16,6 +16,8 @@ import {
   liveStaleMinutes,
   liveOverallPoints,
   liveLeagueTotal,
+  rankByLiveTotal,
+  leagueRowTotal,
   netEventPoints,
   netGwDelta,
   netGwPoints,
@@ -710,5 +712,84 @@ describe("liveLeagueTotal", () => {
 
   it("carries a hit-negative week through", () => {
     expect(liveLeagueTotal(60, 0, -4)).toBe(56);
+  });
+});
+
+describe("rankByLiveTotal", () => {
+  const row = (rank: number, total: number, entry = rank) => ({ rank, total, entry });
+
+  it("puts the higher live total first, whatever FPL's stored order said", () => {
+    // The reported table: a 27 sat below a 25 because the rows were still in
+    // FPL's order while the totals beside them had gone live.
+    const rows = [row(1, 33), row(2, 28), row(3, 25), row(4, 27), row(5, 20)];
+    const out = rankByLiveTotal(rows, (r) => r.total);
+    expect(out.map((o) => o.row.total)).toEqual([33, 28, 27, 25, 20]);
+    expect(out.map((o) => o.position)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("renumbers positions to match the new order", () => {
+    const rows = [row(1, 10), row(2, 40)];
+    const out = rankByLiveTotal(rows, (r) => r.total);
+    expect(out[0].row.rank).toBe(2);
+    expect(out[0].position).toBe(1);
+    expect(out[1].position).toBe(2);
+  });
+
+  it("keeps FPL's order on a tie rather than inventing a tiebreak", () => {
+    const rows = [row(4, 50), row(2, 50), row(9, 50)];
+    const out = rankByLiveTotal(rows, (r) => r.total);
+    expect(out.map((o) => o.row.rank)).toEqual([2, 4, 9]);
+  });
+
+  it("is stable when rank ties too", () => {
+    const rows = [row(1, 50, 11), row(1, 50, 22)];
+    const out = rankByLiveTotal(rows, (r) => r.total);
+    expect(out.map((o) => o.row.entry)).toEqual([11, 22]);
+  });
+
+  it("does not mutate the array it was given", () => {
+    const rows = [row(1, 10), row(2, 40)];
+    rankByLiveTotal(rows, (r) => r.total);
+    expect(rows.map((r) => r.total)).toEqual([10, 40]);
+  });
+
+  it("handles a negative total, which a hit can produce", () => {
+    const rows = [row(1, 2), row(2, -4)];
+    expect(rankByLiveTotal(rows, (r) => r.total).map((o) => o.row.total)).toEqual([2, -4]);
+  });
+});
+
+describe("leagueRowTotal — the sort key and the cell are one function", () => {
+  const row = { total: 5, event_total: 5 };
+
+  it("is the live total when a live score is in hand", () => {
+    // GW1: stored 5, live 7 — the table showed both at once.
+    expect(leagueRowTotal(row, 7)).toBe(7);
+  });
+
+  it("falls back to FPL's stored total when there is none", () => {
+    expect(leagueRowTotal(row, null)).toBe(5);
+    expect(leagueRowTotal(row, undefined)).toBe(5);
+  });
+
+  it("treats a live zero as a score, not as absent", () => {
+    // A manager on 0 this week is not a manager we have no score for.
+    expect(leagueRowTotal({ total: 60, event_total: 4 }, 0)).toBe(56);
+  });
+
+  it("orders a table the same way it labels it", () => {
+    // The reported row pair: 25 above 27. Sorting through the same function
+    // the cell uses is what makes that impossible.
+    const rows = [
+      { rank: 3, entry: 3, total: 25, event_total: 25 },
+      { rank: 4, entry: 4, total: 25, event_total: 25 },
+    ];
+    const live = new Map([
+      [3, 25],
+      [4, 27],
+    ]);
+    const out = rankByLiveTotal(rows, (r) => leagueRowTotal(r, live.get(r.entry)));
+    expect(out.map((o) => leagueRowTotal(o.row, live.get(o.row.entry)))).toEqual([27, 25]);
+    expect(out[0].row.entry).toBe(4);
   });
 });

@@ -25,16 +25,36 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     # The script bounds itself; this is only a backstop against a hung fetch.
-    timeout-minutes: 20
+    # The long probes total 22 minutes; a 20-minute cap cancelled the tail of
+    # this job twice and ate the step that ran last.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # FIRST, and standalone: one request, and it answers a question that can
+      # block a fix. A job's log cannot be downloaded until the job ENDS, so
+      # anything quick has to run ahead of anything slow or it is not readable
+      # for twenty minutes. That cost an afternoon once.
+      - name: Check the standings subtraction
+        env:
+          FPL_LEAGUE_ID: ${{ vars.FPL_LEAGUE_ID || '314' }}
+        run: node scripts/snapshot/standings-check.mjs
+
+      # Five minutes. Run it while a match WITH GOALS IN IT is actually going,
+      # or it has nothing to compare and says so.
+      - name: Compare the fixtures score with the live-derived one
+        run: node scripts/snapshot/score-probe.mjs
+
+      # Opt-in, for the same log-readability reason: set the PROBE_LONG
+      # repository variable to 'true'.
       - name: Probe the match clock
+        if: vars.PROBE_LONG == 'true'
         run: node scripts/snapshot/clock-probe.mjs
 
       - name: Probe what a manager's score is reported as
+        if: vars.PROBE_LONG == 'true'
         env:
           # Overridable so a specific team can be measured; the default is a
           # handful of low ids, which are real long-standing entries.

@@ -6,7 +6,7 @@ import { markNavigation } from "@/lib/nav";
 import { api, DEMO_ENTRY_ID, FplApiError, fmtNum, type TeamData } from "@/lib/fpl";
 import type { EventLive, LeagueStandings } from "@/lib/types";
 import { CHIP_LABELS } from "@/lib/rules";
-import { liveLeagueTotal } from "@/lib/display";
+import { leagueRowTotal, rankByLiveTotal } from "@/lib/display";
 import { liveEntryScore, provisionalBonus, squadMatchState } from "@/lib/live";
 import { ErrorBox, Skeleton } from "./ui";
 
@@ -381,7 +381,15 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               </tr>
             </thead>
             <tbody className="divide-y divide-border-c/60">
-              {standings.standings.results.map((r) => {
+              {/*
+                ORDERED BY WHAT THE TABLE PRINTS. The "Total" column is live,
+                so leaving the rows in FPL's stored order put a rival on 27
+                below one on 25 — every number right, the table wrong. See
+                `rankByLiveTotal`.
+              */}
+              {rankByLiveTotal(standings.standings.results, (row) =>
+                leagueRowTotal(row, details.get(row.entry)?.livePoints)
+              ).map(({ row: r, position }) => {
                 const d = details.get(r.entry);
                 const mine = r.entry === entryId;
                 const chipShort: Record<string, string> = {
@@ -411,10 +419,17 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                     title={clickable ? "Open this manager's dashboard" : undefined}
                   >
                     <td className="px-2 py-1.5 font-mono text-xs">
-                      {r.rank}
-                      {r.last_rank > 0 && r.last_rank !== r.rank && (
-                        <span className={r.rank < r.last_rank ? "text-accent" : "text-danger"}>
-                          {r.rank < r.last_rank ? "▲" : "▼"}
+                      {/*
+                        The LIVE position, and the arrow still against
+                        `last_rank` — where the rival finished LAST gameweek,
+                        which is what a reader means by "climbed". Drawing it
+                        against FPL's current stored rank would only render how
+                        stale their snapshot is.
+                      */}
+                      {position}
+                      {r.last_rank > 0 && r.last_rank !== position && (
+                        <span className={position < r.last_rank ? "text-accent" : "text-danger"}>
+                          {position < r.last_rank ? "▲" : "▼"}
                         </span>
                       )}
                     </td>
@@ -471,11 +486,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                         the two are by definition the same number, the row read
                         7 beside 3. See `liveLeagueTotal`.
                       */}
-                      {fmtNum(
-                        d?.livePoints != null
-                          ? liveLeagueTotal(r.total, r.event_total, d.livePoints)
-                          : r.total
-                      )}
+                      {fmtNum(leagueRowTotal(r, d?.livePoints))}
                     </td>
                   </tr>
                 );

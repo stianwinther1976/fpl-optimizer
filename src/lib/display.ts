@@ -544,3 +544,57 @@ export function liveOverallPoints(
 export function liveLeagueTotal(total: number, eventTotal: number, liveNet: number): number {
   return total - eventTotal + liveNet;
 }
+
+/**
+ * The number a league row's "Total" column shows — live when there is a live
+ * score for that rival, FPL's stored cumulative when there is not.
+ *
+ * ONE FUNCTION SO THE SORT AND THE CELL CANNOT DIVERGE. They were an inline
+ * expression in each place, and a source-level guard pinning the expression
+ * passed while a dead `false &&` sat in front of one of them — the invariant
+ * that matters is that both sites compute the SAME thing, and only a shared
+ * function makes that testable rather than transcribed.
+ */
+export function leagueRowTotal(
+  row: { total: number; event_total: number },
+  liveNet: number | null | undefined
+): number {
+  return liveNet != null ? liveLeagueTotal(row.total, row.event_total, liveNet) : row.total;
+}
+
+/**
+ * Order a league table by the totals it is actually PRINTING.
+ *
+ * A TABLE THAT CONTRADICTS ITSELF IS WORSE THAN A STALE ONE. Once the "Total"
+ * column became live (`liveLeagueTotal`), the rows were still in FPL's stored
+ * order — so a rival on 27 sat below one on 25, under a "#" column that said
+ * the 25 was third. Every number on the row was right and the table was wrong,
+ * which is a regression introduced by making the column live, not by anything
+ * FPL does.
+ *
+ * Ties keep FPL's own order. Their tiebreak is not published and is not
+ * reproducible here, so `rank` ascending is used to hold two equal totals in
+ * whatever sequence FPL last put them, rather than inventing a rule.
+ *
+ * The position returned is the LIVE one. Movement arrows should still be drawn
+ * against `last_rank` — the previous gameweek's finishing position — because
+ * that is the comparison a reader means by "climbed"; comparing against FPL's
+ * current stored rank would just render how stale their snapshot is.
+ */
+export function rankByLiveTotal<T extends { rank: number }>(
+  rows: readonly T[],
+  totalOf: (row: T) => number
+): { row: T; position: number }[] {
+  // `map` already returns a new array, so `sort` below never touches the
+  // caller's — an earlier version spread first, which allocated twice and made
+  // the no-mutation contract look like it depended on the spread.
+  return rows
+    .map((row, i) => ({ row, i }))
+    .sort((a, b) => {
+      const diff = totalOf(b.row) - totalOf(a.row);
+      if (diff !== 0) return diff;
+      const byRank = a.row.rank - b.row.rank;
+      return byRank !== 0 ? byRank : a.i - b.i;
+    })
+    .map(({ row }, idx) => ({ row, position: idx + 1 }));
+}
