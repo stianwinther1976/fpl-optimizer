@@ -1983,7 +1983,9 @@ describe("the league table says how much football is left", () => {
      * stored cumulative. In GW1 those are the same number by definition, and
      * the row printed 7 beside 3.
      */
-    expect(src).toContain("liveLeagueTotal(r.total, r.event_total, d.livePoints)");
+    // Through `leagueRowTotal`, which is also the sort key — see the ordering
+    // block below for why that had to become one shared function.
+    expect(src).toContain("fmtNum(leagueRowTotal(r, d?.livePoints))");
     // Never the bare stored figure while a live score is in hand.
     expect(src).not.toMatch(/font-bold">\{fmtNum\(r\.total\)\}/);
   });
@@ -2088,5 +2090,80 @@ describe("the league error says which failure it was", () => {
     // must appear exactly once and behind that branch.
     const hits = code.match(/League not found — check the ID\./g) ?? [];
     expect(hits).toHaveLength(1);
+  });
+});
+
+describe("the probe workflow points at scripts that exist", () => {
+  /*
+   * A workflow step naming a script that is not in the tree fails at the
+   * runner, minutes after the push, with a shell error rather than a
+   * measurement. It happened: recreating the branch from `main` after a merge
+   * dropped the commits that had added both the step and its script, and the
+   * edit that was meant to re-add a step silently matched nothing.
+   *
+   * Cheap to check here, and the only place that can catch it before a push.
+   */
+  const wf = fs.readFileSync(
+    path.resolve(__dirname, "../../../.github/workflows/clock-probe.yml"),
+    "utf8"
+  );
+  const root = path.resolve(__dirname, "../../..");
+
+  it("every `run: node scripts/...` target is a real file", () => {
+    const targets = [...wf.matchAll(/run: node (scripts\/\S+)/g)].map((m) => m[1]);
+    expect(targets.length).toBeGreaterThan(0);
+    for (const t of targets) {
+      expect(fs.existsSync(path.join(root, t)), `${t} is referenced but missing`).toBe(true);
+    }
+  });
+
+  it("keeps the quick steps ahead of the opt-in slow ones", () => {
+    // A job's log cannot be read until the job ENDS, so a one-request check
+    // behind a twelve-minute probe is twelve minutes from being readable.
+    const quick = wf.indexOf("standings-check.mjs");
+    const slow = wf.indexOf("clock-probe.mjs");
+    expect(quick).toBeGreaterThan(0);
+    expect(slow).toBeGreaterThan(quick);
+    expect(wf).toMatch(/if: vars\.PROBE_LONG == 'true'/);
+  });
+});
+
+describe("the league table is ordered by the totals it prints", () => {
+  /*
+   * Reported: a rival on 27 sat below one on 25, numbered 4 and 3. Every
+   * number on both rows was correct — the "Total" column had been made live
+   * while the rows stayed in FPL's stored order, so the table contradicted
+   * itself. A regression from making the column live, not anything FPL does.
+   */
+  const src = read("MiniLeague.tsx");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  it("sorts and renders through the SAME function", () => {
+    /*
+     * Not two expressions that agree. A guard pinning the sort expression
+     * passed with a dead `false &&` in front of it — the invariant that
+     * matters is that both sites compute the same number, and only a shared
+     * function makes that testable instead of transcribed.
+     * `leagueRowTotal` is unit-tested in `display.test.ts`.
+     */
+    expect(code).toContain("rankByLiveTotal(standings.standings.results");
+    expect(code).toContain("leagueRowTotal(row, details.get(row.entry)?.livePoints)");
+    expect(code).toContain("fmtNum(leagueRowTotal(r, d?.livePoints))");
+    // Neither site may re-derive it inline.
+    expect(code).not.toMatch(/liveLeagueTotal\(/);
+    expect(code).not.toMatch(/standings\.standings\.results\.map\(/);
+  });
+
+  it("numbers the rows by their live position, not FPL's stored rank", () => {
+    expect(code).toMatch(/\{position\}/);
+    expect(code).not.toMatch(/^\s*\{r\.rank\}$/m);
+  });
+
+  it("still draws movement against last gameweek's finish", () => {
+    // `last_rank` is where the rival ENDED the previous gameweek, which is what
+    // "climbed" means. Comparing to FPL's current stored rank would render how
+    // stale their snapshot is and nothing else.
+    expect(code).toMatch(/r\.last_rank > 0 && r\.last_rank !== position/);
+    expect(code).toMatch(/position < r\.last_rank/);
   });
 });
