@@ -21,6 +21,7 @@
 
 const BASE = "https://fantasy.premierleague.com/api";
 const EVERY_MS = 20_000;
+// 0 runs the reconciliation pass only, which needs no match in play.
 const RUN_MS = Number(process.env.SCORE_RUN_MS ?? 5 * 60_000);
 
 async function get(path) {
@@ -41,6 +42,40 @@ async function get(path) {
 
 const hhmmss = (ms) => new Date(ms).toISOString().slice(11, 19);
 
+/**
+ * Goals per fixture per side, derived from `explain`.
+ *
+ * ONE IMPLEMENTATION, used by both the reconciliation pass and the live
+ * comparison. Two copies that agree is how a probe ends up proving its own
+ * arithmetic against itself.
+ *
+ * A goal counts for the scorer's own club; an OWN goal counts for the
+ * opponent, which is the term a naive sum gets wrong and the reason the
+ * reconciliation below is worth running at all.
+ */
+function goalsByFixture(live, teamOfElement, fixtures) {
+  const goals = new Map(); // fixtureId -> Map(teamId -> goals)
+  for (const el of live?.elements ?? []) {
+    for (const ex of el.explain ?? []) {
+      const club = teamOfElement.get(el.id);
+      if (club == null) continue;
+      const f = fixtures.find((x) => x.id === ex.fixture);
+      if (!f) continue;
+      const other = f.team_h === club ? f.team_a : f.team_h;
+      let byTeam = goals.get(ex.fixture);
+      if (!byTeam) goals.set(ex.fixture, (byTeam = new Map()));
+      for (const st of ex.stats ?? []) {
+        if (st.identifier === "goals_scored") {
+          byTeam.set(club, (byTeam.get(club) ?? 0) + (st.value ?? 0));
+        } else if (st.identifier === "own_goals") {
+          byTeam.set(other, (byTeam.get(other) ?? 0) + (st.value ?? 0));
+        }
+      }
+    }
+  }
+  return goals;
+}
+
 async function main() {
   const boot = await get("bootstrap-static/");
   const event = boot.body?.events?.find((e) => e.is_current)?.id;
@@ -50,35 +85,67 @@ async function main() {
   console.log(`GW${event} · fx score vs live-derived score · every 20s`);
   console.log("wall     | fixture      | fx    | live  | agree | age fx/live");
 
+  const both = async () => {
+    const [fx, live] = await Promise.all([get("fixtures/"), get(`event/${event}/live/`)]);
+    return { fx, live };
+  };
+  let { fx, live } = await both();
+
+  // ---- HALF THE QUESTION CAN BE ANSWERED WITHOUT A MATCH IN PLAY.
+  //
+  // Two separate things have to hold before the score could move to the live
+  // feed, and only one of them needs live football:
+  //
+  //   1. the arithmetic must be RIGHT — summing `goals_scored` from `explain`,
+  //      with `own_goals` counted against the scorer's own side, must
+  //      reproduce a finished fixture's `team_h_score`/`team_a_score` exactly;
+  //   2. it must be FRESHER than `fixtures/`, which needs a live match.
+  //
+  // (1) is checkable against any finished gameweek, right now, and if it fails
+  // the idea is dead and (2) never needs asking. Run it first and always.
+  {
+    // `finished_provisional`, NOT `finished`. `finished` means BONUS CONFIRMED,
+    // and this pass wants matches that have ENDED. Measured on 2026-08-23 at
+    // 19:24Z: all nine of GW1's played fixtures read `finished: false` two days
+    // after kick-off, so filtering on it found ZERO and reported itself
+    // inconclusive while the answer sat in the very next loop. The same
+    // distinction is documented in CLAUDE.md and has shipped as a defect twice.
+    const fin = (fx.body ?? []).filter(
+      (f) => f.event === event && (f.finished_provisional || f.finished)
+    );
+    console.log(`reconcile: ${fin.length} ended fixtures in GW${event}`);
+    let mismatched = 0;
+    for (const f of fin) {
+      const g = goalsByFixture(live.body, teamOfElement, [f]);
+      const byTeam = g.get(f.id) ?? new Map();
+      const lh = byTeam.get(f.team_h) ?? 0;
+      const la = byTeam.get(f.team_a) ?? 0;
+      const ok = lh === f.team_h_score && la === f.team_a_score;
+      if (!ok) mismatched++;
+      console.log(
+        `  ${`${teams.get(f.team_h)}-${teams.get(f.team_a)}`.padEnd(12)} | fx ${f.team_h_score}-${
+          f.team_a_score
+        } | live ${lh}-${la} | ${ok ? "match" : "MISMATCH"}`
+      );
+    }
+    console.log(
+      fin.length === 0
+        ? "  VERDICT: no ended fixtures yet — inconclusive."
+        : mismatched === 0
+          ? `  VERDICT: the arithmetic reproduces every finished score (${fin.length}/${fin.length}). Only freshness is left to prove.`
+          : `  VERDICT: BROKEN — ${mismatched}/${fin.length} do not reconcile. Deriving the score is not viable.`
+    );
+  }
+
   const started = Date.now();
   while (Date.now() - started < RUN_MS) {
-    const [fx, live] = await Promise.all([get("fixtures/"), get(`event/${event}/live/`)]);
+    ({ fx, live } = await both());
     const wall = hhmmss(Date.now());
     const inPlay = (fx.body ?? []).filter((f) => f.event === event && f.started && !f.finished);
     if (inPlay.length === 0) {
       console.log(`${wall} | nothing in play`);
     }
-    // Goals per fixture per side, from `explain`. A goal counts for the
-    // scorer's own club; an own goal counts for the opponent.
-    const goals = new Map(); // fixtureId -> Map(teamId -> goals)
-    for (const el of live.body?.elements ?? []) {
-      for (const ex of el.explain ?? []) {
-        const club = teamOfElement.get(el.id);
-        if (club == null) continue;
-        const f = inPlay.find((x) => x.id === ex.fixture);
-        if (!f) continue;
-        const other = f.team_h === club ? f.team_a : f.team_h;
-        let byTeam = goals.get(ex.fixture);
-        if (!byTeam) goals.set(ex.fixture, (byTeam = new Map()));
-        for (const st of ex.stats ?? []) {
-          if (st.identifier === "goals_scored") {
-            byTeam.set(club, (byTeam.get(club) ?? 0) + (st.value ?? 0));
-          } else if (st.identifier === "own_goals") {
-            byTeam.set(other, (byTeam.get(other) ?? 0) + (st.value ?? 0));
-          }
-        }
-      }
-    }
+    const goals = goalsByFixture(live.body, teamOfElement, inPlay);
     for (const f of inPlay) {
       const g = goals.get(f.id) ?? new Map();
       const lh = g.get(f.team_h) ?? 0;

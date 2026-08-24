@@ -2240,3 +2240,41 @@ describe("the squad view says whether a score is settled", () => {
     expect(strip(dash)).toMatch(/if \(!liveData \|\| currentEvent == null\) return undefined;/);
   });
 });
+
+describe("the score comes from the feed that knows a goal first", () => {
+  /*
+   * MEASURED (probe run 32766378058) on Fulham's equaliser against Chelsea:
+   * the live feed carried the goal for at least 80 seconds — four consecutive
+   * samples — before `fixtures/` did, and `fixtures/` only caught up when its
+   * 300-second cache window rolled over.
+   *
+   * Both render paths are pinned, because the card and the modal print the
+   * same scoreline independently and drift between them is the defect that
+   * produced the wrong-gameweek fixture label.
+   */
+  const strip = (t: string) =>
+    t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  it("derives the fixture card's score, falling back to the published one", () => {
+    const src = strip(read("LiveTab.tsx"));
+    expect(src).toContain("const derived = liveFixtureScore(live, f, elementById);");
+    expect(src).toContain("const hs = derived?.h ?? f.team_h_score ?? 0;");
+    expect(src).toContain("const as = derived?.a ?? f.team_a_score ?? 0;");
+  });
+
+  it("derives the match modal's score the same way", () => {
+    const src = strip(read("MatchModal.tsx"));
+    expect(src).toContain("liveFixtureScore(live, fixture,");
+    expect(src).toContain("const hs = derived?.h ?? fixture.team_h_score ?? 0;");
+    expect(src).toContain("const as = derived?.a ?? fixture.team_a_score ?? 0;");
+  });
+
+  it("never takes a max with the published score", () => {
+    // `matchMinute` does that with the clock and is right to: minutes only
+    // increase. Goals do not — VAR takes them away, and a max would make a
+    // disallowed goal permanent.
+    for (const f of ["LiveTab.tsx", "MatchModal.tsx"]) {
+      expect(strip(read(f))).not.toMatch(/Math\.max\([^)]*team_[ha]_score/);
+    }
+  });
+});

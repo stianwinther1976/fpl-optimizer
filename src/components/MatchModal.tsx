@@ -1,7 +1,13 @@
 "use client";
 
 import type { Element, EventLive, Fixture, Team } from "@/lib/types";
-import { fixtureLines, isInPlay, liveMatchMinutes, matchMinute } from "@/lib/live";
+import {
+  fixtureLines,
+  isInPlay,
+  liveFixtureScore,
+  liveMatchMinutes,
+  matchMinute,
+} from "@/lib/live";
 import { kickoffLabel } from "@/lib/display";
 import { PlayerAvatar } from "./Pitch";
 import Sheet, { SheetClose } from "./Sheet";
@@ -48,8 +54,10 @@ export default function MatchModal({
     )
     .slice(0, 6);
 
-  const hs = fixture.team_h_score ?? 0;
-  const as = fixture.team_a_score ?? 0;
+  // The live feed carries a goal ahead of `fixtures/` — see `liveFixtureScore`.
+  const derived = liveFixtureScore(live, fixture, new Map(elements.map((e) => [e.id, e])));
+  const hs = derived?.h ?? fixture.team_h_score ?? 0;
+  const as = derived?.a ?? fixture.team_a_score ?? 0;
   const hClass = !fixture.started ? "" : hs > as ? "text-accent" : hs < as ? "text-danger" : "text-warn";
   const aClass = !fixture.started ? "" : as > hs ? "text-accent" : as < hs ? "text-danger" : "text-warn";
 

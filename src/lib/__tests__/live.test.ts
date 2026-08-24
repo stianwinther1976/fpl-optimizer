@@ -10,6 +10,7 @@ import {
   squadMatchState,
   playerMatchStatus,
   liveMatchMinutes,
+  liveFixtureScore,
   feedStallMs,
   advanceFeedWatch,
   liveSignature,
@@ -1502,5 +1503,80 @@ describe("playerMatchStatus — where one player is in his gameweek", () => {
   it("treats a non-numeric minutes off the network as zero", () => {
     expect(playerMatchStatus([done], "90" as unknown as number)).toEqual({ state: "dnp" });
     expect(playerMatchStatus([done], undefined)).toEqual({ state: "dnp" });
+  });
+});
+
+describe("liveFixtureScore — the live feed knows a goal first", () => {
+  const F = { id: 7, team_h: 1, team_a: 2 } as Fixture;
+  const els = new Map<number, Element>([
+    [10, makeElement({ id: 10, team: 1 })],
+    [11, makeElement({ id: 11, team: 1 })],
+    [20, makeElement({ id: 20, team: 2 })],
+  ]);
+  const el = (id: number, fixture: number, stats: { identifier: string; value: number }[]) =>
+    ({ id, stats: { minutes: 90 }, explain: [{ fixture, stats }] }) as unknown as
+      EventLive["elements"][number];
+  const live = (e: EventLive["elements"]) => ({ elements: e }) as EventLive;
+
+  it("credits a goal to the scorer's own club", () => {
+    const l = live([el(10, 7, [{ identifier: "goals_scored", value: 1 }])]);
+    expect(liveFixtureScore(l, F, els)).toEqual({ h: 1, a: 0 });
+  });
+
+  it("credits an OWN goal to the opponent", () => {
+    // The term a naive sum gets wrong, and the reason the reconciliation pass
+    // against nine finished fixtures was worth running.
+    const l = live([el(10, 7, [{ identifier: "own_goals", value: 1 }])]);
+    expect(liveFixtureScore(l, F, els)).toEqual({ h: 0, a: 1 });
+    const away = live([el(20, 7, [{ identifier: "own_goals", value: 1 }])]);
+    expect(liveFixtureScore(away, F, els)).toEqual({ h: 1, a: 0 });
+  });
+
+  it("adds up several scorers on the same side", () => {
+    const l = live([
+      el(10, 7, [{ identifier: "goals_scored", value: 2 }]),
+      el(11, 7, [{ identifier: "goals_scored", value: 1 }]),
+      el(20, 7, [{ identifier: "goals_scored", value: 1 }]),
+    ]);
+    expect(liveFixtureScore(l, F, els)).toEqual({ h: 3, a: 1 });
+  });
+
+  it("is NULL when the feed has said nothing about this fixture", () => {
+    /*
+     * An empty sum is 0-0, which would ERASE a real scoreline rather than
+     * defer to it. `explain` is empty for a match FPL has not pushed stats for
+     * yet — the same trap `provisionalBonus` documents.
+     */
+    expect(liveFixtureScore(live([]), F, els)).toBeNull();
+    expect(liveFixtureScore(null, F, els)).toBeNull();
+    expect(liveFixtureScore(live([el(10, 99, [])]), F, els)).toBeNull();
+  });
+
+  it("returns 0-0 once the feed HAS spoken and nobody has scored", () => {
+    // Distinct from null: this is a real goalless scoreline, not an absence.
+    expect(liveFixtureScore(live([el(10, 7, [{ identifier: "minutes", value: 20 }])]), F, els))
+      .toEqual({ h: 0, a: 0 });
+  });
+
+  it("ignores other fixtures in the same gameweek", () => {
+    const l = live([
+      el(10, 7, [{ identifier: "goals_scored", value: 1 }]),
+      el(20, 8, [{ identifier: "goals_scored", value: 5 }]),
+    ]);
+    expect(liveFixtureScore(l, F, els)).toEqual({ h: 1, a: 0 });
+  });
+
+  it("survives a non-numeric value off the network", () => {
+    const l = live([el(10, 7, [{ identifier: "goals_scored", value: "2" as unknown as number }])]);
+    expect(liveFixtureScore(l, F, els)).toEqual({ h: 0, a: 0 });
+  });
+
+  it("can go DOWN, because VAR takes goals away", () => {
+    // The reason this is not `Math.max` with the published score, the way
+    // `matchMinute` treats the clock. Minutes only increase; goals do not.
+    const before = live([el(10, 7, [{ identifier: "goals_scored", value: 1 }])]);
+    const after = live([el(10, 7, [{ identifier: "goals_scored", value: 0 }])]);
+    expect(liveFixtureScore(before, F, els)).toEqual({ h: 1, a: 0 });
+    expect(liveFixtureScore(after, F, els)).toEqual({ h: 0, a: 0 });
   });
 });

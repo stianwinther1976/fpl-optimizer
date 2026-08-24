@@ -222,6 +222,36 @@ starting or benched, and `projectAll` applies it last. Two things about it:
     `event_transfers_cost` is the exception, being fixed once the deadline
     passes.
 
+- **A score derived from `explain` reproduces `fixtures/` exactly.** Summing
+  `goals_scored` per player through `explain[].fixture`, with `own_goals`
+  counted against the scorer's OWN side, matched `team_h_score`/`team_a_score`
+  on all nine of GW1's played fixtures — 25 goals, including a 0-1, a 2-2 and a
+  4-0 — on every one of 15 consecutive samples (probe run 32661146740,
+  `scripts/snapshot/score-probe.mjs`).
+
+  **And it is fresher.** Measured on Fulham's equaliser against Chelsea (probe
+  run 32766378058), sampling both feeds every 20 s:
+
+  | Wall | `fixtures/` | live-derived | `fixtures/` age |
+  |---|---|---|---|
+  | 19:26:19 | 0-1 | **1-1** | 224 s |
+  | 19:26:39 | 0-1 | **1-1** | 244 s |
+  | 19:26:59 | 0-1 | **1-1** | 264 s |
+  | 19:27:19 | 0-1 | **1-1** | 284 s |
+  | 19:27:39 | 1-1 | 1-1 | 4 s |
+
+  The live feed had the goal at least 80 seconds early — four consecutive
+  samples — and `fixtures/` only caught up at the instant its 300-second window
+  rolled. So `liveFixtureScore` is what the fixture cards and the match modal
+  read, with the published score as the fallback.
+
+  Two things it does NOT do, both deliberate. It does not take a `Math.max`
+  with the published score the way `matchMinute` does with the clock: minutes
+  only increase, goals do not, and a max would make a VAR-disallowed goal
+  permanent. And it returns **null**, not 0-0, until `explain` carries a row
+  for that fixture — an empty sum would erase a real scoreline rather than
+  defer to it, which is the trap `provisionalBonus` documents.
+
 - **`entry.summary_event_points` is live and exact, but excludes provisional
   bonus.** It equalled the effective XI's `total_points` summed off
   `event/{gw}/live/` with the captain doubled, on every sample of all three

@@ -7,6 +7,7 @@ import {
   bandMedianScore,
   matchMinute,
   liveMatchMinutes,
+  liveFixtureScore,
   liveEntryScore,
   projectAutoSubs,
   provisionalBonus,
@@ -606,8 +607,16 @@ export default function LiveTab({
               data behind it is current.
             */
             const liveNow = isInPlay(f) && !stale;
-            const hs = f.team_h_score ?? 0;
-            const as = f.team_a_score ?? 0;
+            /*
+              The live feed carries a goal up to five minutes before
+              `fixtures/` does — measured at 80 seconds on Fulham's equaliser,
+              bounded above by the 300s FPL holds `fixtures/` for. See
+              `liveFixtureScore`; it returns null until the feed has said
+              anything about the fixture, and then the published score stands.
+            */
+            const derived = liveFixtureScore(live, f, elementById);
+            const hs = derived?.h ?? f.team_h_score ?? 0;
+            const as = derived?.a ?? f.team_a_score ?? 0;
             // Result colors (live and FT): winner green, loser red, draw yellow.
             const hClass = !f.started
               ? ""

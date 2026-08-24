@@ -852,3 +852,66 @@ export function playerMatchStatus(
   if (todo) return { state: "todo", fixture: todo };
   return mins > 0 ? { state: "done", minutes: mins } : { state: "dnp" };
 }
+
+/**
+ * A fixture's score derived from the LIVE feed rather than from `fixtures/`.
+ *
+ * MEASURED, probe run 32766378058, on Fulham's equaliser against Chelsea:
+ *
+ *   19:26:19  fixtures 0-1   live-derived 1-1   fx age 224s, live age 56s
+ *   19:26:39  fixtures 0-1   live-derived 1-1   fx age 244s
+ *   19:26:59  fixtures 0-1   live-derived 1-1   fx age 264s
+ *   19:27:19  fixtures 0-1   live-derived 1-1   fx age 284s
+ *   19:27:39  fixtures 1-1   live-derived 1-1   fx age 4s   <- window turned over
+ *
+ * The live feed carried the goal for at least 80 seconds — four consecutive
+ * samples — before `fixtures/` did, and `fixtures/` only caught up at the
+ * instant its 300-second cache window rolled. That is the whole gap: FPL holds
+ * `fixtures/` for 300s and `event/{gw}/live/` for about 90.
+ *
+ * The arithmetic was validated separately, on the nine played GW1 fixtures —
+ * 25 goals including a 0-1, a 2-2 and a 4-0 — reproducing `team_h_score` and
+ * `team_a_score` exactly on every sample (run 32661146740). `own_goals` counts
+ * for the OPPONENT, which is the term a naive sum gets wrong.
+ *
+ * NOT `Math.max` WITH THE PUBLISHED SCORE, which is what `matchMinute` does
+ * with the clock and would be wrong here. Minutes only ever increase; goals do
+ * not — VAR takes them away. A max would make a disallowed goal permanent.
+ *
+ * NULL UNTIL THE FEED HAS SAID ANYTHING ABOUT THIS FIXTURE. `explain` is empty
+ * for a match FPL has not pushed stats for yet, and an empty sum is 0-0 — which
+ * would erase a real scoreline rather than defer to it. The same trap
+ * `provisionalBonus` documents: "no rows for this fixture" is not "nothing has
+ * happened". The caller falls back to the published score.
+ */
+export function liveFixtureScore(
+  live: EventLive | null,
+  fixture: Fixture,
+  elements: Map<number, Element>
+): { h: number; a: number } | null {
+  if (!live) return null;
+  let sawFixture = false;
+  let h = 0;
+  let a = 0;
+  for (const el of live.elements ?? []) {
+    const club = elements.get(el.id)?.team;
+    if (club == null) continue;
+    for (const leg of el.explain ?? []) {
+      if (leg.fixture !== fixture.id) continue;
+      sawFixture = true;
+      const own = club === fixture.team_h;
+      for (const st of leg.stats ?? []) {
+        const v = typeof st.value === "number" && Number.isFinite(st.value) ? st.value : 0;
+        // A goal counts for the scorer's club; an own goal for the opponent.
+        if (st.identifier === "goals_scored") {
+          if (own) h += v;
+          else a += v;
+        } else if (st.identifier === "own_goals") {
+          if (own) a += v;
+          else h += v;
+        }
+      }
+    }
+  }
+  return sawFixture ? { h, a } : null;
+}
