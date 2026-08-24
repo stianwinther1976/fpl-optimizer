@@ -222,6 +222,19 @@ starting or benched, and `projectAll` applies it last. Two things about it:
     `event_transfers_cost` is the exception, being fixed once the deadline
     passes.
 
+- **A score derived from `explain` reproduces `fixtures/` exactly.** Summing
+  `goals_scored` per player through `explain[].fixture`, with `own_goals`
+  counted against the scorer's OWN side, matched `team_h_score`/`team_a_score`
+  on all nine of GW1's played fixtures — 25 goals, including a 0-1, a 2-2 and a
+  4-0 — on every one of 15 consecutive samples (probe run 32661146740,
+  `scripts/snapshot/score-probe.mjs`).
+
+  So the arithmetic is sound. What is NOT measured is whether it is FRESHER
+  than `fixtures/` during a live match, which is the only reason to switch: at
+  the time of that run every match had ended, so both sides were static. Until
+  someone samples a goal going in, the score stays on `fixtures/` and inherits
+  its 300-second window.
+
 - **`entry.summary_event_points` is live and exact, but excludes provisional
   bonus.** It equalled the effective XI's `total_points` summed off
   `event/{gw}/live/` with the captain doubled, on every sample of all three

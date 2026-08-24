@@ -45,6 +45,12 @@ jobs:
       # Five minutes. Run it while a match WITH GOALS IN IT is actually going,
       # or it has nothing to compare and says so.
       - name: Compare the fixtures score with the live-derived one
+        env:
+          # Default five minutes. Raise it via the SCORE_RUN_MS repository
+          # variable to cover a whole half when a match with goals is on.
+          # 22 minutes: long enough to sit through a goal, short enough that
+          # the job ends and its log becomes readable inside the 30-minute cap.
+          SCORE_RUN_MS: ${{ vars.SCORE_RUN_MS || '1320000' }}
         run: node scripts/snapshot/score-probe.mjs
 
       # Opt-in, for the same log-readability reason: set the PROBE_LONG
