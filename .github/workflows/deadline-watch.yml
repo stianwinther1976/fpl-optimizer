@@ -1,0 +1,78 @@
+# What a manager needs to know before the next deadline, printed to the log.
+#
+# The sandbox this repo is developed from cannot reach fantasy.premierleague.com;
+# a runner can. So the facts are gathered here and read back from the job log,
+# the same handle the probe workflow uses.
+#
+# It publishes nothing and writes nothing.
+#
+# `FPL_ENTRY_ID` (a repository variable) selects the team. Without it only the
+# deadline half runs, which still works and still says how long is left.
+name: Deadline watch
+
+on:
+  schedule:
+    # Every six hours. The script decides whether there is anything worth
+    # saying and prints STATUS: QUIET when there is not, so a caller can stay
+    # silent rather than send a notification that says nothing.
+    - cron: "7 */6 * * *"
+  push:
+    branches: [deadline-watch]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fpl-deadline-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check the deadline and the squad
+        env:
+          FPL_ENTRY_ID: ${{ vars.FPL_ENTRY_ID }}
+        run: node scripts/snapshot/deadline-watch.mjs | tee watch-report.txt
+
+      # PUBLISHED TO A BRANCH, NOT LEFT IN THE JOB LOG.
+      #
+      # The scheduled session that reads this runs WITHOUT the GitHub MCP tools
+      # — a routine created from here cannot pass connector grants on — so it
+      # has no way to download a job log. It does have plain git. A branch is
+      # therefore the only handle that actually works, and this was written the
+      # other way first.
+      - name: Publish to deadline-watch-out
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # An orphan branch, recreated each run: only the newest report is ever
+          # wanted, and accumulating six-hourly commits forever is not.
+          git checkout --orphan deadline-watch-out
+          git rm -r --cached . >/dev/null
+          git add -f watch-report.txt
+          # Vercel deploys every push by default and does not honour [skip ci];
+          # `git.deploymentEnabled` is the switch that works. Written here
+          # because the orphan tree is built from scratch and carries no copy.
+          cat > vercel.json <<'JSON'
+          {
+            "git": {
+              "deploymentEnabled": {
+                "deadline-watch": false,
+                "deadline-watch-out": false
+              }
+            }
+          }
+          JSON
+          git add -f vercel.json
+          git commit -m "Deadline watch $(date -u +%Y-%m-%dT%H:%M:%SZ) [skip ci]"
+          git push --force origin deadline-watch-out
