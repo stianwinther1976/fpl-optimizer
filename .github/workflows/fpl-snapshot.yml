@@ -60,7 +60,9 @@ jobs:
             "git": {
               "deploymentEnabled": {
                 "data-snapshot": false,
-                "fpl-snapshot-out": false
+                "fpl-snapshot-out": false,
+                "deadline-watch": false,
+                "deadline-watch-out": false
               }
             }
           }
