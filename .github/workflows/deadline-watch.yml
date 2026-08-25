@@ -1,0 +1,42 @@
+# What a manager needs to know before the next deadline, printed to the log.
+#
+# The sandbox this repo is developed from cannot reach fantasy.premierleague.com;
+# a runner can. So the facts are gathered here and read back from the job log,
+# the same handle the probe workflow uses.
+#
+# It publishes nothing and writes nothing.
+#
+# `FPL_ENTRY_ID` (a repository variable) selects the team. Without it only the
+# deadline half runs, which still works and still says how long is left.
+name: Deadline watch
+
+on:
+  schedule:
+    # Every six hours. The script decides whether there is anything worth
+    # saying and prints STATUS: QUIET when there is not, so a caller can stay
+    # silent rather than send a notification that says nothing.
+    - cron: "7 */6 * * *"
+  push:
+    branches: [deadline-watch]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fpl-deadline-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check the deadline and the squad
+        env:
+          FPL_ENTRY_ID: ${{ vars.FPL_ENTRY_ID }}
+        run: node scripts/snapshot/deadline-watch.mjs

@@ -2103,18 +2103,27 @@ describe("the probe workflow points at scripts that exist", () => {
    *
    * Cheap to check here, and the only place that can catch it before a push.
    */
-  const wf = fs.readFileSync(
-    path.resolve(__dirname, "../../../.github/workflows/clock-probe.yml"),
-    "utf8"
-  );
   const root = path.resolve(__dirname, "../../..");
+  const wfDir = path.join(root, ".github/workflows");
+  const wfFiles = fs.readdirSync(wfDir).filter((f) => f.endsWith(".yml"));
+  const wf = fs.readFileSync(path.join(wfDir, "clock-probe.yml"), "utf8");
 
-  it("every `run: node scripts/...` target is a real file", () => {
-    const targets = [...wf.matchAll(/run: node (scripts\/\S+)/g)].map((m) => m[1]);
-    expect(targets.length).toBeGreaterThan(0);
-    for (const t of targets) {
-      expect(fs.existsSync(path.join(root, t)), `${t} is referenced but missing`).toBe(true);
+  it("every `run: node scripts/...` target is a real file, in EVERY workflow", () => {
+    /*
+     * Every workflow, not just this one. Pinning a single file is how the next
+     * workflow added ships a step naming a script that is not in the tree —
+     * which is exactly what happened here once already, minutes after a push,
+     * as a shell error instead of a measurement.
+     */
+    let checked = 0;
+    for (const f of wfFiles) {
+      const src = fs.readFileSync(path.join(wfDir, f), "utf8");
+      for (const m of src.matchAll(/run: node (scripts\/\S+)/g)) {
+        checked++;
+        expect(fs.existsSync(path.join(root, m[1])), `${f}: ${m[1]} is missing`).toBe(true);
+      }
     }
+    expect(checked).toBeGreaterThan(0);
   });
 
   it("keeps the quick steps ahead of the opt-in slow ones", () => {
