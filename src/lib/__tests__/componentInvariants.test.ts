@@ -2287,3 +2287,34 @@ describe("the score comes from the feed that knows a goal first", () => {
     }
   });
 });
+
+describe("the panel says what it turned down, and the sheet says what is legal", () => {
+  /*
+   * A reader asked why the planner would not take an Arsenal defender until
+   * GW4. The answer was a RULE — one transfer is position-for-position — and
+   * nothing on screen said so. Two additions, and each has to reach a render
+   * site or it is dead code with a passing unit test.
+   */
+  const strip = (t: string) =>
+    t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  it("renders the runner-up move on each planned gameweek", () => {
+    const src = strip(read("OptimizePanel.tsx"));
+    expect(src).toContain("st.alternative");
+    expect(src).toMatch(/Runner-up:/);
+    // Priced as a cost over the plan, not as this week's difference.
+    expect(src).toMatch(/st\.alternative\.costPlain\.toFixed\(1\)/);
+  });
+
+  it("asks the rules why a player cannot come in, and only for today's squad", () => {
+    const modal = strip(read("PlayerModal.tsx"));
+    expect(modal).toContain("transferBlockers(element, squad, bank)");
+    // No squad handed over means no box at all — the sheet opens from the time
+    // machine and the drafter too, where the question is meaningless.
+    expect(modal).toContain("squad ? transferBlockers(element, squad, bank) : null");
+
+    const dash = strip(read("Dashboard.tsx"));
+    expect(dash).toMatch(/tab === "team" && hist\s*\?\s*undefined/);
+    expect(dash).toContain("sell: p.sellPrice");
+  });
+});

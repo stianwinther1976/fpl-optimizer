@@ -881,6 +881,27 @@ export default function OptimizePanel({
                   XI projects <b className="text-foreground">{st.xi.totalXp.toFixed(1)} pts</b>
                   {st.xi.captain && <> · captain {st.xi.captain.element.web_name}</>}
                 </div>
+                {/*
+                  WHAT IT TURNED DOWN. The panel printed only what the planner
+                  would do, so "why not X here" had to be put to a person — and
+                  was. The cost prices the WHOLE horizon, not this week, because
+                  a move that looks worse now and better by the last gameweek is
+                  exactly what the planner exists to find. See
+                  `GwPlanStep.alternative`.
+                */}
+                {st.alternative && (
+                  <div className="mt-1 text-[11px] text-muted">
+                    Runner-up:{" "}
+                    {st.alternative.transfers.length === 0
+                      ? "no transfer"
+                      : st.alternative.transfers
+                          .map((m) => `${m.out.web_name} → ${m.in.web_name}`)
+                          .join(", ")}{" "}
+                    <span className="text-foreground">
+                      (−{st.alternative.costPlain.toFixed(1)} pts over the plan)
+                    </span>
+                  </div>
+                )}
               </div>
             ))}
             <p className="text-xs text-muted">

@@ -975,6 +975,72 @@ function totalValue(owned: OwnedPlayer[], bank: number): number {
 /** Greedy + repair: best 15-man squad within a budget.
  * `scoreOf` ranks players — defaults to discounted horizon xP (permanent moves
  * like Wildcard); pass a single-GW scorer for Free Hit. */
+/**
+ * Why a player cannot be brought in with one free transfer, or nothing at all
+ * if he can.
+ *
+ * ASKED FOR AFTER THE PLANNER PUT AN ARSENAL DEFENDER FOUR GAMEWEEKS AWAY and
+ * the panel gave no way to find out why not sooner. The answer was a rule, not
+ * a preference — a single transfer is position-for-position — and a reader had
+ * to ask a person to learn it.
+ *
+ * Every reason here is a RULE OR AN ARITHMETIC FACT, never the model's opinion.
+ * "He is not worth it" is what the projection is for and is not a blocker; this
+ * answers the narrower and more useful question of whether the move is legal
+ * and affordable at all.
+ *
+ * The blockers are ordered by how conclusive they are: owning him already ends
+ * the question, and the club limit binds regardless of money. Budget is last
+ * because it is the one a reader can do something about — sell someone dearer.
+ *
+ * `shortBy` is in TENTHS, like every other price in this API.
+ */
+export type TransferBlocker =
+  | { kind: "owned" }
+  | { kind: "unavailable" }
+  | { kind: "club"; teamId: number }
+  | { kind: "budget"; shortBy: number };
+
+export function transferBlockers(
+  inEl: Element,
+  squad: { element: Element; sell: number }[],
+  bank: number
+): TransferBlocker[] {
+  if (squad.some((p) => p.element.id === inEl.id)) return [{ kind: "owned" }];
+  // 'u' is FPL's "no longer in the game" — transferred abroad, contract gone.
+  if (inEl.status === "u") return [{ kind: "unavailable" }];
+
+  /*
+   * ONE TRANSFER IS POSITION-FOR-POSITION. The squad must hold 2/5/5/3 at all
+   * times, so the only players who can make room are the ones playing the same
+   * position. That single line is the whole answer to "why not a defender for
+   * my midfielder", and it is a rule of the game, not a choice made here.
+   */
+  const swappable = squad.filter((p) => p.element.element_type === inEl.element_type);
+  const clubCount = squad.filter((p) => p.element.team === inEl.team).length;
+
+  let clubBlocked = 0;
+  let shortBy = Infinity;
+  for (const out of swappable) {
+    // Selling a player from the incoming player's own club frees a slot.
+    const after = clubCount - (out.element.team === inEl.team ? 1 : 0);
+    if (after >= MAX_PER_CLUB) {
+      clubBlocked++;
+      continue;
+    }
+    const gap = inEl.now_cost - out.sell - bank;
+    if (gap <= 0) return [];
+    if (gap < shortBy) shortBy = gap;
+  }
+
+  // Every same-position swap ran into the club limit, so money is irrelevant.
+  if (clubBlocked === swappable.length) return [{ kind: "club", teamId: inEl.team }];
+  const out: TransferBlocker[] = [];
+  if (clubBlocked > 0) out.push({ kind: "club", teamId: inEl.team });
+  if (Number.isFinite(shortBy)) out.push({ kind: "budget", shortBy });
+  return out;
+}
+
 export function buildSquadWithinBudget(
   elements: Element[],
   xp: Map<number, PlayerXp>,
@@ -1728,6 +1794,25 @@ export interface GwPlanStep {
   bankAfter: number; // tenths
   xi: BestXi; // best XI for this GW after the moves
   note?: string; // e.g. "double gameweek"
+  /**
+   * The best surviving plan that does something ELSE in this gameweek, and
+   * what it costs over the whole horizon.
+   *
+   * ASKED FOR, AND THE PANEL COULD NOT ANSWER IT. It printed what the planner
+   * would do without any way to see what it turned down, so "why not X here"
+   * had to be put to a person.
+   *
+   * It is a WHOLE-PLAN counterfactual, not a one-week one: the number is the
+   * difference in plain horizon points between this plan and the best one in
+   * the final beam whose move at this gameweek differs. A move that looks
+   * worse this week and better by GW6 is exactly what the planner exists to
+   * find, so comparing only the week in hand would misreport its reasoning.
+   *
+   * Absent when the search kept nothing that differs here — with a beam of six
+   * that happens, and claiming "there was no alternative" would be a stronger
+   * statement than the search can support. It means only that none survived.
+   */
+  alternative?: { transfers: TransferMove[]; costPlain: number };
 }
 
 export interface SeasonPlan {
@@ -1984,7 +2069,34 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
   }
 
   const best = beam[0];
-  const steps: GwPlanStep[] = best.steps.map((st) => {
+
+  /*
+   * The plain horizon value of any surviving state, for the counterfactual on
+   * each step. Memoised because every step asks for the same handful of states.
+   * `beamWidth` is 6, so this is at most six reconstructions of six gameweeks.
+   */
+  const plainCache = new Map<PlanState, number>();
+  const plainOf = (st: PlanState): number => {
+    const hit = plainCache.get(st);
+    if (hit !== undefined) return hit;
+    let sum = 0;
+    for (const s of st.steps) sum += xiAt(reconstructSquad(owned, st.steps, s.gw), s.gw).totalXp;
+    const v = sum - st.steps.reduce((a, b) => a + b.hit, 0);
+    plainCache.set(st, v);
+    return v;
+  };
+  /** Two move sets are the same decision if they swap the same players. */
+  const sameMoves = (a: TransferMove[], b: TransferMove[]) => {
+    if (a.length !== b.length) return false;
+    const key = (m: TransferMove[]) =>
+      m
+        .map((x) => `${x.out.id}>${x.in.id}`)
+        .sort()
+        .join("|");
+    return key(a) === key(b);
+  };
+
+  const steps: GwPlanStep[] = best.steps.map((st, i) => {
     const squadAt = reconstructSquad(owned, best.steps, st.gw);
     const byTeam = fxIndex.get(st.gw);
     let note: string | undefined;
@@ -1999,6 +2111,23 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
       if (dbl > 0) note = `double gameweek for ${dbl} of your players`;
       else if (blank >= 3) note = `${blank} of your players blank`;
     }
+    /*
+     * The best surviving plan that decides this gameweek differently. `beam` is
+     * already sorted best-first, so the first match is the strongest rival —
+     * and because it is a complete plan, the difference prices the whole
+     * horizon rather than just this week. See `GwPlanStep.alternative`.
+     */
+    const rival = beam.find((cand) => {
+      const other = cand.steps[i];
+      return other != null && other.gw === st.gw && !sameMoves(other.moves, st.moves);
+    });
+    const alternative =
+      rival == null
+        ? undefined
+        : {
+            transfers: rival.steps[i].moves,
+            costPlain: plainOf(best) - plainOf(rival),
+          };
     return {
       gw: st.gw,
       transfers: st.moves,
@@ -2007,6 +2136,7 @@ export function planHorizon(input: PlannerInput): SeasonPlan {
       bankAfter: st.bankAfter,
       xi: xiAt(squadAt, st.gw),
       note,
+      alternative,
     };
   });
   const totalHits = steps.reduce((s, st) => s + st.hit, 0);

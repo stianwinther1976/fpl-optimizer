@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { makeMockBootstrap, makeMockFixtures, makeMockOwned } from "./mockdata";
+import { makeMockBootstrap, makeMockFixtures, makeMockOwned, makeElement } from "./mockdata";
 import { makeDemoUniverse } from "../demo";
 import {
   optimize,
@@ -13,6 +13,7 @@ import {
   type LaunchVariant,
   type BestXi,
   buildSquadWithinBudget,
+  transferBlockers,
   buildBenchAwareSquad,
   benchAwarePool,
   benchAwareScore,
@@ -2234,5 +2235,132 @@ describe("the season planner charges a hit at 4, whenever it is taken", () => {
     expect(p.totalXp).not.toBeCloseTo(p.plainTotalXp, 1);
     expect(p.keepXp).not.toBeCloseTo(p.plainKeepXp, 1);
     expect(p.gainVsKeep).toBeCloseTo(p.totalXp - p.keepXp, 9);
+  });
+});
+
+describe("transferBlockers — why a player cannot come in", () => {
+  const el = (over: Partial<Element>): Element =>
+    makeElement({ id: 1, element_type: 3, team: 1, now_cost: 60, status: "a", ...over });
+  const own = (e: Element, sell = e.now_cost) => ({ element: e, sell });
+
+  // Five midfielders and five defenders, all £6.0m, spread across clubs.
+  const squad = [
+    ...[1, 2, 3, 4, 5].map((i) => own(el({ id: i, element_type: 3, team: i }))),
+    ...[6, 7, 8, 9, 10].map((i) => own(el({ id: i, element_type: 2, team: i }))),
+  ];
+
+  it("says nothing when a legal, affordable swap exists", () => {
+    expect(transferBlockers(el({ id: 99, element_type: 3, team: 19 }), squad, 0)).toEqual([]);
+  });
+
+  it("reports owning him already, and stops there", () => {
+    expect(transferBlockers(squad[0].element, squad, 999)).toEqual([{ kind: "owned" }]);
+  });
+
+  it("reports a player FPL has removed from the game", () => {
+    const gone = el({ id: 99, element_type: 3, team: 19, status: "u" });
+    expect(transferBlockers(gone, squad, 999)).toEqual([{ kind: "unavailable" }]);
+  });
+
+  it("reports the club limit when three of his club are already owned", () => {
+    /*
+     * The limit binds regardless of money, so it is reported alone. Three
+     * midfielders from club 7 here, and the incoming player is a DEFENDER from
+     * club 7 — so no same-position sale can free the slot.
+     */
+    const three = [
+      ...[1, 2, 3].map((i) => own(el({ id: i, element_type: 3, team: 7 }))),
+      ...[4, 5].map((i) => own(el({ id: i, element_type: 3, team: i }))),
+      ...[6, 7, 8, 9, 10].map((i) => own(el({ id: i, element_type: 2, team: i + 10 }))),
+    ];
+    expect(transferBlockers(el({ id: 99, element_type: 2, team: 7 }), three, 999)).toEqual([
+      { kind: "club", teamId: 7 },
+    ]);
+  });
+
+  it("does NOT report the club limit when selling frees the slot", () => {
+    // Three from club 7, and the incoming player is one of that position — so
+    // selling one of them takes the count to two and the move is legal.
+    const three = [
+      ...[1, 2, 3].map((i) => own(el({ id: i, element_type: 3, team: 7 }))),
+      ...[4, 5].map((i) => own(el({ id: i, element_type: 3, team: i }))),
+      ...[6, 7, 8, 9, 10].map((i) => own(el({ id: i, element_type: 2, team: i + 10 }))),
+    ];
+    expect(transferBlockers(el({ id: 99, element_type: 3, team: 7 }), three, 0)).toEqual([]);
+  });
+
+  it("reports how much is missing, in tenths, against the CHEAPEST route", () => {
+    // Every same-position player sells for 60; he costs 75; the bank has 5.
+    // The gap is 75 - 60 - 5 = 10, i.e. £1.0m.
+    const dear = el({ id: 99, element_type: 3, team: 19, now_cost: 75 });
+    expect(transferBlockers(dear, squad, 5)).toEqual([{ kind: "budget", shortBy: 10 }]);
+  });
+
+  it("measures the gap against the DEAREST sale available", () => {
+    // One midfielder worth 80 makes an 85 signing only 5 short, not 25.
+    const mixed = [own(el({ id: 1, element_type: 3, team: 1, now_cost: 80 })), ...squad.slice(1)];
+    const dear = el({ id: 99, element_type: 3, team: 19, now_cost: 85 });
+    expect(transferBlockers(dear, mixed, 0)).toEqual([{ kind: "budget", shortBy: 5 }]);
+  });
+
+  it("counts the bank, and calls it clear once the bank covers the gap", () => {
+    const dear = el({ id: 99, element_type: 3, team: 19, now_cost: 75 });
+    expect(transferBlockers(dear, squad, 15)).toEqual([]);
+  });
+
+  it("never reports a position blocker, because it answers per position", () => {
+    // A defender is compared against the five defenders, never the midfielders.
+    // Nothing is "blocked by position"; the position simply decides who can go.
+    const cheapDef = el({ id: 99, element_type: 2, team: 19, now_cost: 40 });
+    expect(transferBlockers(cheapDef, squad, 0)).toEqual([]);
+  });
+});
+
+describe("planHorizon reports what it turned down", () => {
+  // The same universe the block above uses, so the two describe the same plan.
+  const plan = planHorizon({
+    bootstrap,
+    fixtures,
+    owned,
+    bank: 20,
+    freeTransfers: 2,
+    nextEvent: 11,
+    horizon: 5,
+  });
+
+  it("offers an alternative on at least one gameweek", () => {
+    // With a beam of six there is normally a rival plan; if there were never
+    // one this feature would be silently dead.
+    expect(plan.steps.some((s) => s.alternative != null)).toBe(true);
+  });
+
+  it("never offers the move it already chose as the alternative", () => {
+    for (const st of plan.steps) {
+      if (!st.alternative) continue;
+      const key = (m: typeof st.transfers) =>
+        m.map((x) => `${x.out.id}>${x.in.id}`).sort().join("|");
+      expect(key(st.alternative.transfers)).not.toBe(key(st.transfers));
+    }
+  });
+
+  it("prices the alternative as a cost, never as a gain", () => {
+    /*
+     * `beam` is sorted best-first and the chosen plan is `beam[0]`, so any
+     * rival is worth the same or less over the horizon. A negative cost would
+     * mean the panel had recommended the weaker plan — refutable from this
+     * alone, which is why it is asserted rather than assumed.
+     */
+    for (const st of plan.steps) {
+      if (!st.alternative) continue;
+      expect(st.alternative.costPlain).toBeGreaterThanOrEqual(-1e-9);
+    }
+  });
+
+  it("compares whole plans, not just the gameweek in hand", () => {
+    // A cost of exactly 0 on every step would mean the horizon was never
+    // summed — the difference would collapse to this week's XI alone.
+    const costs = plan.steps.filter((s) => s.alternative).map((s) => s.alternative!.costPlain);
+    expect(costs.length).toBeGreaterThan(0);
+    expect(costs.some((c) => c > 1e-9)).toBe(true);
   });
 });
