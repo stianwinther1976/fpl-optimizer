@@ -410,6 +410,27 @@ always render at 58'. `makeDemoUniverse(NOW)` builds it; tests use
   `NOTABLE` and `imminent` approximate. Take a mid-season snapshot with prices
   moving and look before building on any of it.
 
+  **And the optimizer deliberately does not use any of it. This is a decision,
+  not an omission.** `planHorizon` prices every move in the horizon at today's
+  `now_cost` and today's `sellPrice`; a grep of `optimizer.ts` for
+  `priceChange`, `cost_change` and `price_change` returns nothing, and that is
+  correct. The owner's reasoning, and it is the right one: nobody knows
+  tomorrow's prices. Forecasting them weeks out to decide a GW5 transfer would
+  put a guess inside the objective, where it becomes indistinguishable from the
+  projection and cannot be argued with on screen.
+
+  So the consequence is accepted rather than fixed: a plan made on Tuesday
+  assumes Tuesday's prices for a buy three gameweeks away, and re-planning on
+  Wednesday silently gives a different answer if a price moved. `now_cost`
+  comes off `bootstrap-static` on every load and `sellPrice` is derived from it,
+  so the re-plan is automatic and always current — it just does not explain
+  itself.
+
+  `priceTimingHint` is the one price-aware thing that ships, and its own comment
+  draws the line: "Timing, not selection". It says whether tonight or tomorrow
+  is the cheaper moment to make a move that has ALREADY been chosen. It does not
+  choose. Keep that separation if anything is added here.
+
 - **`dcPer90` divides by an arbitrarily small denominator.** Every other rate in
   `playerRates` goes through `shrunk90`; this one does not, so 5 defensive
   contributions in 20 minutes reads as 22.5 per 90. Low impact today because the
