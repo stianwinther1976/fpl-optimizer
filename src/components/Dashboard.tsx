@@ -1451,6 +1451,15 @@ export default function Dashboard({
           fixtures={data.fixtures}
           teams={teams}
           nextEvent={data.squad?.nextEvent ?? null}
+          /* Only for TODAY's squad. In the time machine the fifteen on screen
+             are a past gameweek's, and "you can't afford him" would be a
+             statement about a transfer window that closed. */
+          squad={
+            tab === "team" && hist
+              ? undefined
+              : data.squad?.players.map((p) => ({ element: p.element, sell: p.sellPrice }))
+          }
+          bank={data.squad?.bank ?? 0}
           /* The card the reader tapped applies this; the sheet must agree. In
              the time machine the armband is that gameweek's, not today's. */
           /* The time machine's gameweek, so the sheet stops describing today

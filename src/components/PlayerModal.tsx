@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { api, currentFeed, type ElementSummary } from "@/lib/fpl";
 import type { Element, EventLive, Fixture, Team } from "@/lib/types";
-import { fmtPrice, POSITION_NAMES } from "@/lib/rules";
+import { fmtPrice, MAX_PER_CLUB, POSITION_NAMES } from "@/lib/rules";
+import { transferBlockers } from "@/lib/optimizer";
 import { teamFixtures } from "@/lib/xp";
 import { readPriceChange } from "@/lib/priceChange";
 import {
@@ -53,6 +54,8 @@ export default function PlayerModal({
   nextEvent = null,
   multiplier = 1,
   asOfGw = null,
+  squad,
+  bank = 0,
 }: {
   element: Element;
   team: Team | undefined;
@@ -63,6 +66,18 @@ export default function PlayerModal({
   fixtures?: Fixture[];
   teams?: Map<number, Team>;
   nextEvent?: number | null;
+  /**
+   * The reader's fifteen with their selling prices, so the sheet can say
+   * whether this player could be brought in at all.
+   *
+   * ASKED FOR AFTER THE PLANNER PUT AN ARSENAL DEFENDER FOUR GAMEWEEKS AWAY
+   * and there was no way to find out why not sooner. The answer was a rule —
+   * one transfer is position-for-position — and a reader had to ask a person
+   * to learn it. See `transferBlockers`.
+   */
+  squad?: { element: Element; sell: number }[];
+  /** Money in the bank, in tenths. */
+  bank?: number;
   /**
    * What this player's score is multiplied by in the reader's team this
    * gameweek — 2 for the captain, 3 under Triple Captain, 1 otherwise.
@@ -220,6 +235,13 @@ export default function PlayerModal({
   const startedCount = recent?.filter((r) => (r.starts ?? 0) > 0).length ?? 0;
 
   // Set-piece duty (public API: penalties + corner/free-kick order)
+  /*
+   * Only when the caller handed over a squad. The sheet is opened from places
+   * that have no notion of one — the time machine, the launch drafter — and a
+   * blank or wrong box there would be worse than silence.
+   */
+  const blockers = squad ? transferBlockers(element, squad, bank) : null;
+
   const duties: string[] = [];
   if (element.penalties_order === 1) duties.push("Penalties: 1st taker");
   else if (element.penalties_order === 2) duties.push("Penalties: 2nd taker");
@@ -259,6 +281,38 @@ export default function PlayerModal({
             </div>
             {asOfGw == null && element.news && (
               <div className="mt-1 text-xs text-warn">{element.news}</div>
+            )}
+            {/*
+              WHETHER HE CAN COME IN AT ALL, which is a rule question and not a
+              model one. A reader asked why the planner would not take an
+              Arsenal defender until GW4; the answer was that one transfer is
+              position-for-position, and there was nowhere on screen to learn
+              it. See `transferBlockers` — every reason it gives is a rule or an
+              arithmetic fact, never "he is not worth it", which is what the
+              projection above is for.
+            */}
+            {asOfGw == null && blockers != null && blockers.length > 0 && (
+              <div className="mt-1.5 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
+                <b>Can&apos;t transfer in with one move:</b>{" "}
+                {blockers
+                  .map((b) =>
+                    b.kind === "owned"
+                      ? "you already own him"
+                      : b.kind === "unavailable"
+                        ? "FPL has removed him from the game"
+                        : b.kind === "club"
+                          ? `you already have ${MAX_PER_CLUB} from ${teams?.get(b.teamId)?.name ?? "his club"}`
+                          : `you are £${fmtPrice(b.shortBy)}m short — sell a dearer ${POSITION_NAMES[element.element_type].toLowerCase()}, or bank the difference first`
+                  )
+                  .join("; ")}
+                {blockers.some((b) => b.kind === "budget") && (
+                  <div className="mt-1 opacity-80">
+                    One transfer swaps {POSITION_NAMES[element.element_type].toLowerCase()} for{" "}
+                    {POSITION_NAMES[element.element_type].toLowerCase()} — the squad must always
+                    hold 2 goalkeepers, 5 defenders, 5 midfielders and 3 forwards.
+                  </div>
+                )}
+              </div>
             )}
             {asOfGw == null && (duties.length > 0 || netTransfers !== 0) && (
               <div className="mt-1.5 flex flex-wrap gap-1.5">
