@@ -38,7 +38,12 @@ jobs:
           node-version: 22
       - name: Check the deadline and the squad
         env:
-          FPL_ENTRY_ID: ${{ vars.FPL_ENTRY_ID }}
+          # The owner's team, committed rather than held in a chat: an FPL
+          # entry id is public — it is in every league table — and "remember
+          # this" is not storage. It was asked for once, kept in context, and
+          # lost to a compaction; the repository is the only place that
+          # survives. A repository variable still overrides it.
+          FPL_ENTRY_ID: ${{ vars.FPL_ENTRY_ID || '946779' }}
         run: node scripts/snapshot/deadline-watch.mjs | tee watch-report.txt
 
       # PUBLISHED TO A BRANCH, NOT LEFT IN THE JOB LOG.

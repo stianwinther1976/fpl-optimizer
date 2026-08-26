@@ -353,6 +353,34 @@ A "Refresh now" control must also bypass the in-memory memo in `fpl.ts`
 button labelled "now" that does nothing, pressed exactly when the numbers look
 wrong.
 
+## The deadline watch
+
+`.github/workflows/deadline-watch.yml` runs every six hours on a runner and
+force-pushes a plain-text report to the orphan `deadline-watch-out` branch. A
+scheduled routine reads it with git and messages the owner only when there is
+something to say.
+
+Three things about it are load-bearing:
+
+- **It runs on a runner because the sandbox cannot reach FPL.** `curl` to
+  `fantasy.premierleague.com` from here returns `CONNECT tunnel failed, 403`.
+- **The report goes to a BRANCH, not the job log.** The routine's sessions run
+  without the GitHub MCP tools — a routine created from a session cannot pass
+  connector grants on — so they cannot download a job log. They do have git.
+  This was written the log way first and would have failed on its first firing.
+- **It reports facts, never a recommendation.** Deadline, FPL's own status
+  flags, price moves, the bank. Ranking transfers is `planHorizon`'s job, and a
+  watcher that guessed at it would be a second, worse optimizer disagreeing with
+  the first on the reader's own screen.
+
+`FPL_ENTRY_ID` selects the team and defaults to the owner's, committed in the
+workflow. An entry id is public — it is in every league table — and a request
+to "remember this" was once kept in context and lost to a compaction. The
+repository is the only place that survives.
+
+Scheduled workflows only run from the DEFAULT branch, so a change here does
+nothing until it is on `main`.
+
 ## Demo mode
 
 Entry id `999999` serves a synthetic mid-season universe (GW20 just played) from
