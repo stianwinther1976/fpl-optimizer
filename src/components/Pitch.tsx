@@ -61,6 +61,30 @@ export const LIST_TIER: Record<ScoreTier, string> = {
   returned: "font-bold text-accent",
 };
 
+/**
+ * A row's BACKGROUND by tier, for a list scanned during a match.
+ *
+ * A third map, and it needs its own reason: the two above colour a NUMBER, and
+ * a number four inches to the right of a name is the thing a reader's eye has
+ * to travel to. Tinting the row moves the signal onto the whole line, so a
+ * scoring player is found by shape rather than by reading a column.
+ *
+ * Deliberately faint. These sit under body text in both schemes, and a tint
+ * strong enough to be obvious at a glance is strong enough to hurt the contrast
+ * of the name sitting on it. The text tier above still carries the weight and
+ * the colour; this only says which lines are worth looking at.
+ *
+ * A blank row gets NOTHING rather than a grey wash — most of a squad is blank
+ * for most of a gameweek, and shading eleven of fifteen rows says nothing at
+ * all while making the card look broken.
+ */
+export const LIST_ROW_TIER: Record<ScoreTier, string> = {
+  negative: "bg-danger/10",
+  blank: "",
+  played: "bg-accent/5",
+  returned: "bg-accent/10",
+};
+
 const TYPE_COLORS: Record<number, string> = {
   1: "bg-amber-500",
   2: "bg-sky-500",

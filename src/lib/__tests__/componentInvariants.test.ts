@@ -2336,7 +2336,10 @@ describe("the live list colours scores the way the squad list does", () => {
 
   it("uses the shared LIST_TIER, not a scale of its own", () => {
     expect(pitch).toContain("export const LIST_TIER");
-    expect(live).toContain('import { LIST_TIER } from "./Pitch"');
+    // The MEMBERS may grow — the row tint joined it — so match the import,
+    // not the exact list. Pinning the list broke when the second map arrived,
+    // which is churn rather than protection.
+    expect(live).toMatch(/import \{[^}]*\bLIST_TIER\b[^}]*\} from "\.\/Pitch"/);
     expect(live).toContain("LIST_TIER[scoreTier(counts ? points : display)]");
   });
 
@@ -2415,5 +2418,40 @@ describe("the delta captions use the same figure as the headline above them", ()
     // Open-coding the subtraction would lose NET ON BOTH SIDES, which is the
     // property that function exists for and which an older guard pins.
     expect(dash).not.toMatch(/nowGw \?\? netGwPoints\(curr\)\) - netGwPoints\(past\)/);
+  });
+});
+
+describe("the live list tints the whole row, not just the number", () => {
+  /*
+   * Asked for after the coloured column still meant reading four inches to the
+   * right of each name to find who had scored. The signal moves onto the line.
+   */
+  const strip = (t: string) =>
+    t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const live = strip(read("LiveTab.tsx"));
+  const pitch = strip(read("Pitch.tsx"));
+
+  it("tints from the SAME tier the number uses", () => {
+    // Two scales would eventually disagree about what counts as a return, on
+    // one row, at a glance.
+    expect(pitch).toContain("export const LIST_ROW_TIER");
+    expect(live).toContain("LIST_ROW_TIER[scoreTier(counts ? points : display)]");
+    expect(live).toContain("LIST_TIER[scoreTier(counts ? points : display)]");
+  });
+
+  it("leaves a blank row untinted", () => {
+    /*
+     * Most of a squad is blank for most of a gameweek. Shading eleven of
+     * fifteen rows says nothing and makes the card look broken.
+     */
+    const map = pitch.slice(pitch.indexOf("export const LIST_ROW_TIER"));
+    expect(map.slice(0, map.indexOf("};"))).toMatch(/blank:\s*""/);
+  });
+
+  it("keeps hover after the tint so a tinted row still responds", () => {
+    const i = live.indexOf("${rowTint}");
+    const j = live.indexOf("hover:bg-panel-2/60");
+    expect(i).toBeGreaterThan(0);
+    expect(j).toBeGreaterThan(i);
   });
 });
