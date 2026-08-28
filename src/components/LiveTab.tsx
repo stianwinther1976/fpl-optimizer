@@ -28,7 +28,7 @@ import {
 } from "@/lib/display";
 import { ErrorBox, Skeleton, Badge } from "./ui";
 import MatchModal from "./MatchModal";
-import { LIST_TIER } from "./Pitch";
+import { LIST_ROW_TIER, LIST_TIER } from "./Pitch";
 
 // Interval lives in `lib/live.ts` so this and the squad view stay in step.
 
@@ -701,11 +701,23 @@ export default function LiveTab({
       <div className="card divide-y divide-border-c/60">
         {rows.map(({ p, stats, points, display, projBonus, counts }) => {
           const Row = onSelect ? "button" : "div";
+          /*
+            THE WHOLE ROW, not just the number. Asked for after the coloured
+            column still meant reading four inches to the right of each name to
+            find who had scored. Tinted by the SAME tier the number uses — see
+            `LIST_ROW_TIER` — so the two cannot disagree about what counts as a
+            return, and the bench is tinted on its raw score for the same reason
+            the number is.
+
+            `hover:` comes after in the class list and therefore wins, so a
+            tinted row still responds to being pointed at.
+          */
+          const rowTint = LIST_ROW_TIER[scoreTier(counts ? points : display)];
           return (
             <Row
               key={p.element.id}
               type={onSelect ? "button" : undefined}
-              className={`flex min-h-11 w-full items-center gap-3 px-4 py-2.5 text-left text-sm ${onSelect ? "cursor-pointer hover:bg-panel-2/60 active:bg-panel-2" : ""}`}
+              className={`flex min-h-11 w-full items-center gap-3 px-4 py-2.5 text-left text-sm ${rowTint} ${onSelect ? "cursor-pointer hover:bg-panel-2/60 active:bg-panel-2" : ""}`}
               onClick={onSelect ? () => onSelect(p.element) : undefined}
             >
               <span className="w-6 text-xs text-muted">{p.pickPosition}</span>
