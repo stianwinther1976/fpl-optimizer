@@ -6,7 +6,7 @@ import { markNavigation } from "@/lib/nav";
 import { api, DEMO_ENTRY_ID, FplApiError, fmtNum, type TeamData } from "@/lib/fpl";
 import type { EventLive, LeagueStandings } from "@/lib/types";
 import { CHIP_LABELS } from "@/lib/rules";
-import { leagueRowTotal, rankByLiveTotal } from "@/lib/display";
+import { leagueRowGw, leagueRowTotal, rankByLiveScore } from "@/lib/display";
 import { liveEntryScore, provisionalBonus, squadMatchState } from "@/lib/live";
 import { ErrorBox, Skeleton } from "./ui";
 
@@ -42,6 +42,12 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
   const [leagueId, setLeagueId] = useState("");
   const [standings, setStandings] = useState<LeagueStandings | null>(null);
   const [details, setDetails] = useState<Map<number, RivalDetail>>(new Map());
+  /*
+   * WHICH COLUMN THE TABLE IS ORDERED BY. Total is the league; GW is who is
+   * having the better week, which is the question during a match and was not
+   * answerable without reading every row.
+   */
+  const [sortBy, setSortBy] = useState<"total" | "gw">("total");
   const [ownership, setOwnership] = useState<LeagueOwnership | null>(null);
   const [loading, setLoading] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -371,13 +377,39 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               <tr className="border-b border-border-c">
                 <th className="w-9 px-2 py-1.5 text-left">#</th>
                 <th className="px-1.5 py-1.5 text-left">Team</th>
+                {/*
+                  SORTABLE, and both headers are real buttons rather than a
+                  click handler on the cell: a table header that reorders the
+                  table is a control, and one that is not focusable cannot be
+                  reached without a mouse. `aria-sort` is what tells a screen
+                  reader which column the order is on.
+                */}
                 <th
                   className="w-14 px-1.5 py-1.5 text-right"
-                  title="Live gameweek points minus transfer hits"
+                  aria-sort={sortBy === "gw" ? "descending" : "none"}
                 >
-                  GW
+                  <button
+                    type="button"
+                    onClick={() => setSortBy("gw")}
+                    className={`uppercase ${sortBy === "gw" ? "text-accent" : "hover:text-accent"}`}
+                    title="Live gameweek points minus transfer hits — tap to sort"
+                  >
+                    GW{sortBy === "gw" ? " ▾" : ""}
+                  </button>
                 </th>
-                <th className="w-16 px-2 py-1.5 text-right">Total</th>
+                <th
+                  className="w-16 px-2 py-1.5 text-right"
+                  aria-sort={sortBy === "total" ? "descending" : "none"}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setSortBy("total")}
+                    className={`uppercase ${sortBy === "total" ? "text-accent" : "hover:text-accent"}`}
+                    title="Season total — tap to sort"
+                  >
+                    Total{sortBy === "total" ? " ▾" : ""}
+                  </button>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border-c/60">
@@ -385,10 +417,12 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                 ORDERED BY WHAT THE TABLE PRINTS. The "Total" column is live,
                 so leaving the rows in FPL's stored order put a rival on 27
                 below one on 25 — every number right, the table wrong. See
-                `rankByLiveTotal`.
+                `rankByLiveScore`.
               */}
-              {rankByLiveTotal(standings.standings.results, (row) =>
-                leagueRowTotal(row, details.get(row.entry)?.livePoints)
+              {rankByLiveScore(standings.standings.results, (row) =>
+                sortBy === "gw"
+                  ? leagueRowGw(row, details.get(row.entry)?.livePoints)
+                  : leagueRowTotal(row, details.get(row.entry)?.livePoints)
               ).map(({ row: r, position }) => {
                 const d = details.get(r.entry);
                 const mine = r.entry === entryId;
@@ -427,7 +461,14 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                         stale their snapshot is.
                       */}
                       {position}
-                      {r.last_rank > 0 && r.last_rank !== position && (
+                      {/*
+                        ONLY WHILE THE TABLE IS ORDERED BY THE SEASON. Sorted by
+                        gameweek, `position` means "best this week" and
+                        `last_rank` is where the rival FINISHED last week in the
+                        LEAGUE — comparing the two would draw an arrow for a
+                        question nobody asked. See `rankByLiveScore`.
+                      */}
+                      {sortBy === "total" && r.last_rank > 0 && r.last_rank !== position && (
                         <span className={position < r.last_rank ? "text-accent" : "text-danger"}>
                           {position < r.last_rank ? "▲" : "▼"}
                         </span>
@@ -452,7 +493,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                       </div>
                     </td>
                     <td className="px-1.5 py-1.5 text-right font-mono">
-                      {d?.livePoints ?? r.event_total}
+                      {leagueRowGw(r, d?.livePoints)}
                       {d && d.hits > 0 && (
                         <div className="text-[10px] leading-tight text-danger">−{d.hits}</div>
                       )}
