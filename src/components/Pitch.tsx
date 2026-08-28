@@ -54,7 +54,7 @@ const PITCH_TIER: Record<ScoreTier, string> = {
   returned: "font-bold text-[#00ff87]",
 };
 
-const LIST_TIER: Record<ScoreTier, string> = {
+export const LIST_TIER: Record<ScoreTier, string> = {
   negative: "font-bold text-danger",
   blank: "text-muted",
   played: "",

@@ -2318,3 +2318,35 @@ describe("the panel says what it turned down, and the sheet says what is legal",
     expect(dash).toContain("sell: p.sellPrice");
   });
 });
+
+describe("the live list colours scores the way the squad list does", () => {
+  /*
+   * Asked for: the points column was one flat colour, so a 1 and an 8 looked
+   * the same while scanning during a match.
+   *
+   * The tiering already existed for the squad list. Importing it rather than
+   * writing a second scale is the whole point — a player who reads bold green
+   * on the Team tab must read bold green here, and two scales for one quantity
+   * drift apart.
+   */
+  const strip = (t: string) =>
+    t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const live = strip(read("LiveTab.tsx"));
+  const pitch = strip(read("Pitch.tsx"));
+
+  it("uses the shared LIST_TIER, not a scale of its own", () => {
+    expect(pitch).toContain("export const LIST_TIER");
+    expect(live).toContain('import { LIST_TIER } from "./Pitch"');
+    expect(live).toContain("LIST_TIER[scoreTier(counts ? points : display)]");
+  });
+
+  it("defines no second tier map in the live tab", () => {
+    // A local copy would pass the line above and still drift.
+    expect(live).not.toMatch(/const \w*TIER\w*\s*[:=]/);
+  });
+
+  it("tiers the BENCH on its raw score, not on the zero it contributes", () => {
+    // A bench player on 8 is a fact about the week; greying him out hides it.
+    expect(live).toContain("counts ? points : display");
+  });
+});
