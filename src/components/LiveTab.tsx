@@ -24,9 +24,11 @@ import {
   liveStaleMinutes,
   kickoffLabel,
   publishedAverage,
+  scoreTier,
 } from "@/lib/display";
 import { ErrorBox, Skeleton, Badge } from "./ui";
 import MatchModal from "./MatchModal";
+import { LIST_TIER } from "./Pitch";
 
 // Interval lives in `lib/live.ts` so this and the squad view stay in step.
 
@@ -741,7 +743,27 @@ export default function LiveTab({
                   ? `${stats.minutes}' · ${stats.goals_scored}g ${stats.assists}a · bps ${stats.bps}`
                   : "–"}
               </span>
-              <span className="w-10 shrink-0 text-right font-mono font-bold">
+              {/*
+                THE SAME TIERING THE SQUAD LIST USES, imported rather than
+                rewritten. A player who reads bold green on the Team tab must
+                read bold green here; two colour scales for one quantity is how
+                they drift apart, and this list is the one a reader scans during
+                a match.
+
+                Weight carries as much of it as colour, which is `LIST_TIER`'s
+                own point: a blank recedes to muted, a return comes forward in
+                bold. That keeps the list readable for someone who cannot
+                separate the green from the grey.
+
+                The BENCH keeps its raw `display` score and is tiered on that,
+                not on the zero it contributes — a bench player on 8 is a fact
+                about the week, and greying him out would hide it.
+              */}
+              <span
+                className={`w-10 shrink-0 text-right font-mono font-bold ${
+                  LIST_TIER[scoreTier(counts ? points : display)]
+                }`}
+              >
                 {counts ? points : display}
               </span>
             </Row>
