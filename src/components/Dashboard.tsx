@@ -766,6 +766,26 @@ export default function Dashboard({
   const comparable = curr != null && past != null && past.event < curr.event;
   const period = comparable ? `vs GW${past.event}` : "";
 
+  /*
+   * THE "NOW" SIDE OF EVERY DELTA HAS TO BE THE FIGURE PRINTED ABOVE IT.
+   *
+   * `curr` is the last row of `history.current`, which for a gameweek in play
+   * holds FPL's own PARTIAL figure. The headlines were moved to the live score;
+   * these captions were not, so a card read "10 pts" over "▼ −35 pts vs GW1"
+   * when GW1 had scored 35 and the true difference was −25. Both halves came
+   * from a different source and neither was wrong on its own — the same split
+   * that put a stale 1 under a header reading 14 in the KPI modal, in a place
+   * the modal fix did not reach.
+   *
+   * Off by exactly the live gameweek's points, every time, which is what makes
+   * it look like an arithmetic slip rather than two sources.
+   */
+  const liveEvent = liveNet != null && currentEvent != null;
+  const nowTotal = liveEvent ? liveOverallPoints(rows, currentEvent, liveNet) : curr?.total_points;
+  const nowGw = liveEvent ? liveNet : curr != null ? netGwPoints(curr) : null;
+  // Measured fresh at an age never over 61s, where the history row is not.
+  const nowRank = liveEvent ? (entry.summary_overall_rank ?? null) : (curr?.overall_rank ?? null);
+
   const fmtSigned = (n: number, digits = 0, unit = "") =>
     `${n > 0 ? "+" : n < 0 ? "−" : "±"}${unit}${Math.abs(n).toLocaleString("en-GB", {
       minimumFractionDigits: digits,
@@ -776,7 +796,7 @@ export default function Dashboard({
   // points is always good (the pace comparison lives on the Latest GW card).
   let pointsDelta: StatDelta | null = null;
   if (comparable) {
-    const gained = curr.total_points - past.total_points;
+    const gained = (nowTotal ?? curr.total_points) - past.total_points;
     pointsDelta = {
       text: `${fmtSigned(gained)} pts`,
       period,
@@ -787,8 +807,8 @@ export default function Dashboard({
 
   // Overall rank: falling number = climbing the table.
   let rankDelta: StatDelta | null = null;
-  if (comparable && curr.overall_rank != null && past.overall_rank != null) {
-    const improved = past.overall_rank - curr.overall_rank; // positive = better
+  if (comparable && nowRank != null && past.overall_rank != null) {
+    const improved = past.overall_rank - nowRank; // positive = better
     rankDelta = {
       text: Math.abs(improved).toLocaleString("en-GB"),
       period,
@@ -809,7 +829,7 @@ export default function Dashboard({
   // by `netEventPoints` further down.
   let gwDelta: StatDelta | null = null;
   if (comparable) {
-    const diff = netGwDelta(curr, past);
+    const diff = netGwDelta(curr, past, nowGw ?? undefined);
     gwDelta = {
       text: `${fmtSigned(diff)} pts`,
       period,

@@ -64,9 +64,18 @@ export function netGwPoints(r: GwScore): number {
   return r.points - r.event_transfers_cost;
 }
 
-/** Change in net gameweek score between two gameweeks, `later` minus `earlier`. */
-export function netGwDelta(later: GwScore, earlier: GwScore): number {
-  return netGwPoints(later) - netGwPoints(earlier);
+/**
+ * Change in net gameweek score between two gameweeks, `later` minus `earlier`.
+ *
+ * `laterNet` overrides the later side, for a gameweek IN PLAY. The history row
+ * for such a gameweek holds FPL's own partial figure, so a card printed a live
+ * "10 pts" over a delta computed from the stored one — off by exactly the live
+ * score, every time, which reads as an arithmetic slip rather than as two
+ * sources. The override goes here rather than at the call site so the property
+ * this function exists for, NET ON BOTH SIDES, cannot be lost on the way.
+ */
+export function netGwDelta(later: GwScore, earlier: GwScore, laterNet?: number): number {
+  return (laterNet ?? netGwPoints(later)) - netGwPoints(earlier);
 }
 
 /**

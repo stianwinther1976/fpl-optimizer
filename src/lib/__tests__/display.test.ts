@@ -862,3 +862,32 @@ describe("leagueRowGw — the GW column and its sort are one function", () => {
     expect(out[0].position).toBe(1);
   });
 });
+
+describe("netGwDelta with a live override", () => {
+  const row = (points: number, hit = 0) => ({ points, event_transfers_cost: hit });
+
+  it("uses the stored row when no override is given", () => {
+    expect(netGwDelta(row(10), row(35))).toBe(-25);
+  });
+
+  it("uses the override for the later side", () => {
+    // The reported card: GW1 scored 35, the live gameweek is on 10. The stored
+    // row for a gameweek in play holds FPL's partial figure, so without this
+    // the delta came from a different number than the headline above it.
+    expect(netGwDelta(row(0), row(35), 10)).toBe(-25);
+  });
+
+  it("keeps the earlier side NET, which is the point of the function", () => {
+    // A -4 week that scored 39 is a net 35; comparing to the gross would
+    // overstate the fall by exactly the hit.
+    expect(netGwDelta(row(0), row(39, 4), 10)).toBe(-25);
+  });
+
+  it("treats an override of zero as a score, not as absent", () => {
+    expect(netGwDelta(row(20), row(35), 0)).toBe(-35);
+  });
+
+  it("carries a negative live week through", () => {
+    expect(netGwDelta(row(0), row(35), -4)).toBe(-39);
+  });
+});
