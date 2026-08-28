@@ -2384,3 +2384,36 @@ describe("the league table can be sorted by gameweek", () => {
     expect(code).toMatch(/sortBy === "total" && r\.last_rank > 0 && r\.last_rank !== position/);
   });
 });
+
+describe("the delta captions use the same figure as the headline above them", () => {
+  /*
+   * Reported: a card read "10 pts" over "▼ −35 pts vs GW1" when GW1 had scored
+   * 35 and the true difference was −25.
+   *
+   * `curr` is the last row of `history.current`, which for a gameweek in play
+   * holds FPL's own PARTIAL figure. The headlines were moved to the live score
+   * and these captions were not, so each was off by exactly the live
+   * gameweek's points — which reads as an arithmetic slip rather than as two
+   * sources. Same split as the KPI modal, in a place that fix did not reach.
+   */
+  const dash = read("Dashboard.tsx").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  it("derives one live 'now' for all three cards", () => {
+    expect(dash).toContain("const liveEvent = liveNet != null && currentEvent != null;");
+    expect(dash).toMatch(/const nowTotal = liveEvent \? liveOverallPoints\(rows, currentEvent, liveNet\)/);
+    expect(dash).toMatch(/const nowGw = liveEvent \? liveNet/);
+    expect(dash).toMatch(/const nowRank = liveEvent \? \(entry\.summary_overall_rank/);
+  });
+
+  it("feeds it to every delta, not just the points one", () => {
+    expect(dash).toContain("(nowTotal ?? curr.total_points) - past.total_points");
+    expect(dash).toContain("netGwDelta(curr, past, nowGw ?? undefined)");
+    expect(dash).toContain("past.overall_rank - nowRank");
+  });
+
+  it("still routes the gameweek delta through netGwDelta", () => {
+    // Open-coding the subtraction would lose NET ON BOTH SIDES, which is the
+    // property that function exists for and which an older guard pins.
+    expect(dash).not.toMatch(/nowGw \?\? netGwPoints\(curr\)\) - netGwPoints\(past\)/);
+  });
+});
