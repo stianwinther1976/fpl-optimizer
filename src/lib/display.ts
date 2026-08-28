@@ -563,7 +563,22 @@ export function leagueRowTotal(
 }
 
 /**
- * Order a league table by the totals it is actually PRINTING.
+ * The number a league row's "GW" column shows — the live gameweek score when
+ * there is one for that rival, FPL's stored `event_total` when there is not.
+ *
+ * The same one-function rule `leagueRowTotal` exists for, and for the same
+ * reason: the column and the sort must agree by construction. Two expressions
+ * that happen to match is how a table came to rank 27 below 25.
+ *
+ * Both figures are net of transfer hits — FPL's `event_total` is, and so is
+ * what `liveEntryScore` returns.
+ */
+export function leagueRowGw(row: { event_total: number }, liveNet: number | null | undefined): number {
+  return liveNet ?? row.event_total;
+}
+
+/**
+ * Order a league table by the score it is actually PRINTING.
  *
  * A TABLE THAT CONTRADICTS ITSELF IS WORSE THAN A STALE ONE. Once the "Total"
  * column became live (`liveLeagueTotal`), the rows were still in FPL's stored
@@ -580,8 +595,15 @@ export function leagueRowTotal(
  * against `last_rank` — the previous gameweek's finishing position — because
  * that is the comparison a reader means by "climbed"; comparing against FPL's
  * current stored rank would just render how stale their snapshot is.
+ *
+ * IT RANKS BY WHATEVER IT IS HANDED, which is why the name says score and not
+ * total: the table can be sorted by the gameweek column too, and then the
+ * position means "best this week" rather than "best this season". A caller
+ * sorting by the gameweek must NOT then draw the movement arrows, because
+ * `last_rank` is a season position and comparing the two answers a question
+ * nobody asked.
  */
-export function rankByLiveTotal<T extends { rank: number }>(
+export function rankByLiveScore<T extends { rank: number }>(
   rows: readonly T[],
   totalOf: (row: T) => number
 ): { row: T; position: number }[] {

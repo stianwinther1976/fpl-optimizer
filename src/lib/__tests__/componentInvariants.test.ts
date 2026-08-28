@@ -2155,7 +2155,7 @@ describe("the league table is ordered by the totals it prints", () => {
      * function makes that testable instead of transcribed.
      * `leagueRowTotal` is unit-tested in `display.test.ts`.
      */
-    expect(code).toContain("rankByLiveTotal(standings.standings.results");
+    expect(code).toContain("rankByLiveScore(standings.standings.results");
     expect(code).toContain("leagueRowTotal(row, details.get(row.entry)?.livePoints)");
     expect(code).toContain("fmtNum(leagueRowTotal(r, d?.livePoints))");
     // Neither site may re-derive it inline.
@@ -2348,5 +2348,39 @@ describe("the live list colours scores the way the squad list does", () => {
   it("tiers the BENCH on its raw score, not on the zero it contributes", () => {
     // A bench player on 8 is a fact about the week; greying him out hides it.
     expect(live).toContain("counts ? points : display");
+  });
+});
+
+describe("the league table can be sorted by gameweek", () => {
+  /*
+   * Asked for: "who is having the better week" was not answerable without
+   * reading every row, because the table only ever ordered by the season total.
+   */
+  const src = read("MiniLeague.tsx");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  it("sorts on the same function each column renders", () => {
+    // The lesson from the 27-below-25 defect: one function, or they drift.
+    expect(code).toMatch(/sortBy === "gw"\s*\?\s*leagueRowGw\(row, details\.get\(row\.entry\)\?\.livePoints\)/);
+    expect(code).toContain("leagueRowGw(r, d?.livePoints)");
+    expect(code).toContain("leagueRowTotal(row, details.get(row.entry)?.livePoints)");
+  });
+
+  it("makes both headers real buttons, not click handlers on a cell", () => {
+    // A header that reorders the table is a control; one that is not focusable
+    // cannot be reached without a mouse.
+    expect(code).toMatch(/onClick=\{\(\) => setSortBy\("gw"\)\}/);
+    expect(code).toMatch(/onClick=\{\(\) => setSortBy\("total"\)\}/);
+    expect(code).toMatch(/aria-sort=\{sortBy === "gw" \? "descending" : "none"\}/);
+    expect(code).toMatch(/aria-sort=\{sortBy === "total" \? "descending" : "none"\}/);
+  });
+
+  it("hides the movement arrow while sorted by gameweek", () => {
+    /*
+     * `last_rank` is where the rival FINISHED last week in the LEAGUE. Against
+     * a position that means "best this week" it answers a question nobody
+     * asked, so the arrow is gated on the season ordering.
+     */
+    expect(code).toMatch(/sortBy === "total" && r\.last_rank > 0 && r\.last_rank !== position/);
   });
 });
