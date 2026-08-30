@@ -632,35 +632,15 @@ export function liveEntryScore(
   bonusByElement: Map<number, number> | null,
   gwDone = false
 ): number {
-  const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
-  const minsOf = new Map(live.elements.map((e) => [e.id, e.stats.minutes]));
-  const bb = p.active_chip === "bboost";
-  const subs = projectAutoSubs(p.picks, elements, live, fixtures, gw);
-  const effXi = new Set(subs.effectiveXi);
   /*
-   * The takeover rule, term for term: the captain is gone once the gameweek is
-   * done or the auto-sub projection has dropped him, he must be on zero
-   * minutes, and the vice must have played.
+   * SUMMED OFF `squadRoster`, which is the same walk with the per-player
+   * figures kept. Two functions applying auto-subs, the armband and the bonus
+   * separately is how the league table came to print an expandable roster
+   * whose contributions did not add up to the score on the row it hung under.
    */
-  const capMult = p.active_chip === "3xc" ? 3 : 2;
-  const blanked = new Set(subs.out);
-  const capPick = p.picks.find((k) => k.is_captain);
-  const vicePick = p.picks.find((k) => k.is_vice_captain);
-  const takeover =
-    capPick != null &&
-    vicePick != null &&
-    (gwDone || blanked.has(capPick.element)) &&
-    (minsOf.get(capPick.element) ?? 0) === 0 &&
-    (minsOf.get(vicePick.element) ?? 0) > 0;
   let pts = 0;
-  for (const pk of p.picks) {
-    if (!bb && !effXi.has(pk.element)) continue;
-    let mult = pk.multiplier > 1 ? pk.multiplier : 1;
-    if (takeover) {
-      if (pk.element === capPick!.element) mult = 1;
-      else if (pk.element === vicePick!.element) mult = capMult;
-    }
-    pts += ((pointsOf.get(pk.element) ?? 0) + (bonusByElement?.get(pk.element) ?? 0)) * mult;
+  for (const r of squadRoster(p, elements, live, fixtures, gw, bonusByElement, gwDone)) {
+    pts += r.contribution;
   }
   return pts - (p.entry_history?.event_transfers_cost ?? 0);
 }
@@ -785,8 +765,89 @@ export function squadMatchState(
   fixtures: Fixture[],
   gw: number
 ): { inPlay: number; toStart: number; played: number; blank: number } {
+  const counts = { inPlay: 0, toStart: 0, played: 0, blank: 0 };
+  for (const r of squadRoster(p, elements, live, fixtures, gw)) {
+    if (r.status.state === "live") counts.inPlay++;
+    else if (r.status.state === "todo") counts.toStart++;
+    else if (r.status.state === "blank") counts.blank++;
+    else counts.played++;
+  }
+  return counts;
+}
+
+/**
+ * One entry per player who COUNTS toward a manager's score this gameweek, with
+ * where he is in it and what he has scored.
+ *
+ * ONE PASS THAT EVERYTHING ELSE DERIVES FROM. The counters and the expandable
+ * roster in the league table are the same question asked twice, and asking it
+ * twice is how they come to disagree about who is on the pitch — which on a
+ * live table is the whole point of looking.
+ *
+ * "Counts" means the effective eleven after auto-subs, or all fifteen under
+ * Bench Boost; the bench is not listed, because a bench player contributes
+ * nothing and the question this answers is how much of a SCORE is still to
+ * come. `multiplier` carries the armband, including the vice-captain takeover,
+ * so `points` is what the player actually contributes rather than his raw
+ * total.
+ *
+ * Order is FPL's own pick order, which is the order the reader sees everywhere
+ * else in the app.
+ */
+export interface RosterEntry {
+  element: Element;
+  /**
+   * This player's live points before the armband, provisional bonus included
+   * when the caller supplied a bonus map. NOT `stats.total_points` on its own:
+   * between the final whistle and bonus confirmation those differ, and it is
+   * the bonus-inclusive figure that the entry's score is built from.
+   */
+  raw: number;
+  /** 1, 2 under the armband, 3 under Triple Captain. */
+  multiplier: number;
+  /**
+   * What this player contributes to the entry's live score: `raw * multiplier`.
+   * Deliberately NOT called `points`: a history row's `.points` is a gross
+   * gameweek total that has to be netted of `event_transfers_cost` before it is
+   * shown, and `componentInvariants` bans rendering one raw. This is neither —
+   * it is one player's share of a live total, and a transfer hit is not a
+   * property of a player.
+   */
+  contribution: number;
+  status: PlayerMatchStatus;
+}
+
+export function squadRoster(
+  p: EntryEventPicks,
+  elements: Map<number, Element>,
+  live: EventLive,
+  fixtures: Fixture[],
+  gw: number,
+  bonusByElement: Map<number, number> | null = null,
+  gwDone = false
+): RosterEntry[] {
   const bb = p.active_chip === "bboost";
-  const effXi = new Set(projectAutoSubs(p.picks, elements, live, fixtures, gw).effectiveXi);
+  const subs = projectAutoSubs(p.picks, elements, live, fixtures, gw);
+  const effXi = new Set(subs.effectiveXi);
+  const pointsOf = new Map(live.elements.map((e) => [e.id, e.stats.total_points]));
+  const minsOf = new Map(live.elements.map((e) => [e.id, e.stats.minutes]));
+
+  /*
+   * The vice-captain takeover: the captain is gone once the gameweek is done
+   * or the auto-sub projection has dropped him, he must be on zero minutes,
+   * and the vice must have played.
+   */
+  const capMult = p.active_chip === "3xc" ? 3 : 2;
+  const blanked = new Set(subs.out);
+  const capPick = p.picks.find((k) => k.is_captain);
+  const vicePick = p.picks.find((k) => k.is_vice_captain);
+  const takeover =
+    capPick != null &&
+    vicePick != null &&
+    (gwDone || blanked.has(capPick.element)) &&
+    (minsOf.get(capPick.element) ?? 0) === 0 &&
+    (minsOf.get(vicePick.element) ?? 0) > 0;
+
   const byTeam = new Map<number, Fixture[]>();
   for (const f of fixtures) {
     if (f.event !== gw) continue;
@@ -796,20 +857,27 @@ export function squadMatchState(
       else byTeam.set(t, [f]);
     }
   }
-  let inPlay = 0;
-  let toStart = 0;
-  let played = 0;
-  let blank = 0;
+
+  const out: RosterEntry[] = [];
   for (const pk of p.picks) {
     if (!bb && !effXi.has(pk.element)) continue;
-    const team = elements.get(pk.element)?.team;
-    const legs = team == null ? [] : (byTeam.get(team) ?? []);
-    if (legs.length === 0) blank++;
-    else if (legs.some((f) => isInPlay(f))) inPlay++;
-    else if (legs.some((f) => !f.started)) toStart++;
-    else played++;
+    const el = elements.get(pk.element);
+    if (!el) continue;
+    let mult = pk.multiplier > 1 ? pk.multiplier : 1;
+    if (takeover) {
+      if (pk.element === capPick!.element) mult = 1;
+      else if (pk.element === vicePick!.element) mult = capMult;
+    }
+    const raw = (pointsOf.get(pk.element) ?? 0) + (bonusByElement?.get(pk.element) ?? 0);
+    out.push({
+      element: el,
+      raw,
+      multiplier: mult,
+      contribution: raw * mult,
+      status: playerMatchStatus(byTeam.get(el.team) ?? [], minsOf.get(pk.element)),
+    });
   }
-  return { inPlay, toStart, played, blank };
+  return out;
 }
 
 /**

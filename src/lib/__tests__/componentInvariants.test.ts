@@ -99,9 +99,21 @@ describe("clickable table rows are reachable from a keyboard", () => {
   }
 
   it("finds the clickable rows it means to check", () => {
-    // Without this the suite passes vacuously the moment the regex drifts.
-    expect(rowsWithClick.length).toBeGreaterThanOrEqual(3);
-    expect(rowsWithClick.map((r) => r.file)).toContain("PointsBreakdown.tsx");
+    /*
+     * THE EXACT SET, not a floor on the count. Without an anti-vacuity guard
+     * the suite passes the moment the regex drifts; with a floor it also
+     * passes when a NEW clickable row is added, because the floor was already
+     * met by the old ones — and a floor cannot tell a row leaving the set
+     * (fine) from the scanner failing to see it (not fine).
+     *
+     * MiniLeague's league row used to be here and deliberately is not: its two
+     * actions are now separate native `<button>`s, which is stronger than a
+     * hand-rolled `tabIndex`/`onKeyDown` pair. What replaced this guard for
+     * that file is "the league row's controls are real buttons" below.
+     */
+    expect(new Set(rowsWithClick.map((r) => r.file))).toEqual(
+      new Set(["PointsBreakdown.tsx", "StatsTable.tsx"])
+    );
   });
 
   it.each(["tabIndex=", "onKeyDown="])("every one declares %s", (attr) => {
@@ -1975,6 +1987,75 @@ describe("the league table says how much football is left", () => {
     // same as `liveEntryScore`. Counting the raw first eleven here would
     // credit a benched player's fixture and miss his replacement.
     expect(src).toContain("squadMatchState(picks, elementById, live, data.fixtures, currentEvent)");
+  });
+
+  it("the league row's controls are real buttons", () => {
+    /*
+     * WHAT REPLACED THE `<tr onClick>` GUARD FOR THIS FILE. The row carried
+     * one action — open the rival's dashboard — as a click handler on the
+     * `<tr>` itself, made operable by a hand-rolled `tabIndex`/`onKeyDown`
+     * pair. It now carries two, expand and navigate, and one element cannot
+     * hold two actions: the whole row would have had to guess which the
+     * reader meant.
+     *
+     * So both are `<button type="button">`, which brings the focus stop, the
+     * Enter/Space handling and the announced role for free. `type` is not
+     * decoration — a `<button>` with no type defaults to `submit`, and this
+     * table sits inside the league-id form above it.
+     */
+    const nameBtn = src.slice(src.indexOf("setOpenRoster(open ? null : r.entry)"));
+    expect(src).toMatch(
+      /<button\s+type="button"\s+onClick=\{\(\) => setOpenRoster\(open \? null : r\.entry\)\}/
+    );
+    expect(src).toMatch(/<button\s+type="button"\s+onClick=\{\(\) => goToTeam\(r\.entry\)\}/);
+    // The expander says whether it is open, which is the only thing about it a
+    // screen reader cannot get from the label.
+    expect(nameBtn.slice(0, 400)).toContain("aria-expanded={open}");
+  });
+
+  it("one row is expanded at a time", () => {
+    /*
+     * `openRoster` is a single entry id, not a Set. Ten open rosters at once
+     * on a fifty-team league turns the table into a wall; and the reader's
+     * question — "who does THIS rival still have to play" — is about one row.
+     */
+    expect(src).toMatch(/useState<number \| null>\(null\)/);
+    expect(src).toContain("const open = openRoster === r.entry;");
+  });
+
+  it("the expansion decomposes the score it hangs under", () => {
+    /*
+     * THE POINT OF THE FEATURE, AND ITS ONLY FAILURE MODE. The rows print one
+     * contribution each directly beneath a score; if they do not sum to it the
+     * expansion is worse than absent, because it looks like an explanation.
+     *
+     * `liveEntryScore` sums `squadRoster`, so the two cannot disagree about
+     * auto-subs or the armband — but only if this call site hands the roster
+     * the same bonus map and `gwDone` flag the score got. Built without them,
+     * the rows lose the provisional bonus (the whole reason a Saturday evening
+     * score moves) and keep a blanked captain doubled.
+     */
+    expect(src).toMatch(
+      /squadRoster\(\s*picks,\s*elementById,\s*live,\s*data\.fixtures,\s*currentEvent,\s*bonus\.byElement,\s*gwDone\s*\)/
+    );
+    // Gross on the rows, net on the score: the difference is the hit, and it
+    // is named rather than left as an unexplained gap.
+    expect(src).toContain("hits={d.hits}");
+    expect(src).toContain("roster.reduce((a, r) => a + r.contribution, 0)");
+  });
+
+  it("the expansion groups by the status the counters use", () => {
+    /*
+     * The `●3 ▸2` counters on the row and the groups inside it are the same
+     * question asked twice, and a reader will hold them against each other.
+     * Both go through `playerMatchStatus` via `squadRoster`, so what is pinned
+     * here is that the groups read `status.state` rather than re-deriving
+     * "playing now" from minutes or a `started` flag.
+     */
+    const block = src.slice(src.indexOf("function RosterBreakdown"));
+    for (const state of ["todo", "live", "done", "dnp", "blank"]) {
+      expect(block.slice(0, 1500)).toContain(`status.state === "${state}"`);
+    }
   });
 
   it("makes the total live whenever the GW column is", () => {
