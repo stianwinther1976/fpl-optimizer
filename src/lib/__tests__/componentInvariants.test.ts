@@ -1604,20 +1604,68 @@ describe("the safety score follows the feed and counts the same points", () => {
    * reader's own total moved every thirty seconds; and the reader's total
    * carried projected bonus while the benchmark did not.
    */
+  const bandEffect = () => {
+    const src = read("LiveTab.tsx");
+    const at = src.indexOf("bandBusy.current = true;");
+    expect(at).toBeGreaterThan(0);
+    const end = src.indexOf("}, [currentEvent, data.entry, bandAttempt]);", at);
+    expect(end).toBeGreaterThan(at);
+    return src.slice(at, end);
+  };
+
   it("scores the sample in a memo over the live payload, not in the fetch", () => {
     const src = read("LiveTab.tsx");
     expect(src).toMatch(/const bandSafety = useMemo\(/);
     expect(src).toMatch(/bandMedianScore\(/);
+    const effect = bandEffect();
     // The fetch stores picks and nothing else — no median inside it.
-    const at = src.indexOf("bandTried.current = true;");
-    expect(at).toBeGreaterThan(0);
-    const end = src.indexOf("}, [currentEvent, data.entry]);", at);
-    expect(end).toBeGreaterThan(at);
-    const effect = src.slice(at, end);
     expect(effect).toContain("setBandPicks(picks)");
     // No scoring inside the fetch — that is the half that used to freeze.
     expect(effect).not.toContain("total_points");
     expect(effect).not.toContain("bandMedianScore");
+  });
+
+  it("latches only on a sample it could use, and retries a short one", () => {
+    /*
+     * THE LATCH WAS SET BEFORE THE REQUEST. Twenty `picks` fetches go out at
+     * once through one proxy and each failure is dropped by `.catch(() =>
+     * null)`, so one bad moment on load left the safety score missing — or
+     * computed from a handful of managers — for as long as the tab stayed
+     * open, with nothing to retry it.
+     *
+     * What is pinned is the ORDER: `bandDone` may only be set inside the
+     * success branch, after the sample has cleared `BAND_MIN_SAMPLE`. A
+     * mutation that hoists it back to the top of the effect is the original
+     * bug, and this is the only thing that catches it — `bandBusy` above still
+     * stops the double fetch, so nothing else about the file would change.
+     */
+    const effect = bandEffect();
+    const done = effect.indexOf("bandDone.current = true;");
+    const gate = effect.indexOf("picks.length >= BAND_MIN_SAMPLE");
+    expect(gate).toBeGreaterThan(0);
+    expect(done).toBeGreaterThan(gate);
+    // And a sample that did not clear the gate comes back for another go.
+    expect(effect).toContain("setBandAttempt((a) => a + 1)");
+    // Bounded, or a permanently failing fetch becomes a loop.
+    expect(read("LiveTab.tsx")).toContain("if (bandAttempt > BAND_MAX_ATTEMPTS) return;");
+  });
+
+  it("says how many managers the median is actually over", () => {
+    /*
+     * The tooltip asserted "~20 managers" whichever way the sample went, so a
+     * median over six read exactly like a median over twenty — and six is
+     * noisy enough to move the message from "on course to climb" to "38 more
+     * needed". A reader who doubts the number could not find out what it was
+     * computed from.
+     */
+    const src = read("LiveTab.tsx");
+    // The old tooltip, verbatim. Narrower than banning "~20 managers" outright,
+    // which would also catch the comment describing how many are REQUESTED —
+    // twenty, truthfully, whatever comes back.
+    expect(src).not.toContain("Median live score of ~20 managers");
+    expect(src).toMatch(/Median live score of \$\{bandPicks\?\.length \?\? 0\} managers/);
+    // And a short sample is visible without opening the tooltip.
+    expect(src).toContain("bandPicks!.length < BAND_FULL_SAMPLE");
   });
 
   it("hands the rivals the same projected bonus the reader gets", () => {

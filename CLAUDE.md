@@ -353,6 +353,60 @@ A "Refresh now" control must also bypass the in-memory memo in `fpl.ts`
 button labelled "now" that does nothing, pressed exactly when the numbers look
 wrong.
 
+## The safety score, and what measuring it actually found
+
+`LiveTab`'s "Safety score (your rank band)" samples the Overall league at
+`page_standings = ceil(summary_overall_rank / 50)` and takes the median live
+score. A reader reported it showing **83** during GW2 while his own score was 45
+and FPL's published gameweek average was 29 — a median nearly three times the
+average of the whole game, which cannot be right for a sample of one's own
+neighbours.
+
+Three runner probes took it apart (33317888160, 33318074241, 33318359548,
+2026-08-30, GW2, entry 946779):
+
+| Question | Answer |
+|---|---|
+| `summary_overall_rank` | 6,078,195 → `page_standings=121564` |
+| Does FPL honour a page that deep? | **Yes.** Rank 1 at page 1, 4,885 at page 100, 484,962 at page 10,000, 4,964,563 at page 100,000 |
+| Does the page bracket the reader? | **Yes**, ranks 5,989,492 … 6,078,195 |
+| That band's median live score | 36 (`event_total` and `summary_event_points` agree) |
+| `Σ picks(pos ≤ 11) × multiplier × live total_points` vs `summary_event_points` | **identical on all 20 sampled entries** |
+| Counting all fifteen instead of eleven | median 42 → 47, highest 42 → 70 |
+| **`bandMedianScore` itself, run against the live API** | **44, against FPL's 42** |
+
+So the sample is right, the picks-to-live join is exact, and the shipped
+scoring is right: 44 against a band median of 42, the +2 being provisional
+bonus, which is what FPL's figure excludes and nothing else. **The 83 was not
+reproduced.** Do not repeat it as a measurement of anything.
+
+What the exercise did find are two defects in the SAMPLING, both now fixed:
+
+- **The latch was set before the request.** Twenty `picks` fetches go out at
+  once through one proxy and `.catch(() => null)` drops each failure silently,
+  so one bad moment on load left the safety score missing — or computed from a
+  handful of managers — for as long as the tab stayed open. `bandDone` now
+  latches only inside the success branch; `bandBusy` does the job the old ref
+  was really doing, stopping a second fetch while one is in flight.
+- **The copy asserted "~20 managers" whichever way the sample went.** A median
+  over six read exactly like a median over twenty, and six is noisy enough to
+  move the message from "on course to climb" to "38 more needed". The tooltip
+  now names the real count and the label says so when it is short.
+
+`scripts/bandscore.test.ts` is the harness that settled it, run by
+`.github/workflows/clock-probe.yml`. It **imports** `liveEntryScore` rather than
+reimplementing it — a probe that re-derives the code under test proves its own
+arithmetic against itself, which is the trap `score-probe.mjs`'s header already
+records. Run it with `npx vitest run -c vitest.band.config.ts`; it needs the
+network and a gameweek in progress.
+
+One row in that run is worth keeping in mind: entry 3269700 came out at 68
+against FPL's 55. The app projects auto-substitutions and the vice-captain
+takeover that FPL only applies when the gameweek is settled, so it leading by
+a wide margin on a squad with blanked starters is the feature working — but
++13 is the largest gap measured, and nothing has checked whether that
+projection was RIGHT.
+
 ## The deadline watch
 
 `.github/workflows/deadline-watch.yml` runs every six hours on a runner and
