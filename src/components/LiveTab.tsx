@@ -32,6 +32,22 @@ import { LIST_ROW_TIER, LIST_TIER } from "./Pitch";
 
 // Interval lives in `lib/live.ts` so this and the squad view stay in step.
 
+/**
+ * The smallest sample `bandMedianScore` will call a rank band, and how many
+ * times a short one is re-fetched.
+ *
+ * NEITHER IS TUNED AND NEITHER IS A MEASUREMENT. Five is `bandMedianScore`'s
+ * own floor, restated here so the two cannot drift apart; its note says a
+ * median of three managers is not a rank band, and that is a judgement rather
+ * than a swept value. Three attempts is a bound on damage, not a fitted number:
+ * the point is that a load which came back short is tried again at all, where
+ * before it stood for the life of the page.
+ */
+const BAND_MIN_SAMPLE = 5;
+const BAND_MAX_ATTEMPTS = 3;
+/** The size the sample is asked for; below it the label says how many it got. */
+const BAND_FULL_SAMPLE = 20;
+
 export default function LiveTab({
   data,
   onSelect,
@@ -57,7 +73,21 @@ export default function LiveTab({
    */
   const [feedWatch, setFeedWatch] = useState<FeedWatch>({ sig: "", at: 0 });
   const [bandPicks, setBandPicks] = useState<EntryEventPicks[] | null>(null);
-  const bandTried = useRef(false);
+  /*
+   * THREE REFS AND A COUNTER, AND THEY ARE NOT INTERCHANGEABLE.
+   *
+   * `bandDone` latches only on a sample that was actually usable, so a load
+   * that came back short is retried instead of standing for the life of the
+   * page. `bandBusy` is what the old `bandTried` was really doing — stopping a
+   * second fetch while the first is in flight, which React's own double-invoke
+   * in development produces on its own. Collapsing the two is how a failed
+   * attempt became permanent: the latch was set BEFORE the request.
+   * `bandAttempt` is what re-enters the effect, and it is capped, because a
+   * retry that cannot succeed must not become a loop.
+   */
+  const bandDone = useRef(false);
+  const bandBusy = useRef(false);
+  const [bandAttempt, setBandAttempt] = useState(0);
   const [matchOpen, setMatchOpen] = useState<Fixture | null>(null);
   // Latest-wins guard: an older in-flight response must never overwrite a
   // newer one (visible as scores briefly going backwards).
@@ -161,10 +191,11 @@ export default function LiveTab({
    * the memo below.
    */
   useEffect(() => {
-    if (bandTried.current || currentEvent == null) return;
+    if (bandDone.current || bandBusy.current || currentEvent == null) return;
+    if (bandAttempt > BAND_MAX_ATTEMPTS) return;
     const rank = data.entry.summary_overall_rank;
     if (rank == null) return;
-    bandTried.current = true;
+    bandBusy.current = true;
     (async () => {
       try {
         const overallId =
@@ -179,10 +210,26 @@ export default function LiveTab({
             sample.map((r) => api.picks(r.entry, currentEvent).catch(() => null))
           )
         ).filter((p): p is EntryEventPicks => p != null);
-        if (picks.length >= 5) setBandPicks(picks);
+        if (picks.length >= BAND_MIN_SAMPLE) {
+          bandDone.current = true;
+          setBandPicks(picks);
+          return;
+        }
       } catch {}
-    })();
-  }, [currentEvent, data.entry]);
+      /*
+       * ONLY HERE, AND THIS IS THE FIX. Twenty `picks` requests go out at once
+       * through one proxy; some of them failing on a phone is ordinary, and
+       * `.catch(() => null)` above drops each one silently. The old code had
+       * already latched before any of that, so ONE bad moment on load meant the
+       * safety score was either missing or computed from a handful of managers
+       * for as long as the tab stayed open — with no way to tell from the
+       * screen which, because the copy claimed "~20" either way.
+       */
+      setBandAttempt((a) => a + 1);
+    })().finally(() => {
+      bandBusy.current = false;
+    });
+  }, [currentEvent, data.entry, bandAttempt]);
 
   const teams = useMemo(
     () => new Map(data.bootstrap.teams.map((t) => [t.id, t])),
@@ -540,8 +587,10 @@ export default function LiveTab({
         </div>
 
         {/*
-          Safety score: median live score of ~20 managers at your overall-rank
-          band when available; falls back to FPL's own gameweek average.
+          Safety score: the median live score of the managers sampled at your
+          overall-rank band — twenty are asked for, however many answer are
+          used, and the label says so when it is fewer. Falls back to FPL's own
+          gameweek average.
 
           THAT FALLBACK IS NOT AVAILABLE DURING PLAY, and it used to look as
           though it were. `average_entry_score` is 0 until FPL publishes it
@@ -567,11 +616,34 @@ export default function LiveTab({
                 }`}
                 title={
                   personalized
-                    ? "Median live score of ~20 managers ranked right around you in the Overall league — match it to hold your rank"
+                    ? /*
+                       * THE REAL COUNT, NOT "~20". The sample is twenty
+                       * `picks` requests fired at one proxy and each failure
+                       * is dropped silently, so what reaches the median is
+                       * anywhere from five to twenty managers — and this
+                       * string asserted twenty for all of them. A reader who
+                       * doubts the number had no way to find out it was
+                       * computed from six.
+                       */
+                      `Median live score of ${bandPicks?.length ?? 0} managers ranked right around you in the Overall league — match it to hold your rank`
                     : "Estimate based on the live gameweek average — a rank-band sample wasn't available"
                 }
               >
-                🛡️ Safety score {personalized ? "(your rank band)" : "(est.)"}:{" "}
+                🛡️ Safety score{" "}
+                {/*
+                  A THIN SAMPLE SAYS SO ON THE FACE OF IT. A median over six
+                  managers and one over twenty were rendered identically, and
+                  the first is noisy enough to move the whole message from
+                  "on course to climb" to "38 more needed". The tooltip carries
+                  the count either way; this makes a short one visible without
+                  opening it.
+                */}
+                {personalized
+                  ? bandPicks!.length < BAND_FULL_SAMPLE
+                    ? `(${bandPicks!.length} of your rank band)`
+                    : "(your rank band)"
+                  : "(est.)"}
+                :{" "}
                 <b>{needed} pts</b> —{" "}
                 {/*
                   LEVEL IS LEVEL. `total >= needed` sent an exact tie down the
