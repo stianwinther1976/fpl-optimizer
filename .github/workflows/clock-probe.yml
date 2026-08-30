@@ -57,6 +57,19 @@ jobs:
           FPL_LEAGUE_ID: ${{ vars.FPL_LEAGUE_ID || '314' }}
         run: node scripts/snapshot/band-probe.mjs
 
+      # Third, and the one that answers the question the two above only framed:
+      # it imports the SHIPPED `liveEntryScore` and runs it against the live
+      # API, rather than reimplementing it. Needs `npm ci`, which is why it sits
+      # behind the two that do not — a dependency install is thirty seconds the
+      # quick checks should not have to wait for if it fails.
+      - name: Install dependencies
+        run: npm ci
+      - name: Score the rank band with the app's own code
+        env:
+          FPL_ENTRY_ID: ${{ vars.FPL_ENTRY_ID || '946779' }}
+          FPL_LEAGUE_ID: ${{ vars.FPL_LEAGUE_ID || '314' }}
+        run: npx vitest run -c vitest.band.config.ts --reporter=verbose --silent=false
+
       # Five minutes by default, twenty-two as configured. Run it while a match
       # WITH GOALS IN IT is actually going, or it has nothing to compare and
       # says so.
