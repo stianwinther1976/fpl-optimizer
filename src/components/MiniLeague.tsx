@@ -1,13 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { markNavigation } from "@/lib/nav";
 import { api, DEMO_ENTRY_ID, FplApiError, fmtNum, type TeamData } from "@/lib/fpl";
 import type { EventLive, LeagueStandings } from "@/lib/types";
 import { CHIP_LABELS } from "@/lib/rules";
-import { leagueRowGw, leagueRowTotal, rankByLiveScore } from "@/lib/display";
-import { liveEntryScore, provisionalBonus, squadMatchState } from "@/lib/live";
+import { leagueRowGw, leagueRowTotal, rankByLiveScore, scoreTier } from "@/lib/display";
+import {
+  liveEntryScore,
+  provisionalBonus,
+  squadMatchState,
+  squadRoster,
+  type RosterEntry,
+} from "@/lib/live";
+import { LIST_TIER } from "./Pitch";
 import { ErrorBox, Skeleton } from "./ui";
 
 const MAX_RIVAL_DETAILS = 20;
@@ -21,12 +28,106 @@ interface RivalDetail {
   /** Counting players whose match is running, and whose has not kicked off. */
   inPlay: number;
   toStart: number;
+  /**
+   * The players who count toward this rival's score, with where each is in the
+   * gameweek. Rendered under the row when it is expanded.
+   *
+   * Already fetched: `loadDetails` pulls this manager's picks to score them, so
+   * the roster costs one pass over a payload that is in hand rather than a
+   * request. It is only held for the top `MAX_RIVAL_DETAILS` rivals, the same
+   * ones the captain and chip are shown for.
+   */
+  roster: RosterEntry[];
 }
 
 interface LeagueOwnership {
   sample: number; // rivals sampled (excluding you)
   /** elementId -> effective ownership share 0..2 (captaincy counts double) */
   eo: Map<number, number>;
+}
+
+
+/**
+ * A rival's counting players, grouped by where each is in the gameweek.
+ *
+ * ASKED FOR: the row said a rival was on 80 with two still to kick off, and
+ * there was no way to see WHICH two without opening their whole dashboard and
+ * losing the table. The three groups are the question a live table is read
+ * for — what is still to come, what is happening now, and what is settled.
+ *
+ * A render function and not a component declared inside `MiniLeague`, for the
+ * reason `Pitch.tsx` spells out at length: a component declared in a render is
+ * a new type on every render, so React remounts the whole subtree and drops
+ * focus with it.
+ *
+ * Empty groups are omitted rather than shown with a zero. Late in a gameweek
+ * every player is done, and three headings for one populated list is noise.
+ */
+function RosterBreakdown({ roster, hits }: { roster: RosterEntry[]; hits: number }) {
+  const groups: { key: string; label: string; of: (r: RosterEntry) => boolean }[] = [
+    { key: "todo", label: "Yet to play", of: (r) => r.status.state === "todo" },
+    { key: "live", label: "Playing now", of: (r) => r.status.state === "live" },
+    {
+      key: "done",
+      label: "Done",
+      of: (r) => r.status.state === "done" || r.status.state === "dnp",
+    },
+    { key: "blank", label: "No fixture", of: (r) => r.status.state === "blank" },
+  ];
+  return (
+    <div className="flex flex-col gap-2">
+      {groups.map((g) => {
+        const list = roster.filter(g.of);
+        if (list.length === 0) return null;
+        return (
+          <div key={g.key}>
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              {g.label} · {list.length}
+            </div>
+            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
+              {list.map((r) => (
+                <span key={r.element.id} className="text-xs">
+                  {r.element.web_name}
+                  {r.multiplier > 1 && (
+                    <span className="ml-0.5 text-[10px] font-bold text-accent">
+                      ×{r.multiplier}
+                    </span>
+                  )}
+                  {/*
+                    The CONTRIBUTION, armband included, which is what the score
+                    beside the row is made of. Printing the raw total would make
+                    a captain's row fail to add up against the number above it.
+                  */}
+                  <span className={`ml-1 font-mono ${LIST_TIER[scoreTier(r.contribution)]}`}>
+                    {r.contribution}
+                  </span>
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      {/*
+        THE RECONCILIATION, which is the reason to open this at all: the rows
+        above are every player who counts, so their contributions have to come
+        to the score on the row this hangs under. They sum GROSS; the score is
+        net of the hit, so the hit is shown as its own term rather than left as
+        an unexplained gap.
+      */}
+      <div className="border-t border-border-c pt-1 text-[10px] text-muted">
+        Total{" "}
+        <span className="font-mono font-bold text-fg">
+          {roster.reduce((a, r) => a + r.contribution, 0)}
+        </span>
+        {hits > 0 && (
+          <>
+            {" − "}
+            <span className="font-mono text-danger">{hits}</span> hit
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function MiniLeague({ data, entryId }: { data: TeamData; entryId: number }) {
@@ -48,6 +149,14 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
    * answerable without reading every row.
    */
   const [sortBy, setSortBy] = useState<"total" | "gw">("total");
+  /**
+   * Which rival's roster is open, by entry id.
+   *
+   * ONE AT A TIME. The rows are short and the rosters are eleven lines each;
+   * two open at once pushes the table off the screen and turns a scan into a
+   * scroll, which is the opposite of what the expansion is for.
+   */
+  const [openRoster, setOpenRoster] = useState<number | null>(null);
   const [ownership, setOwnership] = useState<LeagueOwnership | null>(null);
   const [loading, setLoading] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -236,6 +345,24 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               livePoints: net,
               hits,
               ...squadMatchState(picks, elementById, live, data.fixtures, currentEvent),
+              /*
+               * THE SAME SEVEN ARGUMENTS `liveEntryScore` GOT, one line up.
+               * The expansion hangs directly under the score it decomposes, so
+               * a roster built without the provisional bonus or the takeover
+               * would print rows that visibly fail to add up to the number
+               * above them — during the bonus window, which is exactly when a
+               * reader opens it. `liveEntryScore` now sums this very array, so
+               * the two agree by construction rather than by matching edits.
+               */
+              roster: squadRoster(
+                picks,
+                elementById,
+                live,
+                data.fixtures,
+                currentEvent,
+                bonus.byElement,
+                gwDone
+              ),
             };
             return [r.entry, detail] as const;
           } catch {
@@ -433,24 +560,23 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                   "3xc": "TC",
                 };
                 const clickable = canOpenRivals && !mine;
+                const open = openRoster === r.entry;
                 return (
+                  <Fragment key={r.entry}>
+                  {/*
+                    A ROW WITH TWO ACTIONS CANNOT BE ONE CONTROL — the same rule
+                    the recent-teams pill on the front page carries. The row was
+                    a single click target that navigated away; the name now
+                    expands the roster in place, and the "›" beside the manager
+                    remains the link to their dashboard. Nesting one inside the
+                    other would be invalid HTML and, on a phone, would put a
+                    small target inside a large one doing something quite
+                    different.
+                  */}
                   <tr
-                    key={r.entry}
-                    className={`${mine ? "bg-accent/10" : "hover:bg-panel-2/60 active:bg-panel-2"} ${clickable ? "cursor-pointer" : ""}`}
-                    onClick={clickable ? () => goToTeam(r.entry) : undefined}
-                    tabIndex={clickable ? 0 : undefined}
-                    aria-label={clickable ? `${r.entry_name} — open this team` : undefined}
-                    onKeyDown={
-                      clickable
-                        ? (ev) => {
-                            if (ev.key === "Enter" || ev.key === " ") {
-                              ev.preventDefault();
-                              goToTeam(r.entry);
-                            }
-                          }
-                        : undefined
-                    }
-                    title={clickable ? "Open this manager's dashboard" : undefined}
+                    className={`${mine ? "bg-accent/10" : "hover:bg-panel-2/60"} ${
+                      open ? "bg-panel-2/40" : ""
+                    }`}
                   >
                     <td className="px-2 py-1.5 font-mono text-xs">
                       {/*
@@ -476,7 +602,17 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                     </td>
                     <td className="px-1.5 py-1.5">
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate font-medium">{r.entry_name}</span>
+                        <button
+                          type="button"
+                          onClick={() => setOpenRoster(open ? null : r.entry)}
+                          disabled={!d}
+                          aria-expanded={open}
+                          className="truncate text-left font-medium disabled:cursor-default hover:text-accent disabled:hover:text-inherit"
+                          title={d ? "Show who has played and who is still to come" : undefined}
+                        >
+                          {r.entry_name}
+                          {d && <span className="ml-1 text-[10px] opacity-60">{open ? "▾" : "▸"}</span>}
+                        </button>
                         {d?.chip && (
                           <span
                             className="shrink-0 rounded bg-accent-2/15 px-1 py-px text-[10px] font-bold text-accent-2"
@@ -489,7 +625,17 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                       <div className="truncate text-[11px] text-muted">
                         {r.player_name}
                         {d?.captain && <span> ({d.captain})</span>}
-                        {clickable && <span className="ml-1 opacity-60">›</span>}
+                        {clickable && (
+                          <button
+                            type="button"
+                            onClick={() => goToTeam(r.entry)}
+                            className="ml-1 opacity-60 hover:text-accent hover:opacity-100"
+                            title="Open this manager's dashboard"
+                            aria-label={`${r.entry_name} — open this team`}
+                          >
+                            ›
+                          </button>
+                        )}
                       </div>
                     </td>
                     <td className="px-1.5 py-1.5 text-right font-mono">
@@ -530,6 +676,14 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                       {fmtNum(leagueRowTotal(r, d?.livePoints))}
                     </td>
                   </tr>
+                  {open && d && (
+                    <tr className="bg-panel-2/40">
+                      <td colSpan={4} className="px-4 pb-3 pt-1">
+                        <RosterBreakdown roster={d.roster} hits={d.hits} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>

@@ -8,6 +8,7 @@ import {
   provisionalBonus,
   isInPlay,
   squadMatchState,
+  squadRoster,
   playerMatchStatus,
   liveMatchMinutes,
   liveFixtureScore,
@@ -1434,6 +1435,157 @@ describe("squadMatchState — how much football is still to come", () => {
     );
     expect(st.inPlay).toBe(0);
     expect(st.blank).toBe(11);
+  });
+});
+
+
+describe("squadRoster — the decomposition the league table expands to", () => {
+  const els = makeSquad();
+
+  const fixture = (id: number, home: number, away: number, done = false): Fixture =>
+    ({
+      id,
+      event: 1,
+      team_h: home,
+      team_a: away,
+      started: true,
+      finished: done,
+      finished_provisional: done,
+      minutes: 90,
+      kickoff_time: "2026-08-22T14:00:00Z",
+      team_h_score: 0,
+      team_a_score: 0,
+      team_h_difficulty: 3,
+      team_a_difficulty: 3,
+      stats: [],
+    }) as Fixture;
+
+  const allFixtures = (done = false) => {
+    const teams = [...new Set([...els.values()].map((e) => e.team))];
+    return teams.map((t, i) => fixture(100 + i, t, 90 + i, done));
+  };
+
+  /** Everyone on `minutes`, everyone on 2 points, except the ids in `blanks`. */
+  const liveWith = (blanks: number[] = []): EventLive =>
+    ({
+      elements: [...els.keys()].map((id) => ({
+        id,
+        stats: blanks.includes(id)
+          ? { minutes: 0, total_points: 0 }
+          : { minutes: 90, total_points: 2 },
+        explain: [],
+      })),
+    }) as unknown as EventLive;
+
+  const entry = (over: Partial<EntryEventPicks> = {}): EntryEventPicks =>
+    ({
+      picks: makePicks(),
+      active_chip: null,
+      entry_history: { event_transfers_cost: 0 },
+      ...over,
+    }) as EntryEventPicks;
+
+  /*
+   * THE ONE THAT MATTERS. The league table prints these contributions directly
+   * under the score, so the invariant is not "roughly agrees" — it is that
+   * `liveEntryScore` is literally this sum minus the hit. Every case below
+   * asserts it again on a different shape, because the ways the two used to
+   * drift (bonus, the takeover, Bench Boost, the hit) are all different terms.
+   */
+  const reconciles = (p: EntryEventPicks, live: EventLive, fx: Fixture[], bonus: Map<number, number> | null, gwDone = false) => {
+    const roster = squadRoster(p, els, live, fx, 1, bonus, gwDone);
+    const sum = roster.reduce((a, r) => a + r.contribution, 0);
+    expect(sum - (p.entry_history?.event_transfers_cost ?? 0)).toBe(
+      liveEntryScore(p, els, live, fx, 1, bonus, gwDone)
+    );
+    return roster;
+  };
+
+  it("lists the eleven that count and sums to the entry score", () => {
+    const roster = reconciles(entry(), liveWith(), allFixtures(), null);
+    expect(roster).toHaveLength(11);
+    expect(roster.every((r) => r.contribution === r.raw * r.multiplier)).toBe(true);
+  });
+
+  it("lists all fifteen under Bench Boost, and still sums", () => {
+    const roster = reconciles(entry({ active_chip: "bboost" }), liveWith(), allFixtures(), null);
+    expect(roster).toHaveLength(15);
+  });
+
+  it("carries the provisional bonus into the per-player figure", () => {
+    /*
+     * The window this exists for: full time, bonus on the BPS ladder, not yet
+     * confirmed. A roster built without the map prints rows that come up short
+     * of the score above them by exactly the bonus.
+     */
+    const bonus = new Map([[3, 3]]);
+    const roster = reconciles(entry(), liveWith(), allFixtures(true), bonus);
+    const withBonus = roster.find((r) => r.element.id === 3)!;
+    expect(withBonus.raw).toBe(5); // 2 scored + 3 provisional
+    const without = roster.find((r) => r.element.id === 4)!;
+    expect(without.raw).toBe(2);
+  });
+
+  it("doubles under the armband, and triples under Triple Captain", () => {
+    const picks = makePicks().map((k) => (k.is_captain ? { ...k, multiplier: 2 } : k));
+    const roster = reconciles(entry({ picks }), liveWith(), allFixtures(), null);
+    const cap = roster.find((r) => r.element.id === 8)!;
+    expect(cap.multiplier).toBe(2);
+    expect(cap.contribution).toBe(4);
+
+    const tc = makePicks().map((k) => (k.is_captain ? { ...k, multiplier: 3 } : k));
+    const r3 = reconciles(entry({ picks: tc, active_chip: "3xc" }), liveWith(), allFixtures(), null);
+    expect(r3.find((r) => r.element.id === 8)!.multiplier).toBe(3);
+  });
+
+  it("moves the armband to the vice when the captain blanks a finished gameweek", () => {
+    /*
+     * `gwDone` is a term `squadRoster` did not have. Without it the expansion
+     * kept doubling a captain who never played, on a gameweek FPL has settled,
+     * while the score beside it had already moved the armband — a gap of the
+     * vice's entire raw score, which CLAUDE.md records as 4 to 15 points on
+     * real data.
+     */
+    const picks = makePicks().map((k) => (k.is_captain ? { ...k, multiplier: 2 } : k));
+    /*
+     * The captain AND the whole bench on zero, which is what makes `gwDone`
+     * reachable at all. With a playable bench the auto-sub projection drops the
+     * captain, and `blanked` then fires the takeover on its own; the flag is
+     * the case where he cannot be replaced and so stays in the eleven, scoring
+     * nothing. Left doubled, that is the vice's entire raw score missing from
+     * the rows against the score above them.
+     */
+    const live = liveWith([8, 12, 13, 14, 15]);
+    const roster = reconciles(entry({ picks }), live, allFixtures(true), null, true);
+    expect(roster.find((r) => r.element.id === 8)!.multiplier).toBe(1);
+    expect(roster.find((r) => r.element.id === 9)!.multiplier).toBe(2); // the vice
+  });
+
+  it("leaves the armband alone mid-gameweek while the captain can still play", () => {
+    // The other side of the flag: `gwDone` false and the captain not dropped
+    // by auto-subs is an ordinary blank so far, not a takeover.
+    const picks = makePicks().map((k) => (k.is_captain ? { ...k, multiplier: 2 } : k));
+    const roster = reconciles(entry({ picks }), liveWith([8]), allFixtures(), null, false);
+    expect(roster.find((r) => r.element.id === 8)!.multiplier).toBe(2);
+  });
+
+  it("reconciles with a transfer hit taken", () => {
+    // The rows are GROSS and the score is NET, which is the one legitimate
+    // difference between them — and the reason the expansion names the hit.
+    const p = entry({ entry_history: { event_transfers_cost: 8 } } as Partial<EntryEventPicks>);
+    const roster = reconciles(p, liveWith(), allFixtures(), null);
+    expect(roster.reduce((a, r) => a + r.contribution, 0)).toBe(22);
+    expect(liveEntryScore(p, els, liveWith(), allFixtures(), 1, null)).toBe(14);
+  });
+
+  it("gives every entry a status, and agrees with the counters", () => {
+    const fx = allFixtures();
+    const p = entry();
+    const roster = squadRoster(p, els, liveWith(), fx, 1);
+    const st = squadMatchState(p, els, liveWith(), fx, 1);
+    expect(roster.filter((r) => r.status.state === "live")).toHaveLength(st.inPlay);
+    expect(roster.filter((r) => r.status.state === "todo")).toHaveLength(st.toStart);
+    expect(roster.filter((r) => r.status.state === "blank")).toHaveLength(st.blank);
   });
 });
 
