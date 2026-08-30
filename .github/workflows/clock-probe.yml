@@ -13,6 +13,11 @@ on:
   push:
     branches: [data-snapshot]
   workflow_dispatch:
+    inputs:
+      quick:
+        description: "Skip the long score probe, so the log is readable in a minute"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -42,9 +47,26 @@ jobs:
           FPL_LEAGUE_ID: ${{ vars.FPL_LEAGUE_ID || '314' }}
         run: node scripts/snapshot/standings-check.mjs
 
-      # Five minutes. Run it while a match WITH GOALS IN IT is actually going,
-      # or it has nothing to compare and says so.
+      # Second, and also standalone: one entry fetch, a handful of standings
+      # pages and twenty entries — about half a minute, and it answers whether
+      # the safety score is comparing the reader against his own rank band at
+      # all. Same log-readability reason as the check above.
+      - name: Check the safety score's rank band
+        env:
+          FPL_ENTRY_ID: ${{ vars.FPL_ENTRY_ID || '946779' }}
+          FPL_LEAGUE_ID: ${{ vars.FPL_LEAGUE_ID || '314' }}
+        run: node scripts/snapshot/band-probe.mjs
+
+      # Five minutes by default, twenty-two as configured. Run it while a match
+      # WITH GOALS IN IT is actually going, or it has nothing to compare and
+      # says so.
+      #
+      # `quick` exists because of the log-readability trap above: the two checks
+      # ahead of this one answer in seconds, and a job's log cannot be
+      # downloaded until the job ENDS. Without a way to skip this step, reading
+      # a one-request answer costs twenty-two minutes of waiting.
       - name: Compare the fixtures score with the live-derived one
+        if: ${{ !inputs.quick }}
         env:
           # Default five minutes. Raise it via the SCORE_RUN_MS repository
           # variable to cover a whole half when a match with goals is on.
