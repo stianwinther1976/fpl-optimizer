@@ -2207,6 +2207,34 @@ describe("the probe workflow points at scripts that exist", () => {
     expect(checked).toBeGreaterThan(0);
   });
 
+  it("every vitest config a workflow names exists, and so does what it includes", () => {
+    /*
+     * THE SAME DEFECT ONE LEVEL DEEPER, and the guard above cannot see it. A
+     * step that runs `npx vitest run -c <config>` names two files: the config,
+     * and whatever the config's `include` points at. Either can be missing, and
+     * vitest answers a missing `include` by running ZERO tests and exiting 0 —
+     * a green step that measured nothing, which is worse than the shell error
+     * a missing script gives, because nothing marks it.
+     */
+    let checked = 0;
+    for (const f of wfFiles) {
+      const src = fs.readFileSync(path.join(wfDir, f), "utf8");
+      for (const m of src.matchAll(/vitest run -c (\S+)/g)) {
+        checked++;
+        const cfg = path.join(root, m[1]);
+        expect(fs.existsSync(cfg), `${f}: ${m[1]} is missing`).toBe(true);
+        const inc = fs.readFileSync(cfg, "utf8").match(/include:\s*\[\s*"([^"]+)"/);
+        expect(inc, `${m[1]}: no include to check`).not.toBeNull();
+        // Only the literal, non-glob case is checkable this way, which is every
+        // harness config in the tree — they each name one file.
+        if (inc && !inc[1].includes("*")) {
+          expect(fs.existsSync(path.join(root, inc[1])), `${m[1]}: ${inc[1]} is missing`).toBe(true);
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
   it("keeps the quick steps ahead of the opt-in slow ones", () => {
     // A job's log cannot be read until the job ENDS, so a one-request check
     // behind a twelve-minute probe is twelve minutes from being readable.
