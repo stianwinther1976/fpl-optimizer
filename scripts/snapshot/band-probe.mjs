@@ -129,6 +129,67 @@ async function main() {
       "  scoring of it is what inflates the safety score. If the median is itself\n" +
       "  far above the average, the sample is the wrong managers."
   );
+
+  // --- 4: score the band the way the app does, term by term ---------------
+  //
+  // MEASURED 2026-08-30, GW2: the sample above brackets rank 6,078,195 and its
+  // median live score is 36 against a published average of 29. So the sample is
+  // right and the app's own scoring of it is what produced 83. This section
+  // takes that apart. It rebuilds only the SIMPLEST reading — the picks FPL
+  // recorded, times the multiplier FPL recorded, against the live feed — with
+  // no auto-subs and no bonus, so that if THAT already comes to ~80 the fault
+  // is in the picks-to-live join and not in anything the app adds on top.
+  const liveFeed = await get(`event/${gw}/live/`);
+  const pointsOf = new Map(
+    (liveFeed.body?.elements ?? []).map((e) => [e.id, e.stats.total_points])
+  );
+  if (pointsOf.size === 0) {
+    console.log("\n  live feed unavailable — cannot decompose.");
+    return;
+  }
+
+  console.log("\n  the same rows, scored off picks x live:");
+  console.log("  entry     | chip     | XI x mult | all 15 | hit | FPL says");
+  let firstDump = null;
+  for (const r of sample) {
+    const pk = await get(`entry/${r.entry}/event/${gw}/picks/`);
+    if (!pk.ok || !pk.body) continue;
+    const picks = pk.body.picks ?? [];
+    const xi = picks
+      .filter((k) => k.position <= 11)
+      .reduce((a, k) => a + (pointsOf.get(k.element) ?? 0) * Math.max(k.multiplier, 1), 0);
+    const all = picks.reduce(
+      (a, k) => a + (pointsOf.get(k.element) ?? 0) * Math.max(k.multiplier, 1),
+      0
+    );
+    const hit = pk.body.entry_history?.event_transfers_cost ?? 0;
+    const e = await get(`entry/${r.entry}/`);
+    console.log(
+      `  ${String(r.entry).padEnd(9)} | ${String(pk.body.active_chip ?? "-").padEnd(8)} | ${String(
+        xi
+      ).padStart(9)} | ${String(all).padStart(6)} | ${String(hit).padStart(3)} | ${String(
+        e.body?.summary_event_points ?? "-"
+      ).padStart(8)}`
+    );
+    if (!firstDump) firstDump = { entry: r.entry, picks, hit, chip: pk.body.active_chip };
+  }
+
+  // One squad in full, so the real `liveEntryScore` can be run against it in a
+  // test rather than reimplemented here. Reimplementing it is how a probe ends
+  // up proving its own arithmetic against itself.
+  if (firstDump) {
+    console.log(`\n  entry ${firstDump.entry} in full (chip=${firstDump.chip ?? "-"}, hit=${firstDump.hit}):`);
+    console.log("  pos | element | mult | cap | vice | live total_points");
+    for (const k of firstDump.picks) {
+      console.log(
+        `  ${String(k.position).padStart(3)} | ${String(k.element).padStart(7)} | ${String(
+          k.multiplier
+        ).padStart(4)} | ${String(k.is_captain).padEnd(5)} | ${String(k.is_vice_captain).padEnd(5)} | ${String(
+          pointsOf.get(k.element) ?? "-"
+        ).padStart(17)}`
+      );
+    }
+  }
 }
 
 main().catch((e) => console.log(`probe failed: ${e?.message ?? e}`));
