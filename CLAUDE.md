@@ -252,13 +252,25 @@ starting or benched, and `projectAll` applies it last. Two things about it:
   for that fixture — an empty sum would erase a real scoreline rather than
   defer to it, which is the trap `provisionalBonus` documents.
 
-- **`entry.summary_event_points` is live and exact, but excludes provisional
-  bonus.** It equalled the effective XI's `total_points` summed off
-  `event/{gw}/live/` with the captain doubled, on every sample of all three
-  probed entries. Where the app differs from it during the provisional window,
-  the difference is the bonus and nothing else — one entry showed 51 against a
-  projected 5 of bonus. So a disagreement with FPL's own figure is not by
-  itself evidence of a bug; check the bonus term before concluding anything.
+- **`entry.summary_event_points` is live and exact, but it is GROSS and it
+  excludes provisional bonus.** It equalled the effective XI's `total_points`
+  summed off `event/{gw}/live/` with the captain doubled, on every sample of
+  all three probed entries.
+
+  **"The difference is the bonus and nothing else" is what this entry used to
+  say, and it was wrong.** It also excludes the transfer hit. Measured on the
+  band sample during GW4 (run 33916528019), where three of the four printed
+  rows differed by exactly −4: entry 1825983 FPL 3 / app −1, entry 6262853
+  FPL 3 / app −1, entry 218565 FPL 0 / app −4 — and the one entry on no hit,
+  5646908, agreed exactly at 15. `liveEntryScore` returns NET, so against a
+  hit-taking entry the two disagree by the hit before bonus is even considered.
+
+  The earlier probes never caught it because every entry they happened to
+  sample had `event_transfers_cost` 0. A claim measured only where a term is
+  zero says nothing about the term.
+
+  So a disagreement with FPL's own figure is not by itself evidence of a bug —
+  check the hit AND the bonus before concluding anything.
 
 - **`finished` means bonus confirmed, not "the match has ended."** The final
   whistle is `finished_provisional`, and after a Saturday afternoon the two are
