@@ -663,3 +663,41 @@ export function matchStatusLabel(
       return "";
   }
 }
+
+/**
+ * What the model's report card is entitled to claim about its own corrections.
+ *
+ * THE CARD PRESENTED THEM AS SETTLED FACT. "Current self-corrections · MID
+ * ×1.17" reads the same after one graded gameweek as after twenty, and a
+ * reader asked the obvious question the card gave him no way to answer: can
+ * that be right off a single gameweek?
+ *
+ * Two facts, neither of them tuned, and the second is the sharper one:
+ *
+ *  - ONE graded gameweek is one gameweek. `CAL_CONFIG.alpha` is 0.3, so the
+ *    first grading moves the applied multiplier 30% of the way to whatever
+ *    that week's residual was. That is the design, not a defect — but the size
+ *    of the correction on screen does not say how much evidence is under it.
+ *
+ *  - GW1 IS THE ONE GAMEWEEK IN THE SEASON PROJECTED BY A DIFFERENT CODE PATH.
+ *    Pre-season every `strength_attack_*`/`strength_defence_*` FPL publishes
+ *    is 0, so the model falls back to the published integer FDR, and the
+ *    minutes model shrinks toward a prior instead of reading starts. CLAUDE.md
+ *    states the consequence outright: numbers measured pre-season do not
+ *    transfer. So a correction learned from GW1 is learned from a model that
+ *    is not the one it will be applied to.
+ *
+ * Nothing here changes a factor — that is a modelling decision and it needs a
+ * sweep on archived seasons, not a guess. This only stops the card asserting
+ * more than it has measured.
+ *
+ * Returns null once there is more than one graded gameweek: at that point the
+ * caveat is no longer a fact about the sample, and inventing a threshold for
+ * "enough" would be exactly the tuning the caveat is warning about.
+ */
+export function calibrationCaveat(log: { gw: number }[]): string | null {
+  if (log.length !== 1) return null;
+  return log[0].gw === 1
+    ? "Learned from one gameweek — and GW1 is projected from the pre-season fallback, because FPL publishes no team-strength numbers before the season starts. Treat these as provisional: they may not describe the in-season model they are being applied to."
+    : "Learned from one gameweek. Treat these as provisional.";
+}

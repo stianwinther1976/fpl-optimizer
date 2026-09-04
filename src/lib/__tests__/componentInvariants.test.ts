@@ -1681,6 +1681,24 @@ describe("the accuracy card reports itself in both directions", () => {
    * itself when the news was good, directly under the unhedged sentence
    * "Systematic misses shrink automatically over time".
    */
+  it("qualifies the corrections when one gameweek is all it has", () => {
+    /*
+     * `calibrationCaveat` is only a fix if the card renders it. Extracting the
+     * sentence into `display.ts` and leaving the chips unqualified would pass
+     * every test in `display.test.ts` while shipping the original problem —
+     * which is the whole reason that file exists.
+     *
+     * "MID x1.17" reads identically after one graded gameweek and after
+     * twenty. It was asked about, and the card had no answer on it.
+     */
+    const src = read("ModelAccuracy.tsx");
+    expect(src).toContain("calibrationCaveat(log)");
+    expect(src).toMatch(/\{caveat && \(/);
+    // The sentence itself lives in display.ts, not inlined here — otherwise
+    // the two drift and only one of them is tested.
+    expect(src).not.toContain("pre-season fallback");
+  });
+
   it("has no one-sided gate on the trend line", () => {
     const src = read("ModelAccuracy.tsx");
     expect(src).not.toMatch(/const improving\b/);

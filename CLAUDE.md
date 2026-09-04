@@ -513,6 +513,28 @@ always render at 58'. `makeDemoUniverse(NOW)` builds it; tests use
   is the cheaper moment to make a move that has ALREADY been chosen. It does not
   choose. Keep that separation if anything is added here.
 
+- **The calibration learns from GW1, which is the one gameweek produced by a
+  different code path.** `reconcileFinishedGws` grades every `ev.finished`
+  gameweek alike, and nothing in `calibration.ts` mentions the pre-season
+  branch. But GW1's projection is made before a ball is kicked: every
+  `strength_*` is 0, so the model is on FPL's published FDR, and `pStart`
+  shrinks toward a prior instead of reading starts. The section above says
+  plainly that numbers measured pre-season do not transfer — and this is that,
+  fed straight into a multiplier applied to in-season projections.
+
+  Observed on the live app after GW1: bias −29% over 288 graded players,
+  `alpha` 0.3, and the applied factors came out GK ×1.12 / DEF ×1.15 / MID
+  ×1.17 / FWD ×1.08. The 1.12 is exactly `1 + 0.3 × (1/0.71 − 1)`, so `global`
+  carries essentially all of it and the positional spread is small. The
+  arithmetic is right; whether the EVIDENCE should count is the open question.
+
+  Not fixed, because the fix is a modelling decision with two defensible
+  answers — drop GW1 from grading, or keep it — and choosing needs a sweep on
+  `../fpl-data` through `.github/workflows/measure.yml`, not a guess. What
+  shipped is only that the card stops asserting more than it has measured:
+  `calibrationCaveat` in `display.ts` names the one-gameweek sample and the
+  pre-season path while the log holds a single GW1 row.
+
 - **`dcPer90` divides by an arbitrarily small denominator.** Every other rate in
   `playerRates` goes through `shrunk90`; this one does not, so 5 defensive
   contributions in 20 minutes reads as 22.5 per 90. Low impact today because the

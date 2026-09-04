@@ -10,6 +10,7 @@ import {
   type CalibrationState,
 } from "@/lib/calibration";
 import { POSITION_NAMES } from "@/lib/rules";
+import { calibrationCaveat } from "@/lib/display";
 
 export default function ModelAccuracy({ demo }: { demo: boolean }) {
   const [state, setState] = useState<CalibrationState | null>(null);
@@ -41,6 +42,7 @@ export default function ModelAccuracy({ demo }: { demo: boolean }) {
    */
   const maeDelta = log.length >= 2 ? last.mae - first.mae : 0;
   const moved = Math.abs(maeDelta) > 0.01;
+  const caveat = calibrationCaveat(log);
 
   return (
     <div className="card p-4">
@@ -162,6 +164,19 @@ export default function ModelAccuracy({ demo }: { demo: boolean }) {
             );
           })}
         </div>
+        {/*
+          WHAT THE CHIPS ARE ENTITLED TO CLAIM. "MID ×1.17" reads identically
+          after one graded gameweek and after twenty, and a reader asked the
+          question the card gave him no way to answer. The text is in
+          `display.ts` so it can be tested; see its header for why GW1 in
+          particular is the weakest possible evidence for a correction applied
+          to in-season projections.
+        */}
+        {caveat && (
+          <p className="mt-2 rounded-lg border border-warn/40 bg-warn/10 px-2.5 py-1.5 text-xs text-warn">
+            {caveat}
+          </p>
+        )}
       </div>
     </div>
   );
