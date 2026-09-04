@@ -28,6 +28,7 @@ import {
   teamValue,
   type BenchRow,
   valueDelta,
+  calibrationCaveat,
 } from "../display";
 
 /**
@@ -889,5 +890,42 @@ describe("netGwDelta with a live override", () => {
 
   it("carries a negative live week through", () => {
     expect(netGwDelta(row(0), row(35), -4)).toBe(-39);
+  });
+});
+
+describe("calibrationCaveat — what the report card may claim", () => {
+  it("says nothing once more than one gameweek is graded", () => {
+    // Not a threshold for "enough evidence" — inventing one would be exactly
+    // the unswept tuning the caveat itself warns about. Past one, the caveat
+    // simply stops being a fact about the sample.
+    expect(calibrationCaveat([{ gw: 1 }, { gw: 2 }])).toBeNull();
+    expect(calibrationCaveat([{ gw: 1 }, { gw: 2 }, { gw: 3 }])).toBeNull();
+  });
+
+  it("says nothing when nothing is graded", () => {
+    // The card renders its own "no graded gameweeks yet" panel there, and the
+    // chips are all x1.00, so a warning about them would warn about nothing.
+    expect(calibrationCaveat([])).toBeNull();
+  });
+
+  it("names the pre-season problem when the one graded week is GW1", () => {
+    const t = calibrationCaveat([{ gw: 1 }]);
+    expect(t).toContain("one gameweek");
+    // The specific reason, not just "small sample": GW1 is the only gameweek
+    // whose projection comes off the pre-season fallback.
+    expect(t).toContain("pre-season");
+    expect(t).toContain("provisional");
+  });
+
+  it("does not blame the pre-season path for a gameweek that is not GW1", () => {
+    /*
+     * A reader who cleared site data mid-season regrades from wherever he
+     * reopened the app. One gameweek is still one gameweek — but that week's
+     * projection came off the in-season path, so the pre-season sentence would
+     * be a false explanation of a true warning.
+     */
+    const t = calibrationCaveat([{ gw: 14 }]);
+    expect(t).toContain("one gameweek");
+    expect(t).not.toContain("pre-season");
   });
 });
