@@ -105,7 +105,7 @@ describe("the safety score, computed by the shipped code", () => {
 
     const picks: EntryEventPicks[] = [];
     const fplSays: number[] = [];
-    console.log("\n  entry     | FPL says | app says | diff | chip");
+    console.log("\n  entry     | FPL says | app says | diff | hit | chip");
     for (const r of sample) {
       const p = await get<EntryEventPicks>(`entry/${r.entry}/event/${gw}/picks/`);
       const e = await get<{ summary_event_points: number }>(`entry/${r.entry}/`);
@@ -113,10 +113,11 @@ describe("the safety score, computed by the shipped code", () => {
       picks.push(p);
       fplSays.push(e.summary_event_points);
       const app = liveEntryScore(p, elementById, live, fixtures, gw, bonus.byElement, gwDone);
+      const hit = p.entry_history?.event_transfers_cost ?? 0;
       console.log(
         `  ${String(r.entry).padEnd(9)} | ${String(e.summary_event_points).padStart(8)} | ${String(
           app
-        ).padStart(8)} | ${String(app - e.summary_event_points).padStart(4)} | ${p.active_chip ?? "-"}`
+        ).padStart(8)} | ${String(app - e.summary_event_points).padStart(4)} | ${String(hit).padStart(3)} | ${p.active_chip ?? "-"}`
       );
     }
 
@@ -139,9 +140,11 @@ describe("the safety score, computed by the shipped code", () => {
     console.log(`  FPL's published GW average : ${ev.average_entry_score}`);
     console.log(
       "\n  READ THE DIFF COLUMN: a constant offset, a multiplicative one and a few\n" +
-        "  large outliers are three different bugs. FPL's figure excludes provisional\n" +
-        "  bonus and nothing else, so a positive diff of a few points on a squad whose\n" +
-        "  matches have ended is expected; anything larger is not."
+        "  large outliers are three different bugs. But subtract the KNOWN terms first.\n" +
+        "  FPL's figure is GROSS and excludes provisional bonus, while `liveEntryScore`\n" +
+        "  is net of the hit — so an entry on a −4 reads as a −4 diff with nothing wrong,\n" +
+        "  and a squad whose matches have ended reads a few points high for the bonus.\n" +
+        "  The `hit` column below is there so those are not mistaken for a defect."
     );
   });
 });
