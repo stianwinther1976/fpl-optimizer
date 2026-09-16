@@ -29,6 +29,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        # Full history: the analytics check below reads the layout out of the
+        # commit the site is actually serving, which a shallow clone does not
+        # have.
+        with:
+          fetch-depth: 0
 
       - name: Check the live site
         env:
@@ -58,11 +63,27 @@ jobs:
           echo "this workflow's commit         : $GITHUB_SHA"
           echo
 
-          # Did the tag reach the HTML at all?
-          if grep -q '_vercel/insights' /tmp/home.html; then
-            echo "analytics tag in HTML          : YES"
+          # DOES THE CODE ACTUALLY SERVING THE SITE CARRY THE TAG?
+          #
+          # This used to grep the homepage HTML for `_vercel/insights` and
+          # report "NO — the build predates it". That answer was fixed: the
+          # component is `"use client"`, so it injects its script after
+          # hydration and the server-rendered HTML can NEVER contain it. The
+          # check could only ever say NO, and it said it about a build that
+          # did contain the tag.
+          #
+          # So ask the repository instead. `/api/version` gives the commit the
+          # site is serving; reading the layout out of THAT commit answers the
+          # question exactly, and keeps answering it if the file moves.
+          sha=$(curl -sS -L "$SITE/api/version" | sed -n 's/.*"v":"\([^"]*\)".*/\1/p')
+          if [ -z "$sha" ]; then
+            echo "analytics tag in deployed code : unknown — no commit from /api/version"
+          elif ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+            echo "analytics tag in deployed code : unknown — $sha is not in this clone"
+          elif git show "$sha:src/app/layout.tsx" 2>/dev/null | grep -q '<Analytics'; then
+            echo "analytics tag in deployed code : YES (commit ${sha:0:7})"
           else
-            echo "analytics tag in HTML          : NO — the build serving the site predates it"
+            echo "analytics tag in deployed code : NO — commit ${sha:0:7} predates it"
           fi
 
           # THE ACTUAL QUESTION. Vercel serves this script only once Web
