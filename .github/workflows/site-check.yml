@@ -41,11 +41,20 @@ jobs:
           code=$(curl -sS -o /tmp/home.html -w '%{http_code}' -L "$SITE/" || echo 000)
           echo "homepage                       : HTTP $code"
 
+          # WHERE THE REQUEST ACTUALLY LANDS. The apex answers 308 and
+          # redirects, so an un-followed request returns the redirect's own
+          # body — the first run of this job printed "Redirecting..." as the
+          # deployed commit and read a 308 on the script below as "not
+          # enabled". Both were artefacts of the missing -L, not findings.
+          echo -n "homepage resolves to           : "
+          curl -sS -o /dev/null -w '%{url_effective}\n' -L "$SITE/"
+
           # Which commit is actually serving. A page whose build predates a
           # merge means the deploy has not landed yet, and every other line
           # below would then be describing the OLD build.
           echo -n "deployed commit (/api/version): "
-          curl -sS "$SITE/api/version" || echo "(unreachable)"
+          curl -sS -L "$SITE/api/version" || echo "(unreachable)"
+          echo
           echo "this workflow's commit         : $GITHUB_SHA"
           echo
 
@@ -60,8 +69,8 @@ jobs:
           # Analytics is enabled for the project; until then it 404s and the
           # component collects nothing. So this distinguishes "the code shipped"
           # from "the switch is on", which no amount of reading the repo can.
-          s=$(curl -sS -o /dev/null -w '%{http_code}' "$SITE/_vercel/insights/script.js" || echo 000)
-          echo "/_vercel/insights/script.js    : HTTP $s"
+          s=$(curl -sS -o /dev/null -w '%{http_code}' -L "$SITE/_vercel/insights/script.js" || echo 000)
+          echo "/_vercel/insights/script.js    : HTTP $s (after redirects)"
           if [ "$s" = "200" ]; then
             echo "  -> Web Analytics is ENABLED and collecting."
           else
