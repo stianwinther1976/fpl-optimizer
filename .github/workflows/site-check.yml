@@ -1,0 +1,77 @@
+# Is the live site up, is the current commit actually serving it, and is Vercel
+# Web Analytics switched on?
+#
+# The sandbox this repo is developed from can reach github.com but NOT
+# fploptimize.com — `curl` returns `CONNECT tunnel failed, 403`, the same wall
+# that puts every FPL probe on a runner. So this answers from a runner and
+# reports through the job log. It publishes nothing and needs no secret.
+#
+# What it CANNOT answer is how many people visited. That needs the Vercel API
+# and a token, which only the account owner can issue; see the closing note the
+# job prints.
+name: Site check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [site-check]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-check
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the live site
+        env:
+          SITE: ${{ vars.SITE_URL || 'https://fploptimize.com' }}
+        run: |
+          set -u
+          echo "site: $SITE"
+          echo
+
+          code=$(curl -sS -o /tmp/home.html -w '%{http_code}' -L "$SITE/" || echo 000)
+          echo "homepage                       : HTTP $code"
+
+          # Which commit is actually serving. A page whose build predates a
+          # merge means the deploy has not landed yet, and every other line
+          # below would then be describing the OLD build.
+          echo -n "deployed commit (/api/version): "
+          curl -sS "$SITE/api/version" || echo "(unreachable)"
+          echo "this workflow's commit         : $GITHUB_SHA"
+          echo
+
+          # Did the tag reach the HTML at all?
+          if grep -q '_vercel/insights' /tmp/home.html; then
+            echo "analytics tag in HTML          : YES"
+          else
+            echo "analytics tag in HTML          : NO — the build serving the site predates it"
+          fi
+
+          # THE ACTUAL QUESTION. Vercel serves this script only once Web
+          # Analytics is enabled for the project; until then it 404s and the
+          # component collects nothing. So this distinguishes "the code shipped"
+          # from "the switch is on", which no amount of reading the repo can.
+          s=$(curl -sS -o /dev/null -w '%{http_code}' "$SITE/_vercel/insights/script.js" || echo 000)
+          echo "/_vercel/insights/script.js    : HTTP $s"
+          if [ "$s" = "200" ]; then
+            echo "  -> Web Analytics is ENABLED and collecting."
+          else
+            echo "  -> Web Analytics is NOT enabled yet."
+            echo "     Vercel dashboard -> the project -> Analytics -> Enable."
+            echo "     Nothing is being counted until that switch is on, and it"
+            echo "     does not backfill: the record starts the moment it flips."
+          fi
+          echo
+          echo "VISITOR NUMBERS ARE NOT READABLE FROM HERE. They live behind the"
+          echo "Vercel API, which needs an account token this workflow has no"
+          echo "business holding by default. Read them in the dashboard, or add"
+          echo "a token as a repository secret if they should be reported here."
