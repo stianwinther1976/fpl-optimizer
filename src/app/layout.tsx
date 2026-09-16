@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { Analytics } from "@vercel/analytics/next";
 import UpdateToast from "@/components/UpdateToast";
 import { SITE_URL } from "@/lib/site";
 
@@ -106,6 +107,21 @@ export default function RootLayout({
         />
         {children}
         <UpdateToast />
+        {/*
+          Traffic, and deliberately the cookieless kind.
+          
+          Vercel Web Analytics serves its script from `/_vercel/insights` on
+          this origin rather than a third-party domain, sets no cookie and
+          stores no identifier that follows a reader between sites — so the app
+          keeps needing no consent banner, which a Google Analytics tag would
+          have changed. It counts page views, referrers, countries and devices
+          and nothing about who anyone is.
+
+          It is INERT UNTIL Web Analytics is enabled for the project in the
+          Vercel dashboard: the endpoint 404s and the component stops. So this
+          is not a tag that starts collecting because it was merged.
+        */}
+        <Analytics />
         <footer className="mt-auto py-6 text-center text-xs text-muted">
           {process.env.NEXT_PUBLIC_SUPPORT_URL && (
             <div className="mb-1.5">

@@ -2039,6 +2039,41 @@ describe("the Live tab cannot present stale numbers as live", () => {
   });
 });
 
+describe("the traffic tag stays cookieless and same-origin", () => {
+  /*
+   * WHY THIS IS PINNED AT ALL. The app ships no cookie banner and needs none,
+   * because nothing it loads stores an identifier that follows a reader between
+   * sites. That is a property of WHICH tag is in the layout, not of anything
+   * else in the codebase — so the next analytics tag someone reaches for is the
+   * thing that quietly takes it away, and the app would carry a consent
+   * obligation it does not advertise.
+   *
+   * Vercel Web Analytics serves from `/_vercel/insights` on this origin and
+   * sets no cookie. The named alternatives below all do neither.
+   */
+  const src = readApp("layout.tsx");
+
+  it("counts traffic through the same-origin, cookieless tag", () => {
+    expect(src).toContain('from "@vercel/analytics/next"');
+    expect(src).toMatch(/<Analytics \/>/);
+  });
+
+  it("loads no third-party tracker", () => {
+    for (const vendor of [
+      "googletagmanager",
+      "google-analytics",
+      "gtag(",
+      "hotjar",
+      "connect.facebook.net",
+      "fbq(",
+      "segment.com",
+      "mixpanel",
+    ]) {
+      expect(src.toLowerCase()).not.toContain(vendor.toLowerCase());
+    }
+  });
+});
+
 describe("the league table says how much football is left", () => {
   /*
    * A live standings row is read for two things: the score, and how much is
