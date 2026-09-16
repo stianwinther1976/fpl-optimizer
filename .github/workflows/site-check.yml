@@ -27,6 +27,13 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # AT JOB LEVEL ON PURPOSE. The `secrets` context is not available in a
+    # step's `if`, so gating the traffic step on `secrets.VERCEL_TOKEN` there
+    # does not evaluate to what it looks like it evaluates to. `env` IS
+    # available in a step `if`, so the secret is mapped here and the step tests
+    # the mapped value.
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         # Full history: the analytics check below reads the layout out of the
@@ -101,7 +108,54 @@ jobs:
             echo "     does not backfill: the record starts the moment it flips."
           fi
           echo
-          echo "VISITOR NUMBERS ARE NOT READABLE FROM HERE. They live behind the"
-          echo "Vercel API, which needs an account token this workflow has no"
-          echo "business holding by default. Read them in the dashboard, or add"
-          echo "a token as a repository secret if they should be reported here."
+
+      # Visitor numbers, IF a token has been added. Skipped entirely without
+      # one, so the job above keeps working for anybody who never adds it.
+      #
+      # THE TOKEN IS NEVER PRINTED AND NEVER LEAVES THE RUNNER. It is read from
+      # the repository secret straight into a header. It belongs in GitHub's
+      # secret store and nowhere else — not in a chat message, not in a commit,
+      # not in a log line.
+      - name: Read the traffic numbers
+        if: env.VERCEL_TOKEN != ''
+        env:
+          PROJECT: ${{ vars.VERCEL_PROJECT || 'fpl-optimizer' }}
+          TEAM: ${{ vars.VERCEL_TEAM_ID }}
+        run: |
+          set -u
+          api() {
+            curl -sS -w '\n<<HTTP %{http_code}>>' \
+              -H "Authorization: Bearer $VERCEL_TOKEN" "$1"
+          }
+          q=""
+          [ -n "${TEAM:-}" ] && q="?teamId=$TEAM"
+
+          # STEP 1: prove the token works, against an endpoint that is
+          # documented and stable. If this fails, nothing below means anything
+          # and the failure is about the token, not about analytics.
+          echo "--- whoami (is the token valid?) ---"
+          api "https://api.vercel.com/v2/user" | head -c 400
+          echo; echo
+
+          echo "--- the project ---"
+          api "https://api.vercel.com/v9/projects/$PROJECT$q" | head -c 600
+          echo; echo
+
+          # STEP 2: the actual numbers, and this part is DELIBERATELY WRITTEN AS
+          # A QUESTION RATHER THAN AN ANSWER.
+          #
+          # Vercel's Web Analytics figures are what the dashboard renders, and
+          # nothing has verified here that they are exposed on a stable public
+          # REST route. Building a reporter on an endpoint nobody has called
+          # would be inventing an API and then trusting it — the exact habit
+          # CLAUDE.md bans. So this prints the raw response, status code
+          # included, and the next run decides what to do with it.
+          from=$(( ($(date +%s) - 7*24*3600) * 1000 ))
+          to=$(( $(date +%s) * 1000 ))
+          sep="&"; [ -z "$q" ] && sep="?"
+          echo "--- web analytics, last 7 days (UNVERIFIED ENDPOINT) ---"
+          api "https://api.vercel.com/v1/web-analytics/timeseries$q${sep}projectId=$PROJECT&from=$from&to=$to" | head -c 1200
+          echo; echo
+          echo "A 404 here is a finding, not a failure: it means the numbers are"
+          echo "dashboard-only and this step should be replaced rather than"
+          echo "retried. Read what came back before changing anything." 
