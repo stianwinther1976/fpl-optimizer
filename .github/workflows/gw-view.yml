@@ -1,0 +1,43 @@
+# What does THIS app say about the coming gameweek?
+#
+# The app's view only exists in a browser, so comparing it against a newspaper's
+# gameweek preview meant reading it off a phone. This runs the shipped
+# projection on a runner and prints it: the captaincy order, the best player per
+# position, and — via the NAMES input — the app's own number for whoever a
+# preview happens to be pushing.
+#
+# It runs on a runner for the usual reason: the sandbox this repo is developed
+# from cannot reach fantasy.premierleague.com. It publishes nothing and reads
+# only the official public API.
+name: Gameweek view
+
+on:
+  workflow_dispatch:
+    inputs:
+      names:
+        description: "Comma-separated players to look up (e.g. Haaland,Rogers,Gvardiol)"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gw-view
+  cancel-in-progress: true
+
+jobs:
+  view:
+    runs-on: ubuntu-latest
+    # 150 element-summary round trips at concurrency 8, plus two projections.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Project the coming gameweek
+        env:
+          NAMES: ${{ inputs.names }}
+        run: npx vitest run -c vitest.gwview.config.ts --reporter=verbose --silent=false
