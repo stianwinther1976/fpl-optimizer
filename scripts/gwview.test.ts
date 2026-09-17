@@ -123,7 +123,20 @@ describe("the app's own view of the coming gameweek", () => {
         `${rank != null ? String(rank).padStart(3) + ". " : "     "}` +
         `${e.web_name.padEnd(16)} ${POSITION_NAMES[e.element_type as 1 | 2 | 3 | 4].padEnd(4)} ` +
         `${(teamOf.get(e.team) ?? "?").padEnd(4)} ${money(e).padStart(7)}  ` +
-        `xP ${p.next.toFixed(2).padStart(5)}  own ${String(e.selected_by_percent).padStart(5)}%  ` +
+        `xP ${p.next.toFixed(2).padStart(5)}  ` +
+        /*
+         * THE HORIZON, BESIDE THE GAMEWEEK, BECAUSE THEY ANSWER DIFFERENT
+         * QUESTIONS AND GET CONFUSED FOR EACH OTHER.
+         *
+         * `next` is one gameweek. Almost every argument a preview makes —
+         * "good fixture now but brutal after", "wait until GW9" — is about the
+         * run, not the week, and `totalDiscounted` is what the transfer
+         * planner actually decides on. Printing only `next` would have had
+         * this harness answering a question nobody asked while looking like it
+         * had answered theirs.
+         */
+        `h${p.perGw.size} ${p.totalDiscounted.toFixed(1).padStart(5)}  ` +
+        `own ${String(e.selected_by_percent).padStart(5)}%  ` +
         `vs ${opp.get(e.team) ?? "—"}`
       );
     };
@@ -146,6 +159,12 @@ describe("the app's own view of the coming gameweek", () => {
      * player the press is pushing is the interesting case, so a name that
      * matches nothing is reported rather than skipped.
      */
+    console.log("\n--- top 20 over the HORIZON (what the planner buys on) ---");
+    [...rows]
+      .sort((a, b) => b.totalDiscounted - a.totalDiscounted)
+      .slice(0, 20)
+      .forEach((p, i) => console.log(line(p, i + 1)));
+
     const names = (process.env.NAMES ?? "").split(",").map((s) => s.trim()).filter(Boolean);
     if (names.length > 0) {
       console.log("\n=== what the app says about the names asked about ===");
