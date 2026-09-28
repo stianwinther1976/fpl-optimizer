@@ -2039,6 +2039,43 @@ describe("the Live tab cannot present stale numbers as live", () => {
   });
 });
 
+describe("the two planning windows do not read as one", () => {
+  /*
+   * REPORTED FROM THE SCREEN: "Horizon: 5 gameweeks" sat a few centimetres
+   * above a button reading "Plan next 6 GWs". They are different features —
+   * the selector ranks transfers and chips, `runPlan` passes a fixed 6 — but
+   * nothing said so, and one number contradicting another on one screen is
+   * indistinguishable from a bug.
+   *
+   * What is pinned is the pairing, not either half alone. The failure mode is
+   * the two drifting back into looking like one setting: the label going
+   * generic again, or the planner's copy dropping the sentence that says its
+   * six is fixed. Either one on its own restores the confusion.
+   */
+  const src = read("OptimizePanel.tsx");
+
+  it("the selector names what it actually governs", () => {
+    // Not "Horizon:", which reads as a setting for the whole tab.
+    expect(src).toContain("Rank moves over:");
+    expect(src).not.toMatch(/>\s*Horizon:\s*</);
+    expect(src).toContain('aria-label="How many gameweeks to rank transfers and chips over"');
+  });
+
+  it("the multi-gameweek planner says its six is fixed", () => {
+    expect(src).toMatch(/Always\s*\n?\s*six, whatever the ranking window above is set to\./);
+  });
+
+  it("and it really is fixed, so the sentence stays true", () => {
+    /*
+     * The copy above is only honest while `runPlan` hard-codes it. If the two
+     * are ever coupled, this goes red and whoever couples them has to rewrite
+     * the sentence rather than leave a promise the code stopped keeping.
+     */
+    const plan = src.slice(src.indexOf("async function runPlan()"));
+    expect(plan.slice(0, 900)).toContain("horizon: 6,");
+  });
+});
+
 describe("the traffic tag stays cookieless and same-origin", () => {
   /*
    * WHY THIS IS PINNED AT ALL. The app ships no cookie banner and needs none,

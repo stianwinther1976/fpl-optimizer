@@ -636,12 +636,27 @@ export default function OptimizePanel({
           />
         </div>
         <div className="flex items-center gap-2">
+          {/*
+            "HORIZON" READ AS A SETTING FOR THE WHOLE TAB, AND IT IS NOT.
+            It governs the transfer ranking and the chip scenarios on this
+            panel. The Multi-GW planner below it does not take it — `runPlan`
+            passes a fixed 6 — so the screen showed "Horizon: 5 gameweeks" a
+            few centimetres above a button reading "Plan next 6 GWs", with
+            nothing saying they were different questions. Reported as
+            confusing, and it was: one number contradicting another on one
+            screen is indistinguishable from a bug.
+
+            Naming what it ranks is the whole fix. Coupling the two would
+            change what the planner computes rather than what the panel says
+            about it — and the note in the change handler below records why
+            they are deliberately independent.
+          */}
           <label htmlFor="opt-horizon" className="text-sm text-muted">
-            Horizon:
+            Rank moves over:
           </label>
           <select
             id="opt-horizon"
-            aria-label="How many gameweeks to plan over"
+            aria-label="How many gameweeks to rank transfers and chips over"
             value={horizon}
             onChange={(e) => {
               /*
@@ -795,7 +810,8 @@ export default function OptimizePanel({
         {!plan && !planning && (
           <p className="mt-2 text-sm text-muted">
             Sequences your transfers across the next six deadlines — when to bank a free
-            transfer, when to double up, and when a −4 actually pays for itself.
+            transfer, when to double up, and when a −4 actually pays for itself. Always
+            six, whatever the ranking window above is set to.
           </p>
         )}
         {plan && (
