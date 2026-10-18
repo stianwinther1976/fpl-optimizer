@@ -213,15 +213,26 @@ describe("MiniLeague drops the previous league's numbers before fetching", () =>
   const body = src.slice(src.indexOf("async function loadDetails"));
   const beforeTry = body.slice(0, body.indexOf("try {"));
 
-  it("clears details and ownership before the network calls, not after", () => {
-    // Rival details take up to MAX_RIVAL_DETAILS sequential `picks` calls.
-    // Both maps used to be written only at the END of that, so league A's
-    // effective ownership sat under league B's heading for the whole fetch —
-    // and if league B was too small to sample, the stale panel was all the
-    // user ever saw, because `setOwnership(null)` lives in an else-branch that
-    // only runs at the finish.
-    expect(beforeTry).toContain("setDetails(");
-    expect(beforeTry).toContain("setOwnership(null)");
+  it("clears the previous league's picks before the network calls, not after", () => {
+    // Rival details take up to MAX_RIVAL_DETAILS `picks` calls. The map was
+    // written only at the END of that, so league A's rivals and its effective
+    // ownership sat under league B's heading for the whole fetch.
+    expect(beforeTry).toContain("setRivalPicks(new Map())");
+  });
+
+  it("derives ownership from those picks rather than storing it alongside", () => {
+    /*
+     * WHY THIS IS THE SHARPER ASSERTION. The old code cleared two pieces of
+     * state and ownership's own reset lived in an else-branch that only ran at
+     * the finish — so if the incoming league was too small to sample, the
+     * stale panel was all the user ever saw. Two stores of the same fact need
+     * two correct clears; one derivation needs none, and cannot disagree with
+     * the table it sits under.
+     */
+    expect(src).not.toContain("setOwnership");
+    expect(src).toMatch(/const ownership = useMemo/);
+    const memo = src.slice(src.indexOf("const ownership = useMemo"));
+    expect(memo.slice(0, memo.indexOf("}, ["))).toContain("rivalPicks");
   });
 });
 
@@ -358,7 +369,7 @@ describe("MiniLeague's rival fetch is race-safe and fails visibly", () => {
     // The guard has to sit BEFORE the write, which is the only place it does
     // any good. Merely mentioning `superseded()` somewhere in the function —
     // in the catch, in the finally — leaves the stale overwrite wide open.
-    const write = src.indexOf("setDetails(new Map(results");
+    const write = src.indexOf("setRivalPicks(new Map(ok))");
     const guard = src.indexOf("if (superseded()) return;");
     expect(write).toBeGreaterThan(0);
     expect(guard).toBeGreaterThan(0);
@@ -450,6 +461,84 @@ describe("theme tokens used by components actually exist", () => {
     expect(custom).toContain("ink");
     expect(custom.length).toBeGreaterThan(8);
     expect(custom.filter((t) => !themeTokens.has(t))).toEqual([]);
+  });
+});
+
+describe("text on an accent fill is readable in both themes", () => {
+  /*
+   * MEASURED, NOT ASSERTED BY TOKEN NAME. The badges in `OptimizePanel` were
+   * `bg-accent text-white`, which is 1.76:1 on the dark theme the app opens
+   * on — WCAG AA wants 4.5:1 for text this size, so that is not borderline,
+   * it is unreadable. A guard that merely pinned the class name would have
+   * been satisfied by `text-accent-ink` regardless of what that token held,
+   * and the token has to INVERT between the themes because `--accent` does.
+   * So this recomputes the ratio from the stylesheet.
+   */
+  const css = fs.readFileSync(path.resolve(__dirname, "../../app/globals.css"), "utf8");
+  const block = (sel: string) => {
+    const at = css.indexOf(sel);
+    expect(at, sel).toBeGreaterThan(-1);
+    return css.slice(at, css.indexOf("\n}", at));
+  };
+  const varOf = (sel: string, name: string): string => {
+    const m = new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`).exec(block(sel));
+    expect(m, `${name} in ${sel}`).not.toBeNull();
+    return m![1];
+  };
+  /** WCAG 2.1 relative luminance. */
+  const lum = (hex: string): number => {
+    const ch = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    const lin = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * lin(ch[0]) + 0.7152 * lin(ch[1]) + 0.0722 * lin(ch[2]);
+  };
+  const ratio = (a: string, b: string): number => {
+    const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+
+  it("agrees with the figures the stylesheet's own note quotes", () => {
+    // The comment in `globals.css` quotes four ratios. If this arithmetic
+    // disagreed with them, one of the two is wrong and neither can be
+    // trusted — so the check that the numbers in the comment were measured is
+    // part of the test rather than a claim beside it.
+    expect(ratio("#00e07c", "#ffffff")).toBeCloseTo(1.76, 2);
+    expect(ratio("#00e07c", "#37003c")).toBeCloseTo(9.74, 2);
+    expect(ratio("#00804a", "#ffffff")).toBeCloseTo(5.02, 2);
+    expect(ratio("#00804a", "#37003c")).toBeCloseTo(3.41, 2);
+  });
+
+  it("clears 4.5:1 on the dark theme and on the light one", () => {
+    for (const sel of [":root {", "html.light {"]) {
+      expect(ratio(varOf(sel, "accent"), varOf(sel, "accent-ink")), sel).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("keeps `.btn-primary`'s own ink, which sits on a theme-invariant fill", () => {
+    // `--accent-vivid` is #00ff87 in BOTH themes, so `--on-accent` must NOT
+    // follow `--accent-ink` into white — that is why there are two tokens and
+    // not one, and the reason is easy to lose on the next edit.
+    for (const sel of [":root {", "html.light {"]) {
+      expect(ratio(varOf(sel, "accent-vivid"), varOf(sel, "on-accent")), sel).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("no component pairs an accent fill with white text", () => {
+    for (const f of componentFiles) {
+      for (const m of read(f).matchAll(/className=(?:"([^"]*)"|\{`([^`]*)`\})/g)) {
+        const cls = m[1] ?? m[2] ?? "";
+        if (/(?<![\w-])bg-accent(?![\w-])/.test(cls)) {
+          expect(/(?<![\w-])text-white(?![\w-])/.test(cls), `${f}: ${cls}`).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("no component spells a warning colour as a raw amber shade", () => {
+    // `text-amber-300` is 1.44:1 on the light theme's panel. `--warn` is the
+    // theme-aware token for this and clears 4.5:1 on both (5.02 and 10.36).
+    for (const f of componentFiles) {
+      expect(read(f), f).not.toMatch(/(?<![\w-])text-amber-\d{2,3}(?![\w-])/);
+    }
   });
 });
 
@@ -841,8 +930,10 @@ describe("the squad view's live poll can actually stop", () => {
     const decl = src.slice(at, src.indexOf(";", src.indexOf("every((f) => f.finished)", at)));
     expect(decl).toContain("pollFixtures");
     expect(decl).not.toContain("data.fixtures");
-    // And `pollFixtures` prefers the polled copy over the page-load one.
-    expect(src).toMatch(/const pollFixtures = liveFixtures \?\? data\?\.fixtures/);
+    // And the fixtures it reads prefer the polled copy over the page-load one.
+    expect(src).toContain("const pollFixtures = liveFx");
+    const fx = src.slice(src.indexOf("const liveFx: Fixture[] ="));
+    expect(fx.slice(0, fx.indexOf("\n  );"))).toContain("liveFixtures ?? data?.fixtures");
   });
 
   it("fetches fixtures alongside the scores, or the stop condition never moves", () => {
@@ -884,9 +975,25 @@ describe("the squad view's live poll can actually stop", () => {
     expect(at).toBeGreaterThan(0);
     const body = src.slice(at, src.indexOf("};", at));
     expect(body).toContain("++livePollSeq.current");
-    // Both setters are gated on it, not just one.
-    expect(body).toMatch(/mine === livePollSeq\.current && setLiveData/);
-    expect(body).toMatch(/mine === livePollSeq\.current && setLiveFixtures/);
+    /*
+     * BOTH HANDLERS GATED, NOT JUST ONE. They are written differently — the
+     * scores handler is a block, because it also stamps `liveUpdatedAt`, and a
+     * stamp written past the guard would advertise a response that was
+     * discarded — so what is pinned is that each one refuses to write when
+     * `mine` is not the latest, not the shape it refuses in.
+     */
+    const scores = body.slice(body.indexOf(".live("), body.indexOf(".fixtures()"));
+    const bail = scores.search(/mine !== livePollSeq\.current\) return/);
+    expect(bail).toBeGreaterThan(-1);
+    // ORDER, not mere presence. Both writes must sit PAST the early return —
+    // the first version of this assertion only checked that the guard and the
+    // setters were all in the handler somewhere, and passed unchanged when the
+    // stamp was moved above the guard.
+    expect(scores.indexOf("setLiveData(l)")).toBeGreaterThan(bail);
+    expect(scores.indexOf("setLiveUpdatedAt(new Date())")).toBeGreaterThan(bail);
+    expect(body.slice(body.indexOf(".fixtures()"))).toMatch(
+      /mine === livePollSeq\.current && setLiveFixtures/
+    );
   });
 
   it("shares one interval with the Live tab rather than redeclaring it", () => {
@@ -2330,7 +2437,50 @@ describe("the league table says how much football is left", () => {
     // `squadMatchState` runs `projectAutoSubs` and honours Bench Boost, the
     // same as `liveEntryScore`. Counting the raw first eleven here would
     // credit a benched player's fixture and miss his replacement.
-    expect(src).toContain("squadMatchState(picks, elementById, live, data.fixtures, currentEvent)");
+    expect(src).toContain("squadMatchState(picks, elementById, live, fixtures, currentEvent)");
+  });
+
+  it("counts off the POLLED feed and not a copy taken when the league was picked", () => {
+    /*
+     * The whole table used to be scored INSIDE the fetch, against one `live`
+     * payload pulled there and against `data.fixtures` from page load. So it
+     * froze at the instant a league was chosen: open the tab at 16:05 and it
+     * still read 16:05 an hour later, with nothing on screen saying so.
+     *
+     * Fixtures freezing is the worse half. `provisionalBonus` only fires on
+     * `finished_provisional && !finished`, so a copy taken before full time
+     * has both flags false everywhere and the bonus map is empty for the life
+     * of the page — not stale bonus, no bonus.
+     *
+     * Pinning the SOURCE and not the call string: a `data.fixtures` left
+     * behind at one of the four call sites would reinstate the bug for that
+     * column alone while the others stayed live, which is the hardest version
+     * of this to spot on screen.
+     */
+    expect(src).not.toContain("data.fixtures");
+    expect(src).not.toMatch(/api\.live\(/);
+    const memo = src.slice(src.indexOf("const details = useMemo"));
+    const body = memo.slice(0, memo.indexOf("const ownership = useMemo"));
+    for (const call of [
+      "provisionalBonus(data.bootstrap, fixtures, live, currentEvent)",
+      "liveEntryScore(",
+      "squadRoster(",
+      "squadMatchState(",
+    ]) {
+      expect(body).toContain(call);
+    }
+    // And the scoring must sit in the memo, not in the fetch: a `useMemo` that
+    // does not depend on the polled payload re-runs never.
+    expect(memo.slice(0, memo.indexOf("}, ["))).toBeTruthy();
+    expect(memo.slice(memo.indexOf("}, ["), memo.indexOf("const ownership = useMemo"))).toContain(
+      "live"
+    );
+  });
+
+  it("says when the figures last moved", () => {
+    // A live number with no timestamp is indistinguishable from a dead one,
+    // which is why the freeze above survived a season of use.
+    expect(src).toContain("Updated {updatedAt.toLocaleTimeString(\"en-GB\")}");
   });
 
   it("the league row's controls are real buttons", () => {
@@ -2387,7 +2537,7 @@ describe("the league table says how much football is left", () => {
      * score moves) and keep a blanked captain doubled.
      */
     expect(src).toMatch(
-      /squadRoster\(\s*picks,\s*elementById,\s*live,\s*data\.fixtures,\s*currentEvent,\s*bonus\.byElement,\s*gwDone\s*\)/
+      /squadRoster\(\s*picks,\s*elementById,\s*live,\s*fixtures,\s*currentEvent,\s*bonus\.byElement,\s*gwDone\s*\)/
     );
     // Gross on the rows, net on the score: the difference is the hit, and it
     // is named rather than left as an unexplained gap.
@@ -2701,7 +2851,14 @@ describe("the squad view says whether a score is settled", () => {
   it("is built from the live feed's minutes and this gameweek's fixtures", () => {
     expect(strip(dash)).toContain("playerMatchStatus(");
     expect(strip(dash)).toContain("matchStatusLabel(");
-    expect(strip(dash)).toMatch(/teamFixtures\(data!\.fixtures, el\.team, currentEvent\)/);
+    /*
+     * OFF THE POLLED FIXTURES. This read `data!.fixtures`, the page-load copy,
+     * so `playerMatchStatus` answered "todo" for every player for the life of
+     * the page: a card printed a kick-off time for a man who had finished two
+     * hours earlier. `liveFx` is the polled list with the page-load copy as
+     * its fallback — see its own note in `Dashboard.tsx`.
+     */
+    expect(strip(dash)).toMatch(/teamFixtures\(liveFx, el\.team, currentEvent\)/);
   });
 
   it("is absent when there is no live data to build it from", () => {

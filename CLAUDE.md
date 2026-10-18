@@ -365,6 +365,54 @@ A "Refresh now" control must also bypass the in-memory memo in `fpl.ts`
 button labelled "now" that does nothing, pressed exactly when the numbers look
 wrong.
 
+### Fetching fresh data is not the same as USING it
+
+A poll that lands in state nothing reads is indistinguishable, on screen, from
+no poll at all. Two surfaces shipped exactly that:
+
+- **`Dashboard` polled fixtures every 30 s and read them only to decide when to
+  stop polling.** `provisionalBonus`, `projectAutoSubs`, `playerMatchStatus` and
+  `liveEntryScore` all took `data.fixtures` — the page-load copy. That is not a
+  stale minute here and there: `provisionalBonus` fires only on
+  `finished_provisional && !finished`, so in a copy taken before full time BOTH
+  flags are false on everything and the map is EMPTY for the life of the page.
+  No bonus, no projected substitution, no vice-captain takeover, and a pitch
+  card printing a kick-off time for a man who finished two hours earlier.
+- **`MiniLeague` fetched `event/{gw}/live/` once, inside `loadDetails`, and
+  scored every rival on the spot.** The whole league table was frozen at the
+  instant a league was picked.
+
+Both are fixed by separating the halves: `picks/` is fetched once per league
+and kept (FPL caches it ~15.7 h and it cannot change after the deadline), while
+everything that moves is a `useMemo` over the polled payload. Re-scoring twenty
+rosters is arithmetic; re-fetching twenty `picks/` every 30 s would be twenty
+requests for data that cannot have changed.
+
+The general rule, and it is cheap: **anything live must say when it last
+moved.** The `Updated HH:MM:SS` stamp is what makes the fix visible and what
+would have made the bug visible — `LiveTab` had one and was the only surface
+whose freeze anybody noticed.
+
+### Contrast is a measurement too, and the tokens invert
+
+`--accent` is deliberately a different colour per theme — bright green on dark,
+dark green on white — so the readable ink on top of it inverts with it. Measured
+(WCAG 2.1 relative luminance, `componentInvariants` recomputes all four):
+
+| Fill | under `#ffffff` | under `#37003c` |
+|---|---|---|
+| dark `--accent` `#00e07c` | **1.76:1** | 9.74:1 |
+| light `--accent` `#00804a` | 5.02:1 | **3.41:1** |
+
+`OptimizePanel`'s selected-draft badges were `bg-accent text-white` in both, so
+they shipped at 1.76:1 on the theme the app opens on. Hence `--accent-ink`:
+`#37003c` on dark, `#ffffff` on light. `--on-accent` could NOT be reused — it
+is the ink on `--accent-vivid`, which is `#00ff87` in both themes, so following
+it to white would wreck `.btn-primary`. Two tokens, and the test pins why.
+
+`text-amber-300` was 1.44:1 on the light theme's panel; `--warn` is the
+theme-aware token (5.02:1 light, 10.36:1 dark).
+
 ## The safety score, and what measuring it actually found
 
 `LiveTab`'s "Safety score (your rank band)" samples the Overall league at
