@@ -72,13 +72,25 @@ const HistoryChart = dynamic(() => import("./HistoryChart"), {
   loading: () => <Skeleton className="h-96" />,
 });
 
+/*
+ * LEAGUE FIRST, AND IT IS THE LANDING TAB.
+ *
+ * It used to sit sixth of seven, which on a phone put it off the right edge
+ * of the strip — the one screen a reader opens WHILE MATCHES ARE ON was the
+ * one they had to go looking for. Asked for directly, against the way FPL
+ * Gameweek opens: you land on the leagues you are in and read your position
+ * before anything else.
+ *
+ * The order here is the only definition of both things — `selectTab`'s
+ * fallback reads TABS[0], so the strip and the default cannot drift apart.
+ */
 const TABS = [
+  ["league", "Mini-league", "League"],
   ["team", "My team", "Team"],
   ["optimize", "Optimize", "Optimize"],
   ["stats", "Stats", "Stats"],
   ["fixtures", "Fixtures", "Fixtures"],
   ["live", "Live", "Live"],
-  ["league", "Mini-league", "League"],
   ["history", "History", "History"],
 ] as const;
 
@@ -158,7 +170,9 @@ export default function Dashboard({
   const [histLoading, setHistLoading] = useState(false);
   const [histRetry, setHistRetry] = useState(0);
   const [tab, setTab] = useState<TabKey>(
-    TABS.some(([k]) => k === initialTab) ? (initialTab as TabKey) : "team"
+    // TABS[0], not a second copy of the name: moving a tab to the front must
+    // move the landing tab with it, or the two silently disagree.
+    TABS.some(([k]) => k === initialTab) ? (initialTab as TabKey) : TABS[0][0]
   );
   // Tabs stay mounted once visited: switching back keeps state (optimizer
   // results, league standings, live data) instead of refetching everything.
