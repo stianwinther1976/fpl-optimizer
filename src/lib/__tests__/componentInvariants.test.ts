@@ -2039,6 +2039,92 @@ describe("the Live tab cannot present stale numbers as live", () => {
   });
 });
 
+describe("the league table is where the app opens", () => {
+  /*
+   * ASKED FOR DIRECTLY: the league view was sixth of seven tabs, which on a
+   * phone put it off the right edge of the strip — the one screen a reader
+   * opens WHILE MATCHES ARE ON was the one they had to go looking for.
+   *
+   * The pairing is what is pinned. A tab order with league first and a
+   * hard-coded landing tab of "team" would put the app one tap away from the
+   * thing it now advertises, and nothing on screen would show the
+   * disagreement.
+   */
+  const src = read("Dashboard.tsx");
+
+  it("league is the first tab", () => {
+    const order = [...src.matchAll(/\["(\w+)", "[^"]+", "[^"]+"\]/g)].map((m) => m[1]);
+    expect(order[0]).toBe("league");
+    // The whole set is still there — reordering must not drop one.
+    expect(new Set(order)).toEqual(
+      new Set(["league", "team", "optimize", "stats", "fixtures", "live", "history"])
+    );
+  });
+
+  it("the landing tab is read off the order, not named twice", () => {
+    /*
+     * `TABS[0][0]`, not the string "league". Two copies of the same decision
+     * drift: moving a tab to the front would leave the app opening on
+     * whatever the old literal said, and the only symptom would be the app
+     * opening somewhere the strip does not suggest.
+     */
+    expect(src).toContain("TABS[0][0]");
+    expect(src).not.toMatch(/k === initialTab\) \? \(initialTab as TabKey\) : "/);
+  });
+});
+
+describe("the rival expansion pays for what it shows", () => {
+  const src = read("MiniLeague.tsx");
+
+  it("takes the deadline-fixed figures off picks rather than refetching", () => {
+    /*
+     * Squad value, bank and the gameweek's transfer count are all settled at
+     * the deadline and already ride in on the `picks` payload the row was
+     * scored from. Fetching them again would be one request per manager for
+     * numbers in hand — and `picks/` is cached by FPL for most of a day, so
+     * the refetch would not even be fresher.
+     */
+    expect(src).toContain("value: picks.entry_history.value");
+    expect(src).toContain("bank: picks.entry_history.bank");
+    expect(src).toContain("gwTransfers: picks.entry_history.event_transfers");
+  });
+
+  it("fetches the season history only when a row is opened", () => {
+    // Up to fifty rows; one is open at a time. Eager fetching would be one
+    // request per manager for figures nobody asked to see.
+    expect(src).toContain("if (!open) void loadSeason(r.entry);");
+    expect(src).toContain("if (seasonInfo.has(entry)) return;");
+    // Marked in flight BEFORE the await, or a second tap fires a second fetch.
+    const fn = src.slice(src.indexOf("async function loadSeason"));
+    const marked = fn.indexOf('set(entry, "loading")');
+    const awaited = fn.indexOf("await api.history");
+    expect(marked).toBeGreaterThan(0);
+    expect(marked).toBeLessThan(awaited);
+  });
+
+  it("does not print FPL's value as if it were the squad", () => {
+    /*
+     * `entry_history.value` INCLUDES the bank — the note in CLAUDE.md. A line
+     * reading "£100.1m team value" beside a separate bank figure would double
+     * count it, so the squad is shown as the difference and the bank as
+     * itself.
+     */
+    expect(src).toContain("{money(value - bank)} squad + {money(bank)} bank");
+  });
+
+  it("says the history is missing rather than implying no chips", () => {
+    // Rendering nothing on a failed fetch reads as "this manager has used no
+    // chips", which is a statement, and a wrong one.
+    expect(src).toContain("history unavailable");
+  });
+
+  it("takes the last SETTLED overall rank, not the last row", () => {
+    // FPL leaves `overall_rank` null on a gameweek in progress, so the last
+    // row is null from Friday to Monday — exactly when this is read.
+    expect(src).toContain("reverse().find((row) => row.overall_rank != null)");
+  });
+});
+
 describe("the two planning windows do not read as one", () => {
   /*
    * REPORTED FROM THE SCREEN: "Horizon: 5 gameweeks" sat a few centimetres
@@ -2141,10 +2227,17 @@ describe("the league table says how much football is left", () => {
      * decoration — a `<button>` with no type defaults to `submit`, and this
      * table sits inside the league-id form above it.
      */
+    /*
+     * PINNED ON THE HANDLER'S JOB, NOT ITS EXACT TEXT. The first version
+     * matched `onClick={() => setOpenRoster(open ? null : r.entry)}` verbatim
+     * and went red the moment the expander also had to kick off the season
+     * fetch — a correct change failing a test that was only ever describing
+     * one spelling of it. What matters is that the name control is a real
+     * button and that it toggles this row, which is what is matched now.
+     */
     const nameBtn = src.slice(src.indexOf("setOpenRoster(open ? null : r.entry)"));
-    expect(src).toMatch(
-      /<button\s+type="button"\s+onClick=\{\(\) => setOpenRoster\(open \? null : r\.entry\)\}/
-    );
+    expect(nameBtn).not.toBe(src); // the toggle exists at all
+    expect(src).toMatch(/<button\s+type="button"\s+onClick=\{[\s\S]{0,160}?setOpenRoster\(/);
     expect(src).toMatch(/<button\s+type="button"\s+onClick=\{\(\) => goToTeam\(r\.entry\)\}/);
     // The expander says whether it is open, which is the only thing about it a
     // screen reader cannot get from the label.

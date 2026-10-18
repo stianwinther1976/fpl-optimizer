@@ -19,12 +19,49 @@ import { ErrorBox, Skeleton } from "./ui";
 
 const MAX_RIVAL_DETAILS = 20;
 
+/*
+ * MODULE SCOPE, BECAUSE TWO THINGS RENDER IT NOW. It was declared inside the
+ * row loop, which rebuilt the same four-entry object once per manager per
+ * paint and left `SeasonLine` unable to reach it. One definition also means
+ * the badge on the row and the badges on the season line cannot disagree
+ * about what a chip is called.
+ */
+const chipShort: Record<string, string> = {
+  wildcard: "WC",
+  freehit: "FH",
+  bboost: "BB",
+  "3xc": "TC",
+};
+
+/** What `entry/{id}/history/` adds about a rival, beyond this gameweek. */
+interface SeasonInfo {
+  /** Chip names in the order they were played, e.g. ["wildcard", "3xc"]. */
+  chips: string[];
+  /** Every transfer made this season, including the current gameweek's. */
+  seasonTransfers: number;
+  /**
+   * Overall rank after the last SETTLED gameweek.
+   *
+   * FPL leaves `overall_rank` null on a gameweek still in progress, so the
+   * last non-null row is taken rather than the last row — otherwise this
+   * reads "—" for every manager from Friday evening to Monday night, which is
+   * exactly when the table is being looked at.
+   */
+  overallRank: number | null;
+}
+
 interface RivalDetail {
   captain: string | null;
   viceCaptain: string | null;
   chip: string | null;
   livePoints: number | null; // incl. hits (net)
   hits: number;
+  /** Team value INCLUDING the bank, in tenths, as FPL reports it. */
+  value: number;
+  /** Bank, in tenths. */
+  bank: number;
+  /** Transfers this rival made for this gameweek. */
+  gwTransfers: number;
   /** Counting players whose match is running, and whose has not kicked off. */
   inPlay: number;
   toStart: number;
@@ -130,6 +167,74 @@ function RosterBreakdown({ roster, hits }: { roster: RosterEntry[]; hits: number
   );
 }
 
+/**
+ * The season behind the gameweek: chips spent, transfers made, overall rank,
+ * and what the squad is worth.
+ *
+ * SPLIT BY WHERE EACH NUMBER COMES FROM, because they do not arrive together.
+ * Value, bank and this gameweek's transfers ride in on the `picks` payload the
+ * row was scored from and are therefore always present. Chips, the season
+ * transfer count and overall rank each need `entry/{id}/history/`, fetched
+ * when the row opens — so the line renders the half it has immediately rather
+ * than holding everything back behind one request.
+ *
+ * A failed history shows the half that is real and says the rest is
+ * unavailable. Rendering nothing would read as "this manager has used no
+ * chips", which is a statement, and a wrong one.
+ */
+function SeasonLine({
+  info,
+  value,
+  bank,
+  gwTransfers,
+}: {
+  info: SeasonInfo | "loading" | null | undefined;
+  value: number;
+  bank: number;
+  gwTransfers: number;
+}) {
+  const money = (tenths: number) => `£${(tenths / 10).toFixed(1)}m`;
+  return (
+    <div className="mt-2 border-t border-border-c pt-1.5 text-[10px] text-muted">
+      <span className="font-semibold uppercase tracking-wide">Season</span>{" "}
+      {info == null || info === "loading" ? (
+        <span>{info === "loading" ? "loading…" : "history unavailable"}</span>
+      ) : (
+        <>
+          {info.chips.length > 0 ? (
+            <span className="mr-1">
+              {info.chips.map((c) => (
+                <span
+                  key={c}
+                  className="mr-1 rounded bg-accent-2/15 px-1 py-px font-bold text-accent-2"
+                  title={CHIP_LABELS[c] ?? c}
+                >
+                  {chipShort[c] ?? c}
+                </span>
+              ))}
+            </span>
+          ) : (
+            <span>no chips · </span>
+          )}
+          <span>{info.seasonTransfers} transfers · </span>
+          <span>
+            OR {info.overallRank != null ? fmtNum(info.overallRank) : "—"} ·{" "}
+          </span>
+        </>
+      )}
+      {/*
+        `value` is FPL's figure and it INCLUDES the bank, so the squad on the
+        pitch is the difference. Printing `value` alone as "team value" is the
+        mistake CLAUDE.md names; both halves are shown instead.
+      */}
+      <span>
+        {money(value - bank)} squad + {money(bank)} bank
+      </span>
+      <span> · {gwTransfers} this GW</span>
+    </div>
+  );
+}
+
 export default function MiniLeague({ data, entryId }: { data: TeamData; entryId: number }) {
   const router = useRouter();
   // Recorded, so the rival's own back control returns to this table rather
@@ -157,6 +262,24 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
    * scroll, which is the opposite of what the expansion is for.
    */
   const [openRoster, setOpenRoster] = useState<number | null>(null);
+  /*
+   * SEASON FIGURES, FETCHED ONLY WHEN A ROW IS OPENED.
+   *
+   * Chips used, transfers made all season and overall rank are not in the
+   * standings payload and not in `picks` either, so each costs an
+   * `entry/{id}/history/` round trip. Fetching them for every row would be one
+   * request per manager for figures nobody has asked to see — the table shows
+   * up to fifty. One row is open at a time, so this is at most one request per
+   * tap, cached by entry so reopening a row is free.
+   *
+   * The three states are distinguishable on purpose: absent means never asked,
+   * "loading" means a request is out, and null means it came back empty or
+   * failed. Collapsing the last two would retry forever on a manager whose
+   * history FPL will not serve.
+   */
+  const [seasonInfo, setSeasonInfo] = useState<Map<number, SeasonInfo | "loading" | null>>(
+    new Map()
+  );
   const [ownership, setOwnership] = useState<LeagueOwnership | null>(null);
   const [loading, setLoading] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -206,6 +329,33 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * One rival's season history, on demand and once.
+   *
+   * Guards on the map rather than on a ref: the entry is written as
+   * "loading" BEFORE the request goes out, so a second tap on the same row
+   * while the first is in flight finds it and does not fire again. A failure
+   * is recorded as null for the same reason — a row FPL will not serve must
+   * stop asking rather than retry on every open.
+   */
+  async function loadSeason(entry: number) {
+    if (seasonInfo.has(entry)) return;
+    setSeasonInfo((m) => new Map(m).set(entry, "loading"));
+    try {
+      const h = await api.history(entry);
+      const settled = [...h.current].reverse().find((row) => row.overall_rank != null);
+      setSeasonInfo((m) =>
+        new Map(m).set(entry, {
+          chips: h.chips.map((c) => c.name),
+          seasonTransfers: h.current.reduce((a, row) => a + row.event_transfers, 0),
+          overallRank: settled?.overall_rank ?? null,
+        })
+      );
+    } catch {
+      setSeasonInfo((m) => new Map(m).set(entry, null));
+    }
+  }
 
   async function load(idStr?: string) {
     const num = parseInt(idStr ?? leagueId, 10);
@@ -344,6 +494,22 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               chip: picks.active_chip,
               livePoints: net,
               hits,
+              /*
+               * FREE, AND SAFE TO READ HERE, WHICH IS NOT TRUE OF EVERY FIELD
+               * BESIDE THEM. `picks/` is cached by FPL for most of a day, so
+               * `entry_history.points` and `.rank` inside it are stale all
+               * gameweek — the note in CLAUDE.md. These three are not: squad
+               * value, the bank and the transfer count are all fixed at the
+               * deadline and cannot move while the gameweek runs. So they come
+               * off a payload already in hand rather than a second request.
+               *
+               * `value` INCLUDES the bank, so it is not squad value; the two
+               * are printed as what they are rather than one subtracted from
+               * the other and mislabelled.
+               */
+              value: picks.entry_history.value,
+              bank: picks.entry_history.bank,
+              gwTransfers: picks.entry_history.event_transfers,
               ...squadMatchState(picks, elementById, live, data.fixtures, currentEvent),
               /*
                * THE SAME SEVEN ARGUMENTS `liveEntryScore` GOT, one line up.
@@ -553,12 +719,6 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               ).map(({ row: r, position }) => {
                 const d = details.get(r.entry);
                 const mine = r.entry === entryId;
-                const chipShort: Record<string, string> = {
-                  wildcard: "WC",
-                  freehit: "FH",
-                  bboost: "BB",
-                  "3xc": "TC",
-                };
                 const clickable = canOpenRivals && !mine;
                 const open = openRoster === r.entry;
                 return (
@@ -604,7 +764,10 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                       <div className="flex items-center gap-1.5">
                         <button
                           type="button"
-                          onClick={() => setOpenRoster(open ? null : r.entry)}
+                          onClick={() => {
+                            setOpenRoster(open ? null : r.entry);
+                            if (!open) void loadSeason(r.entry);
+                          }}
                           disabled={!d}
                           aria-expanded={open}
                           className="truncate text-left font-medium disabled:cursor-default hover:text-accent disabled:hover:text-inherit"
@@ -680,6 +843,12 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                     <tr className="bg-panel-2/40">
                       <td colSpan={4} className="px-4 pb-3 pt-1">
                         <RosterBreakdown roster={d.roster} hits={d.hits} />
+                        <SeasonLine
+                          info={seasonInfo.get(r.entry)}
+                          value={d.value}
+                          bank={d.bank}
+                          gwTransfers={d.gwTransfers}
+                        />
                       </td>
                     </tr>
                   )}
