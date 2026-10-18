@@ -261,6 +261,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
    * two open at once pushes the table off the screen and turns a scan into a
    * scroll, which is the opposite of what the expansion is for.
    */
+  const [manualOpen, setManualOpen] = useState(false);
   const [openRoster, setOpenRoster] = useState<number | null>(null);
   /*
    * SEASON FIGURES, FETCHED ONLY WHEN A ROW IS OPENED.
@@ -559,7 +560,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
 
   return (
     <div className="space-y-4">
-      <div className="card space-y-3 p-4">
+      <div className="card p-3">
         {myLeagues.length > 0 ? (
           /*
            * ONE SELECT, NOT A WRAPPED CHIP LIST.
@@ -578,11 +579,19 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
            * real — your own mini-leagues are the ones you came to read — but
            * it costs no height.
            */
-          <div>
-            <label
-              htmlFor="league-select"
-              className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted"
-            >
+          /*
+           * ONE ROW, AND THE HEADING IS THE CONTROL.
+           *
+           * This was four: an uppercase "YOUR LEAGUES" label, the select, a
+           * gap, and a "Enter a league ID manually" summary — about a fifth of
+           * a phone screen of chrome around a single dropdown, directly above
+           * the table it exists to choose. The label is `sr-only` now, because
+           * the select's own value already says what it is and the standings
+           * sit immediately below it; the manual-ID escape hatch is a short
+           * control on the same line rather than a row of its own.
+           */
+          <div className="flex items-center gap-2">
+            <label htmlFor="league-select" className="sr-only">
               Your leagues
             </label>
             <select
@@ -594,7 +603,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                   load(e.target.value);
                 }
               }}
-              className="min-h-11 w-full rounded-lg border border-border-c bg-panel-2 px-3 py-2 text-sm font-medium"
+              className="min-h-11 min-w-0 flex-1 rounded-lg border border-border-c bg-panel-2 px-3 py-2 text-sm font-semibold"
             >
               {/*
                 Only reachable before the mount effect has picked one. It is
@@ -624,16 +633,28 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
                 );
               })}
             </select>
+            <button
+              type="button"
+              onClick={() => setManualOpen((v) => !v)}
+              aria-expanded={manualOpen}
+              title="Enter a league ID manually"
+              className="min-h-11 shrink-0 rounded-lg border border-border-c px-3 text-xs text-muted hover:border-accent hover:text-accent"
+            >
+              ID
+            </button>
           </div>
         ) : (
           <div className="text-sm text-muted">
             No leagues found on this FPL account yet.
           </div>
         )}
-        <details className="text-xs text-muted">
-          <summary className="flex min-h-11 cursor-pointer items-center hover:text-accent">
-            Enter a league ID manually
-          </summary>
+        {/*
+          SHOWN ONLY WHEN ASKED FOR. As a `<details>` its summary occupied a
+          permanent row under the select for a control almost nobody reaches
+          for — the reader's own leagues are already in the list above. The
+          "ID" button on the select's row opens it instead.
+        */}
+        {manualOpen && (
           <div className="mt-2 flex gap-2">
             <input
               value={leagueId}
@@ -651,7 +672,7 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
               {loading ? "Loading…" : "Load"}
             </button>
           </div>
-        </details>
+        )}
       </div>
 
       {error && <ErrorBox message={error} onRetry={() => load()} />}
@@ -660,7 +681,17 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
       {standings && !loading && (
         <div className="card overflow-hidden">
           <div className="flex items-center justify-between border-b border-border-c px-4 py-3">
-            <span className="font-semibold">{standings.league.name}</span>
+            {/*
+              NAMED ONCE. The select above carries the league's name, so a
+              heading repeating it was the same string twice in two
+              centimetres. It is still rendered when the picker CANNOT name it
+              — a league loaded by manual ID is not in the reader's own list,
+              so the select reads "Choose a league…" and the table would
+              otherwise be headed by nothing.
+            */}
+            {!myLeagues.some((l) => String(l.id) === leagueId) && (
+              <span className="font-semibold">{standings.league.name}</span>
+            )}
             {detailsLoading ? (
               <span className="text-xs text-muted">Loading rival details…</span>
             ) : (
