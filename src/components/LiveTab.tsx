@@ -286,6 +286,36 @@ export default function LiveTab({
     [bandPicks, live, bonus, elementById, fixtures, currentEvent, gwDone]
   );
 
+  /*
+   * The same sample's lowest and highest, scored the same way.
+   *
+   * `bandMedianScore` returns one number and a lone median cannot be argued
+   * with: it is either believed or not. The range can be — a band sitting
+   * entirely above FPL's published average is visibly the wrong managers,
+   * which is the one thing four unreproducible reports of this number have
+   * never had evidence either way for.
+   *
+   * It reuses `liveEntryScore` with the identical arguments `bandMedianScore`
+   * passes, so the three figures describe one scoring rather than two.
+   */
+  const bandSpread = useMemo(() => {
+    if (!bandPicks || !live || currentEvent == null) return null;
+    const scores = bandPicks
+      .map((p) =>
+        liveEntryScore(
+          p,
+          elementById,
+          live,
+          fixtures,
+          currentEvent,
+          bonus?.byElement ?? null,
+          gwDone
+        )
+      )
+      .sort((a, b) => a - b);
+    return scores.length > 0 ? { low: scores[0], high: scores[scores.length - 1] } : null;
+  }, [bandPicks, live, bonus, elementById, fixtures, currentEvent, gwDone]);
+
   // Projected auto-subs: once a starter's matches have finished with 0
   // minutes, the bench steps in (like FPL will do when the GW is processed).
   const autoSubs = useMemo(() => {
@@ -625,7 +655,30 @@ export default function LiveTab({
                        * doubts the number had no way to find out it was
                        * computed from six.
                        */
-                      `Median live score of ${bandPicks?.length ?? 0} managers ranked right around you in the Overall league — match it to hold your rank`
+                      /*
+                       * THE GAMEWEEK AND THE SAMPLE'S OWN SPREAD, because
+                       * four separate reports of this number reading too high
+                       * have now failed to reproduce: the shipped
+                       * `bandMedianScore`, run against the live API within
+                       * minutes of a screenshot, returned 52 where the screen
+                       * said 66. The code path is not the difference, so the
+                       * difference is in what the client sampled — and
+                       * nothing on screen said what that was.
+                       *
+                       * A median with its own low and high beside it is
+                       * checkable: a band whose range sits far above FPL's
+                       * published average is visibly the wrong managers,
+                       * where a lone median is only ever a claim. The
+                       * gameweek is there because a sample scored against
+                       * another gameweek's feed is the one hypothesis left
+                       * that would produce exactly this, and it would be
+                       * obvious the moment the number is written down.
+                       */
+                      `GW${currentEvent}: median of ${bandPicks?.length ?? 0} managers ranked around you${
+                        bandSpread
+                          ? ` (range ${bandSpread.low}–${bandSpread.high})`
+                          : ""
+                      }. FPL's published average this gameweek is ${gwAvg ?? "not out yet"}.`
                     : "Estimate based on the live gameweek average — a rank-band sample wasn't available"
                 }
               >

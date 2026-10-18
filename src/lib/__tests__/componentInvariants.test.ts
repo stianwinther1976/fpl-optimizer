@@ -1671,9 +1671,21 @@ describe("the safety score follows the feed and counts the same points", () => {
     // which would also catch the comment describing how many are REQUESTED —
     // twenty, truthfully, whatever comes back.
     expect(src).not.toContain("Median live score of ~20 managers");
-    expect(src).toMatch(/Median live score of \$\{bandPicks\?\.length \?\? 0\} managers/);
+    expect(src).toMatch(/median of \$\{bandPicks\?\.length \?\? 0\} managers/);
     // And a short sample is visible without opening the tooltip.
     expect(src).toContain("bandPicks!.length < BAND_FULL_SAMPLE");
+    /*
+     * THE SAMPLE'S OWN RANGE AND GAMEWEEK, added after a fourth report of
+     * this number reading too high failed to reproduce: the shipped
+     * `bandMedianScore` returned 52 against the live API within minutes of a
+     * screenshot that said 66. A lone median can only be believed or not; a
+     * range sitting entirely above FPL's published average is visibly the
+     * wrong managers, and a gameweek written down is the one remaining
+     * hypothesis made checkable from the screen.
+     */
+    expect(src).toContain("`GW${currentEvent}: median of");
+    expect(src).toContain("range ${bandSpread.low}–${bandSpread.high}");
+    expect(src).toContain("FPL's published average this gameweek is ${gwAvg");
   });
 
   it("hands the rivals the same projected bonus the reader gets", () => {
