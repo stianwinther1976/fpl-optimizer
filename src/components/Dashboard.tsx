@@ -65,7 +65,7 @@ import MiniLeague from "./MiniLeague";
 import ModelAccuracy from "./ModelAccuracy";
 import PointsBreakdown from "./PointsBreakdown";
 import ThemeToggle from "./ThemeToggle";
-import { ErrorBox, Skeleton, Stat, type StatDelta } from "./ui";
+import { ErrorBox, KpiStrip, Skeleton, Stat, type StatDelta } from "./ui";
 
 // recharts is heavy — load the History tab's chart bundle only when needed.
 const HistoryChart = dynamic(() => import("./HistoryChart"), {
@@ -914,6 +914,35 @@ export default function Dashboard({
     "now"
   );
 
+  /*
+   * THE FOUR HEADLINE FIGURES, NAMED ONCE.
+   *
+   * They are rendered twice now — as full cards on the team tab and as a
+   * one-line strip everywhere else — and a second copy of an expression this
+   * long is how the strip ends up quoting `summary_overall_points` while the
+   * card beside it quotes the live figure. That exact disagreement is what
+   * `liveOverallPoints` exists to stop, so it is not reintroduced here.
+   */
+  const totalPointsValue = fmtNum(
+    liveNet != null && currentEvent != null
+      ? liveOverallPoints(rows, currentEvent, liveNet)
+      : entry.summary_overall_points
+  );
+  const overallRankValue = fmtRank(entry.summary_overall_rank);
+  const latestGwValue =
+    liveNet != null
+      ? `${liveNet} pts`
+      : latestGwPoints != null
+        ? `${latestGwPoints} pts`
+        : "–";
+  const freeTransfersValue = squad ? String(squad.freeTransfers) : "–";
+  const kpiStrip = [
+    { label: "Total", value: totalPointsValue },
+    { label: "OR", value: overallRankValue },
+    { label: "Latest GW", value: latestGwValue },
+    { label: "FT", value: freeTransfersValue },
+  ];
+
   return (
     <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">
       {/* Header */}
@@ -989,8 +1018,26 @@ export default function Dashboard({
         )}
       </div>
 
+      {/*
+        THE KPI ROW IS A "MY TEAM" THING, AND IT WAS ON EVERY TAB.
+        Six cards at three across is roughly half a phone screen. With league
+        promoted to the landing tab the table still opened below the fold,
+        because the cards sat between the header and the tab strip on every
+        view — so the one screen the app now opens on was the one you had to
+        scroll to reach.
+        
+        They are not deleted, because the reader's rank and points are worth a
+        glance from anywhere. They collapse to one line instead: the same four
+        headline figures, about forty pixels rather than six hundred, with the
+        full cards a tab away. Nothing is lost and the table is on screen.
+      */}
+      {tab !== "team" && <KpiStrip items={kpiStrip} />}
       {/* KPI row */}
-      <div className="mt-3 grid grid-cols-3 gap-2 sm:gap-3 lg:grid-cols-6">
+      <div
+        className={`mt-3 grid-cols-3 gap-2 sm:gap-3 lg:grid-cols-6 ${
+          tab === "team" ? "grid" : "hidden"
+        }`}
+      >
         {/*
           LIVE WHILE THE GAMEWEEK IS LIVE. `summary_overall_points` is FPL's
           stored figure: refreshed on their schedule and never carrying
@@ -1000,11 +1047,7 @@ export default function Dashboard({
         */}
         <Stat
           label="Total points"
-          value={fmtNum(
-            liveNet != null && currentEvent != null
-              ? liveOverallPoints(rows, currentEvent, liveNet)
-              : entry.summary_overall_points
-          )}
+          value={totalPointsValue}
           accent
           delta={pointsDelta}
           trend={pointsTrend.length > 1 ? pointsTrend : undefined}
@@ -1012,7 +1055,7 @@ export default function Dashboard({
         />
         <Stat
           label="Overall rank"
-          value={fmtRank(entry.summary_overall_rank)}
+          value={overallRankValue}
           sub={
             rankPercentile(entry.summary_overall_rank, data.bootstrap.total_players) ?? undefined
           }
@@ -1021,13 +1064,7 @@ export default function Dashboard({
         />
         <Stat
           label="Latest GW"
-          value={
-            liveNet != null
-              ? `${liveNet} pts`
-              : latestGwPoints != null
-                ? `${latestGwPoints} pts`
-                : "–"
-          }
+          value={latestGwValue}
           delta={gwDelta}
           sub={
             entry.summary_event_rank != null
@@ -1053,7 +1090,7 @@ export default function Dashboard({
         />
         <Stat
           label="Free transfers"
-          value={squad ? String(squad.freeTransfers) : "–"}
+          value={freeTransfersValue}
           sub={data.transfers.length > 0 ? `${data.transfers.length} made this season` : undefined}
           onClick={() => setKpiModal("transfers")}
         />

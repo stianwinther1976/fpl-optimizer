@@ -174,3 +174,45 @@ export function Badge({
     </span>
   );
 }
+
+/**
+ * The headline figures as one line, for the tabs the full KPI cards do not
+ * belong on.
+ *
+ * SIX CARDS AT THREE ACROSS IS HALF A PHONE SCREEN. They sit between the
+ * header and the tab strip, so promoting the league table to the landing tab
+ * still left it opening below the fold — the view the app now opens on was the
+ * one you had to scroll to reach.
+ *
+ * Deleting them outright would have been the cheaper fix and the worse one:
+ * rank and points are worth a glance from any tab. This is the same
+ * information at about a fourteenth of the height, and the cards themselves
+ * are one tap away on "My team".
+ *
+ * It scrolls rather than wraps. Wrapping would put it back to two rows on a
+ * narrow phone, which is the problem it exists to solve; a horizontal scroll
+ * keeps the promise that this is exactly one line tall whatever is in it.
+ *
+ * That scroll is why it takes `tabIndex`. Nothing inside is interactive, so a
+ * keyboard would skip the element entirely and whatever sits past the right
+ * edge would need a pointer to reach — the rule measured on the fixtures
+ * table at 420px, where 45 Tab stops left `scrollLeft` at 0.
+ */
+export function KpiStrip({ items }: { items: { label: string; value: string }[] }) {
+  return (
+    <div
+      className="mt-3 flex gap-4 overflow-x-auto whitespace-nowrap rounded-lg border border-border-c bg-panel px-3 py-2 text-sm"
+      // Focusable because it scrolls — see the note above the component.
+      tabIndex={0}
+      role="region"
+      aria-label="Season summary"
+    >
+      {items.map((i) => (
+        <span key={i.label}>
+          <span className="text-muted">{i.label} </span>
+          <span className="font-semibold">{i.value}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
