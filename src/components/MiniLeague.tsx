@@ -561,60 +561,69 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
     <div className="space-y-4">
       <div className="card space-y-3 p-4">
         {myLeagues.length > 0 ? (
+          /*
+           * ONE SELECT, NOT A WRAPPED CHIP LIST.
+           *
+           * The private leagues were pill buttons and the public ones a
+           * dropdown beside them. On a real account that is seven or more
+           * pills: measured against the reported screen, six wrapped rows of
+           * them before the table even started, under six KPI cards — so the
+           * standings opened well below the fold on the tab the app now lands
+           * on.
+           *
+           * A native select is exactly one row whatever the account holds, and
+           * on a phone it opens as the platform's own picker, which is a
+           * better list than anything rendered inline. The split into two
+           * controls is kept as two `optgroup`s, because the distinction is
+           * real — your own mini-leagues are the ones you came to read — but
+           * it costs no height.
+           */
           <div>
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+            <label
+              htmlFor="league-select"
+              className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted"
+            >
               Your leagues
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {myLeagues
-                .filter((l) => l.league_type === "x")
-                .map((l) => (
-                  <button
-                    key={l.id}
-                    onClick={() => {
-                      setLeagueId(String(l.id));
-                      load(String(l.id));
-                    }}
-                    className={`min-h-11 rounded-full border px-3 py-1.5 text-sm ${
-                      String(l.id) === leagueId
-                        ? "border-accent bg-accent/15 font-semibold text-accent"
-                        : "border-border-c bg-panel-2 hover:border-accent"
-                    }`}
-                  >
-                    {l.name}
-                    {l.entry_rank != null && (
-                      <span className="ml-1.5 text-xs opacity-70">#{l.entry_rank}</span>
-                    )}
-                  </button>
-                ))}
-            </div>
-            {myLeagues.some((l) => l.league_type !== "x") && (
-              <select
-                aria-label="Choose one of your mini-leagues"
-                value={
-                  myLeagues.some((l) => String(l.id) === leagueId && l.league_type !== "x")
-                    ? leagueId
-                    : ""
+            </label>
+            <select
+              id="league-select"
+              value={myLeagues.some((l) => String(l.id) === leagueId) ? leagueId : ""}
+              onChange={(e) => {
+                if (e.target.value) {
+                  setLeagueId(e.target.value);
+                  load(e.target.value);
                 }
-                onChange={(e) => {
-                  if (e.target.value) {
-                    setLeagueId(e.target.value);
-                    load(e.target.value);
-                  }
-                }}
-                className="mt-2 min-h-11 w-full rounded-lg border border-border-c bg-panel-2 px-3 py-2 text-sm sm:w-auto"
-              >
-                <option value="">Public leagues (Overall, country, club …)</option>
-                {myLeagues
-                  .filter((l) => l.league_type !== "x")
-                  .map((l) => (
-                    <option key={l.id} value={l.id}>
-                      {l.name}
-                      {l.entry_rank != null ? ` — #${l.entry_rank.toLocaleString("en-GB")}` : ""}
-                    </option>
-                  ))}
-              </select>
-            )}
+              }}
+              className="min-h-11 w-full rounded-lg border border-border-c bg-panel-2 px-3 py-2 text-sm font-medium"
+            >
+              {/*
+                Only reachable before the mount effect has picked one. It is
+                not an option a reader should be able to choose back into, so
+                it carries no id and selecting it does nothing.
+              */}
+              <option value="">Choose a league…</option>
+              {(["x", "public"] as const).map((kind) => {
+                const group = myLeagues.filter((l) =>
+                  kind === "x" ? l.league_type === "x" : l.league_type !== "x"
+                );
+                if (group.length === 0) return null;
+                return (
+                  <optgroup
+                    key={kind}
+                    label={kind === "x" ? "Mini-leagues" : "Public (Overall, country, club …)"}
+                  >
+                    {group.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
+                        {l.entry_rank != null
+                          ? ` — #${l.entry_rank.toLocaleString("en-GB")}`
+                          : ""}
+                      </option>
+                    ))}
+                  </optgroup>
+                );
+              })}
+            </select>
           </div>
         ) : (
           <div className="text-sm text-muted">

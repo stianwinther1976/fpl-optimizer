@@ -2073,6 +2073,61 @@ describe("the league table is where the app opens", () => {
   });
 });
 
+describe("the landing tab is not pushed below the fold", () => {
+  /*
+   * Promoting league to the landing tab did not finish the job: six KPI cards
+   * at three across sit between the header and the tab strip on EVERY view,
+   * which is roughly half a phone screen, so the table the app now opens on
+   * still needed a scroll to reach. Reported from the device.
+   */
+  const dash = read("Dashboard.tsx");
+
+  it("shows the full KPI cards only on the team tab", () => {
+    expect(dash).toMatch(/tab === "team" \? "grid" : "hidden"/);
+  });
+
+  it("keeps the figures reachable everywhere else, rather than dropping them", () => {
+    /*
+     * Deleting them outright is the cheaper fix and the worse one: rank and
+     * points are worth a glance from any tab. What is pinned is that the
+     * compact strip exists and is rendered on the tabs the cards are hidden
+     * on — a change that hides the cards without it would silently cost the
+     * reader the information.
+     */
+    expect(dash).toContain('{tab !== "team" && <KpiStrip items={kpiStrip} />}');
+  });
+
+  it("derives both renderings from one set of figures", () => {
+    /*
+     * The cards and the strip show the same four numbers. A second copy of an
+     * expression this long is how the strip ends up quoting
+     * `summary_overall_points` while the card beside it quotes the live
+     * figure — the exact disagreement `liveOverallPoints` exists to stop.
+     */
+    expect(dash).toContain("value={totalPointsValue}");
+    expect(dash).toContain("value={overallRankValue}");
+    expect(dash).toContain("value={latestGwValue}");
+    expect(dash).toContain("value={freeTransfersValue}");
+    // And the strip is built from the same consts, not re-derived.
+    expect(dash).toMatch(/kpiStrip = \[[\s\S]{0,400}totalPointsValue[\s\S]{0,400}\]/);
+  });
+
+  it("picks a league in one row rather than a wrapped list of pills", () => {
+    /*
+     * Seven-plus leagues on a real account wrapped to six rows of pill
+     * buttons before the standings began. A native select is one row whatever
+     * the account holds, and on a phone it opens the platform's own picker.
+     * The mini-league / public split survives as optgroups, which cost no
+     * height.
+     */
+    const ml = read("MiniLeague.tsx");
+    expect(ml).toContain('<select\n              id="league-select"');
+    expect(ml).toContain("<optgroup");
+    // The pill list is gone — it is what made the block six rows tall.
+    expect(ml).not.toMatch(/rounded-full border px-3 py-1\.5 text-sm/);
+  });
+});
+
 describe("the rival expansion pays for what it shows", () => {
   const src = read("MiniLeague.tsx");
 
