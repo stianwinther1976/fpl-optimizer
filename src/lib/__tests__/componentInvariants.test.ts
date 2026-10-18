@@ -1339,7 +1339,15 @@ describe("tap targets on a phone", () => {
     ["LiveTab.tsx", "mt-1 min-h-11 rounded-md border"], // Refresh now, was 30
     ["LiveTab.tsx", "flex min-h-11 w-full items-center gap-3"], // player rows, were 41
     ["OptimizePanel.tsx", "-m-1.5 flex min-h-11 items-center p-1.5"], // chip badges, were 34
-    ["MiniLeague.tsx", "flex min-h-11 cursor-pointer items-center"], // <summary>, was 16
+    /*
+     * The `<summary>` this used to name is gone: the manual-ID escape hatch no
+     * longer occupies a permanent row under the league select, it opens from
+     * the "ID" button on the select's own line. The floor moves to that button
+     * rather than being dropped — the control still exists, it just changed
+     * shape, and removing the entry would have quietly retired the rule for
+     * this file.
+     */
+    ["MiniLeague.tsx", "min-h-11 shrink-0 rounded-lg border border-border-c px-3 text-xs"],
     ["PastSeasons.tsx", "grid min-h-11 w-full"], // season rows, were 36
     ["PointsBreakdown.tsx", "min-h-11 rounded-lg border border-border-c"], // select, was 36
   ];
@@ -2125,6 +2133,51 @@ describe("the landing tab is not pushed below the fold", () => {
     expect(ml).toContain("<optgroup");
     // The pill list is gone — it is what made the block six rows tall.
     expect(ml).not.toMatch(/rounded-full border px-3 py-1\.5 text-sm/);
+  });
+});
+
+describe("the league picker is one row, not a card of chrome", () => {
+  /*
+   * Reported from the device: the picker was an uppercase "YOUR LEAGUES"
+   * label, the select, a gap, and an "Enter a league ID manually" summary —
+   * four rows of chrome around one dropdown, sitting directly on top of the
+   * table it exists to choose. The standing instruction behind the fix is
+   * wider than this one card: room for what matters, less for nice-to-know.
+   */
+  const src = read("MiniLeague.tsx");
+
+  it("spends no row on a label the control already carries", () => {
+    expect(src).toContain('<label htmlFor="league-select" className="sr-only">');
+    // The uppercase block label is what made it a row of its own.
+    expect(src).not.toMatch(/mb-1\.5 block text-xs font-semibold uppercase[^"]*">\s*\n\s*Your leagues/);
+  });
+
+  it("keeps the manual-ID input behind a control on that same row", () => {
+    /*
+     * As a `<details>` its summary held a permanent row for something almost
+     * nobody reaches for — the reader's own leagues are already in the list.
+     * What is pinned is that it is still REACHABLE: hiding it behind nothing
+     * at all would strip a working escape hatch for a league FPL lists but
+     * the entry does not belong to.
+     */
+    expect(src).toContain("aria-expanded={manualOpen}");
+    expect(src).toContain("{manualOpen && (");
+    expect(src).toContain('aria-label="Classic league ID"');
+    expect(src).not.toContain("Enter a league ID manually\n");
+  });
+
+  it("names the league once, and still names it when the picker cannot", () => {
+    /*
+     * The select reads "The Winthers — #6" and the table's own heading read
+     * "The Winthers" two centimetres below it. The heading goes — EXCEPT for
+     * a league loaded by manual ID, which is not in the reader's list, so the
+     * select shows "Choose a league…" and the table would be headed by
+     * nothing at all.
+     */
+    expect(src).toContain(
+      "{!myLeagues.some((l) => String(l.id) === leagueId) && ("
+    );
+    expect(src).toContain("<span className=\"font-semibold\">{standings.league.name}</span>");
   });
 });
 
