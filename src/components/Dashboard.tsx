@@ -157,8 +157,17 @@ export default function Dashboard({
   const [data, setData] = useState<TeamData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveData, setLiveData] = useState<EventLive | null>(null);
-  /** Fixtures as of the last live poll — used only to decide when to stop. */
+  /** Fixtures as of the last live poll. See `liveFx` for what reads them. */
   const [liveFixtures, setLiveFixtures] = useState<Fixture[] | null>(null);
+  /**
+   * When the last live poll landed, for the "Updated" stamp.
+   *
+   * Stamped on the SCORES arriving, not on the request going out: a stamp set
+   * before the response is a clock, not a freshness signal, and the proxy's
+   * own cache note in CLAUDE.md records what that costs — an app that reports
+   * refreshing when it has not.
+   */
+  const [liveUpdatedAt, setLiveUpdatedAt] = useState<Date | null>(null);
   /** Orders live polls against each other; see the effect that uses it. */
   const livePollSeq = useRef(0);
   const [selected, setSelected] = useState<Element | null>(null);
@@ -390,12 +399,48 @@ export default function Dashboard({
 
   const currentEventObj = data?.bootstrap.events.find((e) => e.is_current) ?? null;
   const currentEvent = currentEventObj?.id ?? data?.squad?.currentEvent ?? null;
+  /*
+   * THE FIXTURE LIST EVERY LIVE COMPUTATION ON THIS PAGE MUST READ.
+   *
+   * `data.fixtures` is fetched once by `loadTeamData` and its effect runs on
+   * `[entryId, reloadKey]`, so it CANNOT change while the page is open. The
+   * poll below has always known that — the note under `pollFixtures` says so
+   * in as many words — and worked around it for its own stop condition while
+   * four live computations went on reading the page-load copy.
+   *
+   * The cost is not a stale minute here and there, it is categorical.
+   * `provisionalBonus` only fires on a fixture with `finished_provisional &&
+   * !finished`; in a copy taken before full time BOTH flags are false on
+   * everything, so it returns an EMPTY map for the rest of the session.
+   * `projectAutoSubs.doneOnZero` needs the same flags, so no substitution is
+   * ever projected and the vice-captain takeover that hangs off it never
+   * fires. `playerMatchStatus` answers "todo" for every player, so a pitch
+   * card prints a kick-off time for a man who finished two hours ago.
+   *
+   * All of that lands in `liveNet`, which feeds the KPI strip — visible on
+   * every tab. So the Live tab, which polls its own fixtures, showed one
+   * score while the header above it showed another: exactly the defect
+   * `liveEntryScore` was unified to kill, reintroduced through the inputs
+   * rather than through the arithmetic.
+   *
+   * The planning surfaces deliberately keep `data.fixtures`. A 30-second
+   * repaint of the optimizer is what the note under the poll was protecting,
+   * and that protection survives untouched.
+   */
+  const liveFx: Fixture[] = useMemo(
+    // Memoised because four `useMemo`s take it as a dependency, and the `?? []`
+    // tail is a fresh array on every render until `data` lands — so without
+    // this all four recompute on every paint, including `liveEntryScore` over
+    // the whole squad.
+    () => liveFixtures ?? data?.fixtures ?? [],
+    [liveFixtures, data]
+  );
+
   const gwFinished =
     (currentEventObj?.finished ?? false) ||
     (currentEvent != null &&
-      data != null &&
-      data.fixtures.some((f) => f.event === currentEvent) &&
-      data.fixtures.filter((f) => f.event === currentEvent).every((f) => f.finished));
+      liveFx.some((f) => f.event === currentEvent) &&
+      liveFx.filter((f) => f.event === currentEvent).every((f) => f.finished));
 
   /*
    * When to STOP polling, which is not the same question as `gwFinished`.
@@ -405,7 +450,7 @@ export default function Dashboard({
    * the poll would mean never stopping. This reads the fixtures the poll itself
    * brings down, falling back to the page-load copy until the first tick lands.
    */
-  const pollFixtures = liveFixtures ?? data?.fixtures ?? [];
+  const pollFixtures = liveFx;
   const livePollDone =
     currentEvent == null ||
     (currentEventObj?.finished ?? false) ||
@@ -451,7 +496,11 @@ export default function Dashboard({
       const mine = ++livePollSeq.current;
       api
         .live(currentEvent)
-        .then((l) => !cancelled && mine === livePollSeq.current && setLiveData(l))
+        .then((l) => {
+          if (cancelled || mine !== livePollSeq.current) return;
+          setLiveData(l);
+          setLiveUpdatedAt(new Date());
+        })
         .catch(() => {});
       api
         .fixtures()
@@ -515,9 +564,9 @@ export default function Dashboard({
   const liveBonus = useMemo(
     () =>
       liveData && currentEvent != null
-        ? provisionalBonus(data!.bootstrap, data!.fixtures, liveData, currentEvent)
+        ? provisionalBonus(data!.bootstrap, liveFx, liveData, currentEvent)
         : null,
-    [liveData, data, currentEvent]
+    [liveData, data, liveFx, currentEvent]
   );
   const livePointsOf = useMemo(() => {
     const m = new Map<number, number>();
@@ -608,7 +657,7 @@ export default function Dashboard({
       data.picks.picks,
       elementById,
       liveData,
-      data.fixtures,
+      liveFx,
       currentEvent
     );
     /*
@@ -629,7 +678,7 @@ export default function Dashboard({
      */
     const noSubs = data.picks.active_chip === "bboost";
     return { xi: noSubs ? null : new Set(effectiveXi), out: new Set(out) };
-  }, [liveData, data, currentEvent]);
+  }, [liveData, data, liveFx, currentEvent]);
   const effectiveXiIds = autoSubs?.xi ?? null;
 
   /*
@@ -713,7 +762,7 @@ export default function Dashboard({
     const minutesOf = new Map(liveData.elements.map((e) => [e.id, e.stats.minutes]));
     return (el: Element): string | null =>
       matchStatusLabel(
-        playerMatchStatus(teamFixtures(data!.fixtures, el.team, currentEvent), minutesOf.get(el.id)),
+        playerMatchStatus(teamFixtures(liveFx, el.team, currentEvent), minutesOf.get(el.id)),
         (iso) =>
           new Date(iso).toLocaleString("en-GB", {
             weekday: "short",
@@ -721,7 +770,7 @@ export default function Dashboard({
             minute: "2-digit",
           })
       ) || null;
-  }, [liveData, currentEvent, data]);
+  }, [liveData, currentEvent, liveFx]);
 
   /*
    * THE HEADER'S OWN LIVE SCORE, and it is deliberately `liveEntryScore` and
@@ -737,12 +786,12 @@ export default function Dashboard({
       data.picks,
       new Map(data.bootstrap.elements.map((e) => [e.id, e])),
       liveData,
-      data.fixtures,
+      liveFx,
       currentEvent,
       liveBonus?.byElement ?? null,
       gwFinished
     );
-  }, [data, liveData, currentEvent, gwFinished, liveBonus]);
+  }, [data, liveData, liveFx, currentEvent, gwFinished, liveBonus]);
 
 
   if (error) {
@@ -1475,7 +1524,13 @@ export default function Dashboard({
         )}
         {visited.has("league") && (
           <div hidden={tab !== "league"} role="tabpanel" id="panel-league" aria-labelledby="tab-league">
-            <MiniLeague data={data} entryId={entryId} />
+            <MiniLeague
+              data={data}
+              entryId={entryId}
+              live={liveData}
+              fixtures={liveFx}
+              updatedAt={liveUpdatedAt}
+            />
           </div>
         )}
         {visited.has("history") && (

@@ -15,6 +15,22 @@
   --accent: #00e07c; /* readable FPL green on dark */
   --accent-vivid: #00ff87; /* FPL brand green for fills */
   --on-accent: #37003c; /* FPL deep purple on green, like the official site */
+  /*
+   * TEXT ON A `bg-accent` FILL, AND IT CANNOT BE ONE COLOUR FOR BOTH THEMES.
+   * `--accent` is deliberately different per theme — a bright green readable
+   * on dark, a dark green readable on white — so the readable ink on top of it
+   * inverts with it. Measured (WCAG 2.1 relative luminance):
+   *
+   *   dark  #00e07c under white    1.76:1   under #37003c  9.74:1
+   *   light #00804a under white    5.02:1   under #37003c  3.41:1
+   *
+   * The badges this is for were `text-white` in both, so they shipped at
+   * 1.76:1 on the theme that opens by default — unreadable, not merely
+   * borderline. `--on-accent` could not be reused: it is the ink on
+   * `--accent-vivid`, which is #00ff87 in BOTH themes, so making it white for
+   * light would wreck `.btn-primary`.
+   */
+  --accent-ink: #37003c;
   --accent-2: #a78bfa;
   --danger: #ff5c8a; /* FPL pink, lifted for dark */
   --warn: #fbbf24;
@@ -31,6 +47,7 @@ html.light {
   --accent: #00804a; /* darkened FPL green, readable on white */
   --accent-vivid: #00ff87;
   --on-accent: #37003c;
+  --accent-ink: #ffffff; /* 5.02:1 on this theme's #00804a; see the note above */
   --accent-2: #963cff;
   --danger: #e90052; /* FPL pink */
   --warn: #b45309;
@@ -52,6 +69,7 @@ html.light {
   --color-border-c: var(--border);
   --color-muted: var(--muted);
   --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
   --color-accent-2: var(--accent-2);
   --color-danger: var(--danger);
   --color-warn: var(--warn);

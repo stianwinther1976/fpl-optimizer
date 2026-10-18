@@ -4,7 +4,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { markNavigation } from "@/lib/nav";
 import { api, DEMO_ENTRY_ID, FplApiError, fmtNum, type TeamData } from "@/lib/fpl";
-import type { EventLive, LeagueStandings } from "@/lib/types";
+import type { EntryEventPicks, EventLive, Fixture, LeagueStandings } from "@/lib/types";
 import { CHIP_LABELS } from "@/lib/rules";
 import { leagueRowGw, leagueRowTotal, rankByLiveScore, scoreTier } from "@/lib/display";
 import {
@@ -235,7 +235,42 @@ function SeasonLine({
   );
 }
 
-export default function MiniLeague({ data, entryId }: { data: TeamData; entryId: number }) {
+/*
+ * THE LIVE FEED COMES FROM THE DASHBOARD'S POLL, NOT FROM HERE.
+ *
+ * This component used to fetch `event/{gw}/live/` once, inside `loadDetails`,
+ * and score every rival off it on the spot. So the whole table — scores,
+ * provisional bonus, who is still to play — was frozen at the instant a league
+ * was picked. Open the league tab at 16:05 and it still said 16:05 at 17:30,
+ * with no indication on screen, while the Team and Live tabs a tap away were
+ * thirty seconds old.
+ *
+ * `fixtures` matters for the same reason and one more: `provisionalBonus` only
+ * fires on `finished_provisional && !finished`, so a fixtures copy taken before
+ * full time has both flags false everywhere and the bonus map is empty for as
+ * long as the page is open. A frozen fixtures list does not make the bonus
+ * slightly stale, it removes it.
+ *
+ * `updatedAt` is passed so the table can SAY when it last moved. A live number
+ * with no timestamp is indistinguishable from a dead one, which is the whole
+ * reason this defect survived.
+ */
+export default function MiniLeague({
+  data,
+  entryId,
+  live,
+  fixtures,
+  updatedAt,
+}: {
+  data: TeamData;
+  entryId: number;
+  /** The latest live payload from the dashboard poll; null until it lands. */
+  live: EventLive | null;
+  /** Fixtures from the same poll, falling back to the page-load copy. */
+  fixtures: Fixture[];
+  /** When that payload arrived, or null if none has yet. */
+  updatedAt: Date | null;
+}) {
   const router = useRouter();
   // Recorded, so the rival's own back control returns to this table rather
   // than to the landing page — see `nav.ts`.
@@ -247,7 +282,17 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
   const canOpenRivals = entryId !== DEMO_ENTRY_ID;
   const [leagueId, setLeagueId] = useState("");
   const [standings, setStandings] = useState<LeagueStandings | null>(null);
-  const [details, setDetails] = useState<Map<number, RivalDetail>>(new Map());
+  /*
+   * THE RAW PAYLOADS, NOT THE SCORES DERIVED FROM THEM.
+   *
+   * `picks/` is cached by FPL for most of a day (CLAUDE.md), cannot change
+   * after the deadline, and costs up to MAX_RIVAL_DETAILS requests to collect
+   * — so it is fetched once per league and kept. Everything that MOVES during
+   * a gameweek is derived from it in the memo below, against the live payload
+   * the dashboard is polling, so the table re-scores on every tick without
+   * re-fetching anything.
+   */
+  const [rivalPicks, setRivalPicks] = useState<Map<number, EntryEventPicks>>(new Map());
   /*
    * WHICH COLUMN THE TABLE IS ORDERED BY. Total is the league; GW is who is
    * having the better week, which is the question during a match and was not
@@ -281,7 +326,6 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
   const [seasonInfo, setSeasonInfo] = useState<Map<number, SeasonInfo | "loading" | null>>(
     new Map()
   );
-  const [ownership, setOwnership] = useState<LeagueOwnership | null>(null);
   const [loading, setLoading] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState(false);
@@ -424,6 +468,17 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
     }
   }
 
+  /*
+   * FETCH ONLY. This function used to fetch AND score in one pass, which is
+   * what froze the table — see the component's own header. It now collects
+   * `picks/` and nothing else; `details` and `ownership` below do the rest.
+   *
+   * What that buys, beyond freshness: the expensive half runs once per league
+   * and the cheap half runs per tick. Re-scoring twenty rosters off a payload
+   * in hand is arithmetic over ~300 live rows; re-fetching twenty `picks/`
+   * every thirty seconds would be twenty requests through one proxy for data
+   * FPL itself caches for fifteen hours.
+   */
   async function loadDetails(s: LeagueStandings) {
     if (currentEvent == null) return;
     const seq = ++detailsSeq.current;
@@ -433,130 +488,151 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
     setDetailsError(false);
     // DROP THE OUTGOING LEAGUE'S NUMBERS BEFORE FETCHING THE NEW ONE'S. The
     // standings and the heading swap the instant a different league is picked,
-    // but these two were only ever overwritten at the END of a fetch that makes
-    // up to MAX_RIVAL_DETAILS sequential `picks` calls — seconds on a phone —
-    // so league A's effective ownership sat under league B's name the whole
-    // time. Worse when the new league is too small to sample: `setOwnership`
-    // then only fires in the else-branch at the very end, so the stale panel
-    // was the only thing the user ever saw.
-    setDetails(new Map());
-    setOwnership(null);
+    // but this was only ever overwritten at the END of a fetch that makes up to
+    // MAX_RIVAL_DETAILS `picks` calls — seconds on a phone — so league A's
+    // rivals and its effective ownership sat under league B's name the whole
+    // time. One clear now covers both, because ownership is derived from this
+    // map rather than stored beside it and so cannot outlive it.
+    setRivalPicks(new Map());
     try {
       const rivals = s.standings.results.slice(0, MAX_RIVAL_DETAILS);
-      const live: EventLive = await api.live(currentEvent);
-      /*
-       * THE SAME SCORE AS THE OTHER TWO TABS. This loop had neither the
-       * provisional bonus nor the vice-captain takeover, so between the final
-       * whistle and bonus confirmation — hours, after a Saturday — the reader's
-       * own row here disagreed with the Live tab by the bonus, and with both
-       * tabs by the vice's entire raw score whenever a captain blanked.
-       * `liveEntryScore` is now the one definition; see its note for the three
-       * numbers this produced.
-       */
-      const bonus = provisionalBonus(data.bootstrap, data.fixtures, live, currentEvent);
-      const ev = data.bootstrap.events.find((e) => e.id === currentEvent);
-      const gwDone =
-        (ev?.finished ?? false) ||
-        (data.fixtures.some((f) => f.event === currentEvent) &&
-          data.fixtures.filter((f) => f.event === currentEvent).every((f) => f.finished));
-      const eoCount = new Map<number, number>();
-      let eoSample = 0;
       const results = await Promise.all(
         rivals.map(async (r) => {
           try {
-            const picks = await api.picks(r.entry, currentEvent);
-            const bboost = picks.active_chip === "bboost";
-            // Auto-subs, provisional bonus and the vice-captain takeover all
-            // live in `liveEntryScore`, which returns the score NET of the hit.
-            const net = liveEntryScore(
-              picks,
-              elementById,
-              live,
-              data.fixtures,
-              currentEvent,
-              bonus.byElement,
-              gwDone
-            );
-            const hits = picks.entry_history.event_transfers_cost;
-            const cap = picks.picks.find((p) => p.is_captain);
-            const vice = picks.picks.find((p) => p.is_vice_captain);
-            // League effective ownership: starters count 1, captain counts 2.
-            if (r.entry !== entryId) {
-              eoSample++;
-              for (const p of picks.picks) {
-                if (p.position <= 11 || bboost) {
-                  eoCount.set(p.element, (eoCount.get(p.element) ?? 0) + (p.is_captain ? 2 : 1));
-                }
-              }
-            }
-            const detail: RivalDetail = {
-              captain: cap ? (elementName.get(cap.element) ?? null) : null,
-              viceCaptain: vice ? (elementName.get(vice.element) ?? null) : null,
-              chip: picks.active_chip,
-              livePoints: net,
-              hits,
-              /*
-               * FREE, AND SAFE TO READ HERE, WHICH IS NOT TRUE OF EVERY FIELD
-               * BESIDE THEM. `picks/` is cached by FPL for most of a day, so
-               * `entry_history.points` and `.rank` inside it are stale all
-               * gameweek — the note in CLAUDE.md. These three are not: squad
-               * value, the bank and the transfer count are all fixed at the
-               * deadline and cannot move while the gameweek runs. So they come
-               * off a payload already in hand rather than a second request.
-               *
-               * `value` INCLUDES the bank, so it is not squad value; the two
-               * are printed as what they are rather than one subtracted from
-               * the other and mislabelled.
-               */
-              value: picks.entry_history.value,
-              bank: picks.entry_history.bank,
-              gwTransfers: picks.entry_history.event_transfers,
-              ...squadMatchState(picks, elementById, live, data.fixtures, currentEvent),
-              /*
-               * THE SAME SEVEN ARGUMENTS `liveEntryScore` GOT, one line up.
-               * The expansion hangs directly under the score it decomposes, so
-               * a roster built without the provisional bonus or the takeover
-               * would print rows that visibly fail to add up to the number
-               * above them — during the bonus window, which is exactly when a
-               * reader opens it. `liveEntryScore` now sums this very array, so
-               * the two agree by construction rather than by matching edits.
-               */
-              roster: squadRoster(
-                picks,
-                elementById,
-                live,
-                data.fixtures,
-                currentEvent,
-                bonus.byElement,
-                gwDone
-              ),
-            };
-            return [r.entry, detail] as const;
+            return [r.entry, await api.picks(r.entry, currentEvent)] as const;
           } catch {
             return null;
           }
         })
       );
       if (superseded()) return;
-      setDetails(new Map(results.filter((x): x is NonNullable<typeof x> => x != null)));
-      if (eoSample >= 3) {
-        const eo = new Map<number, number>();
-        for (const [id, c] of eoCount) eo.set(id, c / eoSample);
-        setOwnership({ sample: eoSample, eo });
-      } else {
-        setOwnership(null);
-      }
+      const ok = results.filter((x): x is NonNullable<typeof x> => x != null);
+      setRivalPicks(new Map(ok));
+      // EVERY REQUEST FAILING IS AN ERROR, AND DID NOT USED TO READ AS ONE.
+      // Twenty `picks` calls go out at once through one proxy and each swallows
+      // its own failure, so a bad moment on load left the rivals column simply
+      // blank with nothing to press. (`LiveTab`'s band sample had the same
+      // shape of bug; see the safety-score note in CLAUDE.md.)
+      if (ok.length === 0 && rivals.length > 0) setDetailsError(true);
     } catch {
       // THIS CATCH IS NOT OPTIONAL. `loadDetails` is fired un-awaited from
       // `load`, so a rejection here escapes that function's try entirely and
-      // surfaces as an unhandled rejection. The state above has already been
-      // cleared by then, so without this the user is left staring at an empty
-      // rivals column with no explanation and nothing to press.
+      // surfaces as an unhandled rejection.
       if (!superseded()) setDetailsError(true);
     } finally {
       if (!superseded()) setDetailsLoading(false);
     }
   }
+
+  /*
+   * EVERY MOVING NUMBER IN THE TABLE, RE-DERIVED ON EACH LIVE TICK.
+   *
+   * Keyed on the polled `live` and `fixtures` rather than on a copy taken when
+   * the league was picked. `liveEntryScore` is the one definition of a
+   * gameweek score — auto-subs, provisional bonus, the vice-captain takeover
+   * and the transfer hit all live inside it — and `squadRoster` is the array
+   * it sums, so the expansion under a row cannot disagree with the number on
+   * the row.
+   *
+   * Empty until the first live payload lands. `leagueRowGw` and
+   * `leagueRowTotal` fall back to FPL's own stored `event_total` when a row has
+   * no detail, so the table shows FPL's figures rather than dashes for the
+   * second or two before the poll answers.
+   */
+  const details = useMemo(() => {
+    const out = new Map<number, RivalDetail>();
+    if (live == null || currentEvent == null) return out;
+    const bonus = provisionalBonus(data.bootstrap, fixtures, live, currentEvent);
+    const ev = data.bootstrap.events.find((e) => e.id === currentEvent);
+    const gwDone =
+      (ev?.finished ?? false) ||
+      (fixtures.some((f) => f.event === currentEvent) &&
+        fixtures.filter((f) => f.event === currentEvent).every((f) => f.finished));
+    for (const [entry, picks] of rivalPicks) {
+      const net = liveEntryScore(
+        picks,
+        elementById,
+        live,
+        fixtures,
+        currentEvent,
+        bonus.byElement,
+        gwDone
+      );
+      const cap = picks.picks.find((p) => p.is_captain);
+      const vice = picks.picks.find((p) => p.is_vice_captain);
+      out.set(entry, {
+        captain: cap ? (elementName.get(cap.element) ?? null) : null,
+        viceCaptain: vice ? (elementName.get(vice.element) ?? null) : null,
+        chip: picks.active_chip,
+        livePoints: net,
+        hits: picks.entry_history.event_transfers_cost,
+        /*
+         * FREE, AND SAFE TO READ HERE, WHICH IS NOT TRUE OF EVERY FIELD
+         * BESIDE THEM. `picks/` is cached by FPL for most of a day, so
+         * `entry_history.points` and `.rank` inside it are stale all gameweek
+         * — the note in CLAUDE.md. These three are not: squad value, the bank
+         * and the transfer count are all fixed at the deadline and cannot move
+         * while the gameweek runs. So they come off a payload already in hand
+         * rather than a second request.
+         *
+         * `value` INCLUDES the bank, so it is not squad value; the two are
+         * printed as what they are rather than one subtracted from the other
+         * and mislabelled.
+         */
+        value: picks.entry_history.value,
+        bank: picks.entry_history.bank,
+        gwTransfers: picks.entry_history.event_transfers,
+        ...squadMatchState(picks, elementById, live, fixtures, currentEvent),
+        /*
+         * THE SAME SEVEN ARGUMENTS `liveEntryScore` GOT, one line up. The
+         * expansion hangs directly under the score it decomposes, so a roster
+         * built without the provisional bonus or the takeover would print rows
+         * that visibly fail to add up to the number above them — during the
+         * bonus window, which is exactly when a reader opens it.
+         */
+        roster: squadRoster(
+          picks,
+          elementById,
+          live,
+          fixtures,
+          currentEvent,
+          bonus.byElement,
+          gwDone
+        ),
+      });
+    }
+    return out;
+  }, [rivalPicks, live, fixtures, currentEvent, data.bootstrap, elementById, elementName]);
+
+  /*
+   * LEAGUE EFFECTIVE OWNERSHIP — starters count 1, the captain counts 2.
+   *
+   * Derived rather than stored, so it cannot survive the league it describes.
+   * It needs no live data at all: it is a statement about what the rivals
+   * PICKED, which was fixed at the deadline. So it is computed off the picks
+   * alone and does not recompute on every live tick.
+   *
+   * Three is the floor because a share out of two rivals is 0, 50 or 100 per
+   * cent and reads as a finding.
+   */
+  const ownership = useMemo((): LeagueOwnership | null => {
+    const count = new Map<number, number>();
+    let sample = 0;
+    for (const [entry, picks] of rivalPicks) {
+      if (entry === entryId) continue;
+      sample++;
+      const bboost = picks.active_chip === "bboost";
+      for (const p of picks.picks) {
+        if (p.position <= 11 || bboost) {
+          count.set(p.element, (count.get(p.element) ?? 0) + (p.is_captain ? 2 : 1));
+        }
+      }
+    }
+    if (sample < 3) return null;
+    const eo = new Map<number, number>();
+    for (const [id, c] of count) eo.set(id, c / sample);
+    return { sample, eo };
+  }, [rivalPicks, entryId]);
 
   return (
     <div className="space-y-4">
@@ -694,14 +770,25 @@ export default function MiniLeague({ data, entryId }: { data: TeamData; entryId:
             )}
             {detailsLoading ? (
               <span className="text-xs text-muted">Loading rival details…</span>
+            ) : detailsError ? (
+              <button
+                onClick={() => standings && loadDetails(standings)}
+                className="text-xs text-danger underline underline-offset-2"
+              >
+                Live scores unavailable — retry
+              </button>
             ) : (
-              detailsError && (
-                <button
-                  onClick={() => standings && loadDetails(standings)}
-                  className="text-xs text-danger underline underline-offset-2"
-                >
-                  Live scores unavailable — retry
-                </button>
+              /*
+               * SAY WHEN THIS LAST MOVED. The scores in this table were frozen
+               * at the moment the league was picked and there was nothing on
+               * screen to reveal it — a stale number and a live one looked
+               * identical. The stamp is the thing that makes the fix visible,
+               * and the thing that would have made the bug visible.
+               */
+              updatedAt && (
+                <span className="text-xs text-muted">
+                  Updated {updatedAt.toLocaleTimeString("en-GB")}
+                </span>
               )
             )}
           </div>

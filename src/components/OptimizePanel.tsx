@@ -196,7 +196,7 @@ export default function OptimizePanel({
           </button>
           {launchRunning && phase && <div className="mt-2 text-xs text-muted">{phase}</div>}
           {!launchRunning && gap && (
-            <div className="mt-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+            <div className="mt-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-warn">
               {gap.failed < 0
                 ? "Couldn't reach FPL for last season's minutes — this draft is based on prices and FPL's own projections only. Try again in a moment."
                 : `Last season's record was unavailable for ${gap.failed} of ${gap.requested} players, so those were estimated from price. Re-draft to try them again.`}
@@ -233,7 +233,7 @@ export default function OptimizePanel({
                           {selected && <span className="text-accent">✓</span>}
                           {launchLeaders.has(v.key) && (
                             <span
-                              className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-white"
+                              className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-accent-ink"
                               title={
                                 launchLeaders.size > 1
                                   ? `Level on projected points over ${v.horizonGws} gameweeks with ${launchLeaders.size - 1} other draft${launchLeaders.size > 2 ? "s" : ""} — take either`
@@ -274,7 +274,7 @@ export default function OptimizePanel({
                       </div>
                       <div className="mt-1 text-[11px] leading-tight text-muted">{v.description}</div>
                       {selected ? (
-                        <div className="mt-2 inline-block rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-white">
+                        <div className="mt-2 inline-block rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-accent-ink">
                           Selected
                         </div>
                       ) : (
