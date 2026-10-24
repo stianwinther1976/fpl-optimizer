@@ -1,0 +1,10 @@
+NEXT DEADLINE: GW9 at 2026-10-31T11:00:00Z (7d 0h away)
+SQUAD 946779: Mr. Excel — bank £1.1m, free transfers unknown from this endpoint (the app computes them)
+FLAGGED:
+  Stach (LEE): status d, 50% chance — Foot injury - 50% chance of playing
+  Calvert-Lewin (LEE): status d, 50% chance — Foot injury - 50% chance of playing
+  Janelt (BRE): status s, 0% chance — Suspended until 31 Oct
+PRICE MOVES:
+  B.Fernandes (MUN): -0.1m this gameweek
+  Evanilson (BOU): +0.1m this gameweek
+STATUS: SPEAK
