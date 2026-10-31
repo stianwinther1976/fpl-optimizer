@@ -86,9 +86,26 @@ describe("the app's own answer for one team", () => {
      * which a summer signing projects near zero, misses the shortlist, and
      * then has no recent-form evidence either. That note is in the panel.
      */
+    /*
+     * WALL CLOCK PER PHASE, AND A CONTENT CHECK ON BOTH MODEL INPUTS.
+     *
+     * The first run reported 393 element summaries fetched in 487 ms and the
+     * whole test in 1.25 s, which is too fast to believe over a network. A
+     * map's SIZE does not establish that it holds anything: `fetchPastSeason`
+     * writes a record for every player it looked at, including one with no
+     * history at all, because "we looked and there is nothing" is itself the
+     * signal that separates a new signing from a benched squad player. So a
+     * run where every fetch returned an empty document would report 393 held,
+     * 0 failed, and project a different model from the one the app ships —
+     * which is exactly the falsehood this harness's own header warns against.
+     *
+     * Hence: elapsed milliseconds, and how many of the records are NON-EMPTY.
+     */
+    const t0 = Date.now();
     const pool = launchPool(data.bootstrap.elements);
     console.log(`fetching last season's record for ${pool.length} players (launchPool)…`);
     const past = await fetchPastSeason(pool);
+    const tPast = Date.now();
 
     const prelim = projectAll({
       bootstrap: data.bootstrap,
@@ -109,10 +126,42 @@ describe("the app's own answer for one team", () => {
     }
     console.log(`fetching recent line-ups for ${ids.size}…`);
     const recentForm = await fetchRecentForm([...ids], 5, 8);
+    const tForm = Date.now();
+
+    const withSeasons = [...past.data.values()].filter((p) => (p.plSeasons ?? 0) > 0).length;
+    const withMinutes = [...past.data.values()].filter(
+      (p) => (p.lastSeason?.minutes ?? 0) > 0
+    ).length;
+    const withStarts = [...recentForm.values()].filter((r) => r.minsPerStart != null).length;
     console.log(
-      `recent form held for ${recentForm.size}; last season for ${past.data.size}` +
-        `${past.failed > 0 ? ` (${past.failed} failed)` : ""}\n`
+      `last season: ${past.data.size} held, ${past.failed} failed, ` +
+        `${withSeasons} with a PL season on record, ${withMinutes} with minutes — ${tPast - t0} ms`
     );
+    console.log(
+      `recent form: ${recentForm.size} held, ${withStarts} with a start in the last 5 — ` +
+        `${tForm - tPast} ms`
+    );
+    /*
+     * THE ASSERTION IS THE POINT. A silent empty input is the failure mode
+     * that makes the whole print misleading, so the harness fails rather than
+     * reporting numbers nobody should act on. Both floors are deliberately
+     * loose: they distinguish "the feed answered" from "nothing came back",
+     * and are not tuned to anything.
+     */
+    expect(withMinutes, "last season's record came back empty").toBeGreaterThan(50);
+    expect(withStarts, "recent form came back empty").toBeGreaterThan(10);
+
+    // A SPOT CHECK A HUMAN CAN READ, because an aggregate can still be wrong
+    // in a way a count cannot show.
+    for (const p of squad!.players.slice(0, 3)) {
+      const id = p.element.id;
+      console.log(
+        `  check ${p.element.web_name.padEnd(16)} ` +
+          `recentForm=${JSON.stringify(recentForm.get(id) ?? null)} ` +
+          `lastSeason=${JSON.stringify(past.data.get(id)?.lastSeason ?? null)}`
+      );
+    }
+    console.log("");
 
     const res = optimize({
       bootstrap: data.bootstrap,
@@ -160,9 +209,11 @@ describe("the app's own answer for one team", () => {
     console.log("\n--- CAPTAIN ORDER (next GW xP) ---");
     res.captainRanking.slice(0, 6).forEach((s, i) => {
       const read = res.captainReads.get(s.element.id);
+      // The whole `Element` rides inside a `CaptainRead`, so dumping the object
+      // buried the five lines that matter under five hundred fields.
       console.log(
         `  ${i + 1}. ${s.element.web_name.padEnd(16)} ${s.xp.toFixed(2).padStart(5)} xP` +
-          `${read ? `   ${JSON.stringify(read)}` : ""}`
+          `${read ? `   owned ${read.ownership != null ? `${(read.ownership * 100).toFixed(1)}%` : "—"}  ${read.klass}${read.wasTemplateCaptain ? "  (was template captain)" : ""}` : ""}`
       );
     });
 
@@ -175,6 +226,7 @@ describe("the app's own answer for one team", () => {
         )
         .join("; ") || "no move";
 
+    console.log(`\n(optimize took ${Date.now() - tForm} ms)`);
     console.log(
       `\n--- TRANSFERS over ${5} GWs · keep-the-team scores ${res.keepHorizonPlainXp.toFixed(1)} plain xP ---`
     );
