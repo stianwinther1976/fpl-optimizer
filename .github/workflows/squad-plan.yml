@@ -1,0 +1,47 @@
+# What does the app recommend for ONE team, right now?
+#
+# `gw-view.yml` prints the model's view of the gameweek — the best players in
+# the game. That is the wrong question an hour before a deadline, when the
+# reader already owns fifteen of them. This runs the shipped `optimize` and
+# `planHorizon` against one entry id and prints the answer: the squad with its
+# projections, the best XI and captain, the transfer plans with their gain over
+# doing nothing, the chip advice and the six-gameweek plan.
+#
+# It runs on a runner for the usual reason: the sandbox this repo is developed
+# from cannot reach fantasy.premierleague.com. It publishes nothing and reads
+# only the official public API.
+name: Squad plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      entry_id:
+        description: "FPL entry id (blank = the repository's own)"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: squad-plan
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    # `launchPool` element-summaries at concurrency 8, then the beam search.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Run the shipped optimizer against the entry
+        env:
+          # Same default as `deadline-watch.yml`, and for the reason recorded
+          # there: an entry id is public, and the repository is the only place
+          # a remembered one survives a compaction.
+          FPL_ENTRY_ID: ${{ inputs.entry_id || vars.FPL_ENTRY_ID || '946779' }}
+        run: npx vitest run -c vitest.squadplan.config.ts --reporter=verbose --silent=false
