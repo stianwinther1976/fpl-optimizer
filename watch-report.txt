@@ -1,0 +1,11 @@
+NEXT DEADLINE: GW11 at 2026-11-21T11:00:00Z (14d 5h away)
+SQUAD 946779: Mr. Excel — bank £0.9m, free transfers unknown from this endpoint (the app computes them)
+FLAGGED:
+  Alderete (SUN): status s, 0% chance — Suspended until 21 Nov
+  Calvert-Lewin (LEE): status d, 75% chance — Foot injury - 75% chance of playing
+PRICE MOVES:
+  Xhaka (SUN): -0.1m this gameweek
+  Groß (BHA): +0.1m this gameweek
+  Evanilson (BOU): +0.1m this gameweek
+  Calvert-Lewin (LEE): -0.1m this gameweek
+STATUS: SPEAK
