@@ -701,3 +701,88 @@ export function calibrationCaveat(log: { gw: number }[]): string | null {
     ? "Learned from one gameweek — and GW1 is projected from the pre-season fallback, because FPL publishes no team-strength numbers before the season starts. Treat these as provisional: they may not describe the in-season model they are being applied to."
     : "Learned from one gameweek. Treat these as provisional.";
 }
+
+export interface MaeTrend {
+  /**
+   * What the series supports. "flat" is a finding, not a fallback: it is the
+   * honest answer whenever the shift between halves is smaller than the
+   * ordinary step between consecutive gameweeks.
+   */
+  kind: "insufficient" | "flat" | "down" | "up";
+  lo: number;
+  hi: number;
+  latest: number;
+  n: number;
+  firstGw: number;
+  lastGw: number;
+  /** Mean of the later half minus mean of the earlier half. */
+  halfDelta: number;
+  /** Mean absolute change between consecutive graded gameweeks. */
+  swing: number;
+}
+
+/**
+ * Does the Model-accuracy card's "average miss" column actually have a
+ * direction?
+ *
+ * IT USED TO COMPARE TWO POINTS OUT OF TEN. The line read `last.mae -
+ * first.mae`, so on the reported card it announced "▼ Average miss down from
+ * 2.26 to 1.99" — while GW2 was 1.75, lower than either end. Read after GW2 it
+ * would have claimed a BIGGER improvement and then taken it back. The `moved`
+ * threshold was 0.01, against a series whose weeks differ by up to 0.51, so it
+ * said "moved" essentially always.
+ *
+ * It also anchored on GW1, which is the one gameweek CLAUDE.md says must not
+ * be compared with the others: pre-season every `strength_*` FPL publishes is
+ * 0, so the model runs on published FDR and `pStart` shrinks toward a prior
+ * instead of reading starts. GW1 is kept in the series — it IS a graded
+ * gameweek and dropping it silently would be its own distortion — but it no
+ * longer gets to be half the evidence on its own.
+ *
+ * THE RULE, stated rather than tuned: a direction is claimed only when the
+ * shift between the two halves is larger than the ordinary gameweek-to-
+ * gameweek step. Both quantities come out of the same series, so there is no
+ * constant here to fit. On the reported ten gameweeks the halves differ by
+ * 0.04 while consecutive weeks differ by 0.19 on average, so the answer is
+ * flat — which is what the series shows and what the old line denied.
+ *
+ * What it deliberately does NOT do is say whether the number is GOOD. That
+ * needs a scale the client does not hold; see the note on the card.
+ */
+export function maeTrend(log: { gw: number; mae: number }[]): MaeTrend | null {
+  if (log.length === 0) return null;
+  const rows = [...log].sort((a, b) => a.gw - b.gw);
+  const maes = rows.map((r) => r.mae);
+  const base: MaeTrend = {
+    kind: "insufficient",
+    lo: Math.min(...maes),
+    hi: Math.max(...maes),
+    latest: maes[maes.length - 1],
+    n: rows.length,
+    firstGw: rows[0].gw,
+    lastGw: rows[rows.length - 1].gw,
+    halfDelta: 0,
+    swing: 0,
+  };
+  // Four is the fewest that gives two halves of two and three consecutive
+  // steps to size them against. Below it the question has no answer, which is
+  // a different thing from the answer being "flat".
+  if (rows.length < 4) return base;
+
+  const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  // The middle gameweek of an odd-length series is left out of both halves
+  // rather than assigned to one, which would make the sign depend on parity.
+  const half = Math.floor(rows.length / 2);
+  const halfDelta = avg(maes.slice(rows.length - half)) - avg(maes.slice(0, half));
+
+  let steps = 0;
+  for (let i = 1; i < maes.length; i++) steps += Math.abs(maes[i] - maes[i - 1]);
+  const swing = steps / (maes.length - 1);
+
+  return {
+    ...base,
+    halfDelta,
+    swing,
+    kind: Math.abs(halfDelta) <= swing ? "flat" : halfDelta < 0 ? "down" : "up",
+  };
+}
