@@ -467,6 +467,69 @@ a wide margin on a squad with blanked starters is the feature working — but
 +13 is the largest gap measured, and nothing has checked whether that
 projection was RIGHT.
 
+## What "average miss" is worth, measured
+
+Asked from the screen: ten graded gameweeks, mean absolute error 1.75–2.27,
+no direction. Why does it not improve?
+
+Because the card reports the model's error against **nothing**, and a number
+with no scale invites the reader to assume the scale is zero. Measured on the
+live API over GW1–GW10 2026/27 (run 42723699454,
+`.github/workflows/mae-floor.yml`), population = the 340 players with 5+
+appearances, which matches the 306–342 `applyGwOutcome` actually grades:
+
+| predictor | what it knows | MAE |
+|---|---|---|
+| zero | nothing | 2.58 |
+| pooled mean | the population's own mean | 2.23 |
+| running mean | each player's mean over EARLIER gameweeks (causal) | 2.21 |
+| **oracle** | each player's mean over all ten, **including this one** | **1.85** |
+
+The app averages **2.07** over the same ten. So:
+
+- a predictor **handed the answer sheet** beats it by 0.22;
+- the best causal naive baseline **loses** to it by 0.14;
+- the whole band between naive and unattainable is 0.36 points wide.
+
+**About 1.85 of the 2.07 is football, not model error.** A player's weekly FPL
+return is 0, 2, 6, 9 or 13 — the oracle's 1.85 is essentially the mean absolute
+deviation of that lump around its own mean, and no predictor assigning one
+number per player per week can go far below it. The per-gameweek oracle ran
+1.72–2.01 on these ten, a 0.29 swing with no model involved at all; the app's
+own 1.75–2.27 is 0.52. So most of the week-to-week movement on that card is the
+fixture list and the scoring, not the model changing quality.
+
+The oracle is a **reference, not a floor**: it is restricted to one constant per
+player, so a fixture-aware model can beat it, and on these ten the app did
+once — GW2, 1.75 against the oracle's 1.81. (Populations differ slightly there;
+the card graded 425 players that week against this sample's 340.)
+
+**And calibration cannot move the headline number.** `calibrationMultiplier`
+only rescales, so the most it can ever remove is the systematic part: on a mean
+of 2.55 actual points, a 5% bias is 0.13 points and a 14% bias is 0.36. Driving
+the bias to exactly zero would leave "average miss" where it is. The loop is
+worth having for the projections themselves; it is not what that column
+measures.
+
+Two consequences for the card, one shipped and one open:
+
+- **The trend line compared two points out of ten.** It was
+  `last.mae - first.mae` behind a 0.01 threshold, so on the reported series it
+  announced "▼ down from 2.26 to 1.99" while GW2 was 1.75, lower than either
+  end — and it anchored on GW1, the pre-season code path this file already says
+  must not be compared with the rest. `maeTrend` in `display.ts` replaces it:
+  a direction is claimed only when the shift between the two halves exceeds the
+  ordinary gameweek-to-gameweek step, both taken from the same series so there
+  is no constant to fit. On the reported ten that is 0.04 against 0.19 — flat.
+- **Open: the residual bias is not obviously converging.** Excluding GW1, the
+  nine graded weeks read +14, +4, +1, −3, +11, +6, −2, +5, +5 — seven positive,
+  and the last two identical. `snapshotPredictions` stores a figure the
+  multiplier has ALREADY been applied to, so that column is the residual AFTER
+  correction, and a working loop should drive it toward zero. Nine points with
+  this much week-to-week spread cannot distinguish a stalled loop from noise.
+  Settling it needs a sweep through `.github/workflows/measure.yml`, not a
+  guess.
+
 ## The deadline watch
 
 `.github/workflows/deadline-watch.yml` runs every six hours on a runner and

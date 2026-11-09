@@ -1827,12 +1827,25 @@ describe("the accuracy card reports itself in both directions", () => {
   });
 
   it("has no one-sided gate on the trend line", () => {
+    /*
+     * WHAT THIS IS FOR, which is not the variable it used to name. The line
+     * was once rendered under `{improving && ...}`, so the card reported
+     * itself only when the news was good. The property is that BOTH
+     * directions reach the screen with their own wording and arrow — which
+     * now also has a third case, "flat", pinned in its own block above.
+     *
+     * It pinned `const maeDelta = ` and the two ternaries hanging off it.
+     * That went red when the endpoint subtraction was replaced by `maeTrend`,
+     * and it was right to: the names it described no longer exist. Pinning
+     * the behaviour instead of the spelling is what stops it going red on the
+     * next correct change.
+     */
     const src = read("ModelAccuracy.tsx");
     expect(src).not.toMatch(/const improving\b/);
-    expect(src).toMatch(/const maeDelta = /);
-    // Both words are in the file, and the arrow follows the sign.
-    expect(src).toMatch(/maeDelta < 0 \? "down" : "up"/);
-    expect(src).toMatch(/maeDelta < 0 \? "▼" : "▲"/);
+    expect(src).toMatch(/trend\.kind === "down" \? "down" : "up"|: trend\.kind === "down" \? "text-accent" : "text-warn"/);
+    expect(src).toContain('trend.kind === "down" ? "▼" : "▲"');
+    // Up is not silently dropped: the word must be reachable for a rise.
+    expect(src).toContain("${trend.kind}");
   });
 
   it("stopped promising in prose what the table has to show", () => {
@@ -2426,6 +2439,62 @@ describe("the two planning windows do not read as one", () => {
      */
     const plan = src.slice(src.indexOf("async function runPlan()"));
     expect(plan.slice(0, 900)).toContain("horizon: 6,");
+  });
+});
+
+describe("the accuracy card does not claim a trend the series lacks", () => {
+  /*
+   * TWO ROUNDS WRONG IN THE SAME PLACE. The line was first
+   * `improving = last.mae < first.mae` rendered only when the news was good;
+   * that was fixed to report both directions and left comparing the FIRST and
+   * LAST rows behind a 0.01 threshold. On the reported ten-gameweek card that
+   * announced "▼ Average miss down from 2.26 to 1.99" while GW2 was 1.75 —
+   * lower than either end — and it anchored on GW1, the one gameweek CLAUDE.md
+   * says is produced by the pre-season code path and must not be compared with
+   * the rest.
+   *
+   * The arithmetic lives in `display.ts` so it can be tested against the
+   * reported series; this pins the CALL SITE, because extracting it and
+   * leaving the old expression behind would pass every test in
+   * `display.test.ts` while shipping the original card.
+   */
+  const src = read("ModelAccuracy.tsx");
+  /*
+   * CODE ONLY. The component's own comment quotes the expression it replaced,
+   * which is exactly what the next assertion bans — so a guard reading the raw
+   * file goes red on the note explaining why it is red. Caught on the first
+   * run of this very test.
+   */
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  it("asks `maeTrend` instead of subtracting two rows", () => {
+    expect(code).toContain("maeTrend(log)");
+    // The two endpoint reads are what the old line was built from. Neither
+    // should survive in the component's code.
+    expect(code).not.toMatch(/last\.mae\s*-\s*first\.mae/);
+    expect(code).not.toMatch(/const\s+first\s*=\s*log\[0\]/);
+    expect(code).not.toMatch(/const\s+last\s*=\s*log\[log\.length\s*-\s*1\]/);
+  });
+
+  it("owns no threshold of its own", () => {
+    /*
+     * `moved = Math.abs(maeDelta) > 0.01` was a constant nobody swept, against
+     * a series whose neighbouring weeks differ by up to 0.51 — so it said
+     * "moved" essentially always. `maeTrend` sizes the shift against the
+     * series' own week-to-week step, which is why there is no number to pick.
+     */
+    expect(code).not.toMatch(/>\s*0\.01/);
+    expect(code).not.toContain("maeDelta");
+  });
+
+  it("renders flat as a finding rather than as silence", () => {
+    // "No direction" is an answer and has to reach the screen; dropping the
+    // branch would restore a card that only ever speaks when it has a story.
+    expect(code).toContain('trend.kind === "flat"');
+    expect(code).toContain("No direction");
+    // And the range is what a flat series actually has to report.
+    expect(code).toContain("trend.lo.toFixed(2)");
+    expect(code).toContain("trend.hi.toFixed(2)");
   });
 });
 

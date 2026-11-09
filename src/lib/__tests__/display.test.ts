@@ -10,6 +10,7 @@ import {
   captainXpLabel,
   fdrSortKey,
   kickoffLabel,
+  maeTrend,
   liveCornerNote,
   publishedAverage,
   kickOffPassed,
@@ -927,5 +928,89 @@ describe("calibrationCaveat — what the report card may claim", () => {
     const t = calibrationCaveat([{ gw: 14 }]);
     expect(t).toContain("one gameweek");
     expect(t).not.toContain("pre-season");
+  });
+});
+
+describe("maeTrend", () => {
+  /*
+   * THE REPORTED CARD, verbatim off the screenshot: ten graded gameweeks,
+   * GW1-GW10. The old line announced "▼ Average miss down from 2.26 to 1.99"
+   * over exactly this series — while GW2 is 1.75, lower than either end.
+   */
+  const reported = [
+    { gw: 1, mae: 2.26 },
+    { gw: 2, mae: 1.75 },
+    { gw: 3, mae: 2.01 },
+    { gw: 4, mae: 2.27 },
+    { gw: 5, mae: 2.15 },
+    { gw: 6, mae: 2.1 },
+    { gw: 7, mae: 2.1 },
+    { gw: 8, mae: 2.17 },
+    { gw: 9, mae: 1.86 },
+    { gw: 10, mae: 1.99 },
+  ];
+
+  it("calls the reported series flat, which is what it shows", () => {
+    const t = maeTrend(reported)!;
+    expect(t.kind).toBe("flat");
+    // The halves barely differ; consecutive weeks differ by four times as much.
+    expect(t.halfDelta).toBeCloseTo(-0.044, 3);
+    expect(t.swing).toBeCloseTo(0.19, 2);
+    expect(Math.abs(t.halfDelta)).toBeLessThan(t.swing);
+    // And the range is reported, because that is the thing the series has.
+    expect(t.lo).toBeCloseTo(1.75, 2);
+    expect(t.hi).toBeCloseTo(2.27, 2);
+    expect(t.latest).toBeCloseTo(1.99, 2);
+  });
+
+  it("does not depend on the order the log happens to be in", () => {
+    // The log is sorted by gw when written, but a caller holding a reversed
+    // copy must not get a reversed verdict — which `last - first` would give.
+    const t = maeTrend([...reported].reverse())!;
+    expect(t.kind).toBe("flat");
+    expect(t.firstGw).toBe(1);
+    expect(t.lastGw).toBe(10);
+  });
+
+  it("finds a real fall when the halves actually move", () => {
+    // Monotone and far bigger than the step between weeks.
+    const t = maeTrend(
+      [3.0, 2.9, 2.8, 2.7, 2.1, 2.0, 1.9, 1.8].map((mae, i) => ({ gw: i + 1, mae }))
+    )!;
+    expect(t.kind).toBe("down");
+    expect(t.halfDelta).toBeLessThan(0);
+  });
+
+  it("finds a real rise, and is not one-sided", () => {
+    const t = maeTrend(
+      [1.8, 1.9, 2.0, 2.1, 2.7, 2.8, 2.9, 3.0].map((mae, i) => ({ gw: i + 1, mae }))
+    )!;
+    expect(t.kind).toBe("up");
+    expect(t.halfDelta).toBeGreaterThan(0);
+  });
+
+  it("refuses to answer on too few gameweeks, which is not the same as flat", () => {
+    // Three rows cannot give two halves and three steps to size them against.
+    // Reporting "flat" there would assert a finding nothing supports.
+    for (const n of [1, 2, 3]) {
+      const t = maeTrend(reported.slice(0, n))!;
+      expect(t.kind, `n=${n}`).toBe("insufficient");
+    }
+    expect(maeTrend(reported.slice(0, 4))!.kind).not.toBe("insufficient");
+    expect(maeTrend([])).toBeNull();
+  });
+
+  it("leaves the middle gameweek out of an odd-length series", () => {
+    /*
+     * Assigning it to one half would make the SIGN depend on whether the log
+     * happens to hold an even or an odd number of rows — the card gains a row
+     * a week, so that would flip the verdict every other gameweek on a series
+     * that had not changed.
+     */
+    const odd = [1.0, 1.0, 9.0, 2.0, 2.0].map((mae, i) => ({ gw: i + 1, mae }));
+    const t = maeTrend(odd)!;
+    // Halves are [1,1] and [2,2]; the 9.0 pulls `swing` up and is excluded
+    // from both means.
+    expect(t.halfDelta).toBeCloseTo(1.0, 6);
   });
 });

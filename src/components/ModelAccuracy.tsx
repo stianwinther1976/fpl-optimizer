@@ -10,7 +10,7 @@ import {
   type CalibrationState,
 } from "@/lib/calibration";
 import { POSITION_NAMES } from "@/lib/rules";
-import { calibrationCaveat } from "@/lib/display";
+import { calibrationCaveat, maeTrend } from "@/lib/display";
 
 export default function ModelAccuracy({ demo }: { demo: boolean }) {
   const [state, setState] = useState<CalibrationState | null>(null);
@@ -22,26 +22,23 @@ export default function ModelAccuracy({ demo }: { demo: boolean }) {
 
   const { factors, log } = state;
   const fmtPct = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(0)}%`;
-  const first = log[0];
-  const last = log[log.length - 1];
   /*
-   * REPORTED IN BOTH DIRECTIONS, WHICH IT WAS NOT.
+   * REPORTED IN BOTH DIRECTIONS, AND ONLY WHEN THERE IS A DIRECTION.
    *
-   * This line was `improving = ... last.mae < first.mae` and the summary
-   * rendered under `{improving && ...}`, so a reader never saw "average miss
-   * UP from X to Y" — the card reported itself only when the news was good,
-   * directly under the unhedged sentence "Systematic misses shrink
-   * automatically over time". That is a self-grading card supplying its own
-   * evidence, and a previous round already removed the causal claim from this
-   * line while leaving both the paragraph and the one-sided rendering in place.
+   * Two rounds of this line have been wrong in the same place. It was first
+   * `improving = last.mae < first.mae` rendered under `{improving && ...}`, so
+   * the card reported itself only when the news was good. That was fixed to
+   * report both directions — and left comparing `last.mae - first.mae` behind
+   * a 0.01 threshold, which is two points out of ten against a series whose
+   * neighbouring weeks differ by up to 0.51. It duly announced "▼ down from
+   * 2.26 to 1.99" on a card whose second row was 1.75, lower than either end.
    *
-   * The threshold is symmetric and the direction decides the wording and the
-   * colour. Nothing is claimed for a change inside it: two gameweeks of
-   * gradeable data is a handful of players and the difference between 1.71 and
-   * 1.73 is not a trend.
+   * `maeTrend` holds the arithmetic and its own note holds the reasoning. What
+   * matters here is that the card no longer owns a threshold: the series is
+   * asked whether it has a direction, and "flat" is one of the answers it can
+   * give rather than the absence of one.
    */
-  const maeDelta = log.length >= 2 ? last.mae - first.mae : 0;
-  const moved = Math.abs(maeDelta) > 0.01;
+  const trend = maeTrend(log);
   const caveat = calibrationCaveat(log);
 
   return (
@@ -60,8 +57,9 @@ export default function ModelAccuracy({ demo }: { demo: boolean }) {
             presses the button. */}
         How much to trust this app&apos;s projections: before every deadline the app saves what it
         predicted, then compares against the real points once the gameweek finishes and adjusts
-        its own weights. The line under the table says whether the average miss has moved
-        since the first graded gameweek, in whichever direction it moved.
+        its own weights. The line under the table says whether the average miss has a
+        DIRECTION across the graded gameweeks, or whether week-to-week noise is
+        larger than any shift — which is the usual answer.
       </p>
 
       {log.length === 0 ? (
@@ -124,20 +122,16 @@ export default function ModelAccuracy({ demo }: { demo: boolean }) {
             is 12 — so after twelve graded gameweeks "since GW{n}" starts
             sliding forward with nothing on screen saying so.
           */}
-          {log.length >= 2 && (
-            <div className={`mt-2 text-xs ${!moved ? "text-muted" : maeDelta < 0 ? "text-accent" : "text-warn"}`}>
-              {!moved ? (
-                <>
-                  ◆ Average miss flat at {last.mae.toFixed(2)} pts per player, over the{" "}
-                  {log.length} graded gameweeks kept here (GW{first.gw}–GW{last.gw}).
-                </>
-              ) : (
-                <>
-                  {maeDelta < 0 ? "▼" : "▲"} Average miss {maeDelta < 0 ? "down" : "up"} from{" "}
-                  {first.mae.toFixed(2)} to {last.mae.toFixed(2)} pts per player, over the{" "}
-                  {log.length} graded gameweeks kept here (GW{first.gw}–GW{last.gw}).
-                </>
-              )}
+          {trend && trend.kind !== "insufficient" && (
+            <div
+              className={`mt-2 text-xs ${
+                trend.kind === "flat" ? "text-muted" : trend.kind === "down" ? "text-accent" : "text-warn"
+              }`}
+            >
+              {trend.kind === "flat" ? "◆" : trend.kind === "down" ? "▼" : "▲"}{" "}
+              {trend.kind === "flat"
+                ? `Average miss ${trend.lo.toFixed(2)}–${trend.hi.toFixed(2)} pts per player across the ${trend.n} graded gameweeks kept here (GW${trend.firstGw}–GW${trend.lastGw}); latest ${trend.latest.toFixed(2)}. No direction — the gap between the two halves (${Math.abs(trend.halfDelta).toFixed(2)}) is smaller than the ordinary week-to-week step (${trend.swing.toFixed(2)}).`
+                : `Average miss ${trend.kind} by ${Math.abs(trend.halfDelta).toFixed(2)} pts per player between the first and second half of the ${trend.n} graded gameweeks kept here (GW${trend.firstGw}–GW${trend.lastGw}); range ${trend.lo.toFixed(2)}–${trend.hi.toFixed(2)}, latest ${trend.latest.toFixed(2)}.`}
             </div>
           )}
         </>
