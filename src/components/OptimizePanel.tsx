@@ -635,66 +635,6 @@ export default function OptimizePanel({
             }
           />
         </div>
-        <div className="flex items-center gap-2">
-          {/*
-            "HORIZON" READ AS A SETTING FOR THE WHOLE TAB, AND IT IS NOT.
-            It governs the transfer ranking and the chip scenarios on this
-            panel. The Multi-GW planner below it does not take it — `runPlan`
-            passes a fixed 6 — so the screen showed "Horizon: 5 gameweeks" a
-            few centimetres above a button reading "Plan next 6 GWs", with
-            nothing saying they were different questions. Reported as
-            confusing, and it was: one number contradicting another on one
-            screen is indistinguishable from a bug.
-
-            Naming what it ranks is the whole fix. Coupling the two would
-            change what the planner computes rather than what the panel says
-            about it — and the note in the change handler below records why
-            they are deliberately independent.
-          */}
-          <label htmlFor="opt-horizon" className="text-sm text-muted">
-            Rank moves over:
-          </label>
-          <select
-            id="opt-horizon"
-            aria-label="How many gameweeks to rank transfers and chips over"
-            value={horizon}
-            onChange={(e) => {
-              /*
-               * A NEW HORIZON MEANS THE OLD RESULT IS NOT AN ANSWER TO IT.
-               * Changing this only relabelled the panel: the heading read
-               * "Transfer plans (next 1 GWs)" over unchanged five-gameweek
-               * numbers, and the chip advisor still named a gameweek outside
-               * the window it now claimed. Clearing is the honest state — the
-               * reader presses Optimize again, which is one tap and cannot
-               * mislead.
-               *
-               * `plan` IS NOT ONE OF THEM, and clearing it was a bug of the
-               * same family read backwards. The Multi-GW planner does not take
-               * this horizon — `runPlan` passes a fixed 6, its button says
-               * "Plan next 6 GWs" and its copy says "the next six deadlines".
-               * So the plan on screen is still an exact answer to the question
-               * it was asked, and throwing it away costs the reader the panel's
-               * single most expensive computation to fix a mislabelling that
-               * was never there.
-               *
-               * `failure` goes, though. It is the reason the results now being
-               * cleared are missing, so leaving it behind states a failure
-               * about nothing the screen still shows.
-               */
-              setHorizon(parseInt(e.target.value));
-              setResult(null);
-              setChipView(null);
-              setFailure(null);
-            }}
-            className="min-h-11 rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
-          >
-            {[1, 2, 3, 5, 8].map((h) => (
-              <option key={h} value={h}>
-                {h} gameweek{h > 1 ? "s" : ""}
-              </option>
-            ))}
-          </select>
-        </div>
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
           <button
             type="button"
@@ -744,13 +684,90 @@ export default function OptimizePanel({
           ))}
           <span className="text-xs text-muted">← tap a chip to preview it</span>
         </div>
-        <button
-          onClick={run}
-          disabled={running}
-          className="btn-primary ml-auto rounded-lg px-5 py-2.5"
-        >
-          {running ? "Crunching…" : result ? "Re-run" : "Optimize team 🚀"}
-        </button>
+        {/*
+          THE SELECTOR SITS WITH THE BUTTON IT PARAMETERISES, because naming
+          what it governs was not enough on its own.
+
+          It used to sit at the very TOP of the card, above the badges and the
+          Optimize button, governing a section — "Transfer plans (next N GWs)"
+          — that does not exist on screen until Optimize has been pressed. So
+          it was a control with no visible owner at the top of a tab, which is
+          the shape of a tab-wide setting; and the only other gameweek count in
+          view belonged to the Multi-GW planner, whose six is fixed.
+
+          The first attempt at this fixed the WORDS: "Horizon:" became "Rank
+          moves over:" and the planner's copy gained "Always six, whatever the
+          ranking window above is set to." Both are still here and both are
+          true. It was reported as confusing again three weeks later, by the
+          same reader, from this screen. Prose four lines into a muted
+          paragraph below a button does not beat two numbers that catch the eye
+          first — so the position was the claim, not the label, and the
+          position is what changes.
+        */}
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          {/*
+            THE LABEL NAMES ITS SCOPE, which is the half of the fix that
+            survives. It must name the two sections this actually governs —
+            the transfer ranking and the chip scenarios — and not read as a
+            window for the tab, which "Horizon:" did and which is what the
+            whole confusion came out of.
+
+            The comment this replaces ended "Naming what it ranks is the whole
+            fix." It was not. The reader asked the same question again from a
+            screen where the naming was already in place; see the note above
+            this group.
+          */}
+          <label htmlFor="opt-horizon" className="text-sm text-muted">
+            Rank transfers &amp; chips over:
+          </label>
+          <select
+            id="opt-horizon"
+            aria-label="How many gameweeks to rank transfers and chips over"
+            value={horizon}
+            onChange={(e) => {
+              /*
+               * A NEW HORIZON MEANS THE OLD RESULT IS NOT AN ANSWER TO IT.
+               * Changing this only relabelled the panel: the heading read
+               * "Transfer plans (next 1 GWs)" over unchanged five-gameweek
+               * numbers, and the chip advisor still named a gameweek outside
+               * the window it now claimed. Clearing is the honest state — the
+               * reader presses Optimize again, which is one tap and cannot
+               * mislead.
+               *
+               * `plan` IS NOT ONE OF THEM, and clearing it was a bug of the
+               * same family read backwards. The Multi-GW planner does not take
+               * this horizon — `runPlan` passes a fixed 6, its button says
+               * "Plan next 6 GWs" and its copy says "the next six deadlines".
+               * So the plan on screen is still an exact answer to the question
+               * it was asked, and throwing it away costs the reader the panel's
+               * single most expensive computation to fix a mislabelling that
+               * was never there.
+               *
+               * `failure` goes, though. It is the reason the results now being
+               * cleared are missing, so leaving it behind states a failure
+               * about nothing the screen still shows.
+               */
+              setHorizon(parseInt(e.target.value));
+              setResult(null);
+              setChipView(null);
+              setFailure(null);
+            }}
+            className="min-h-11 rounded-lg bg-panel-2 border border-border-c px-3 py-2 text-sm"
+          >
+            {[1, 2, 3, 5, 8].map((h) => (
+              <option key={h} value={h}>
+                {h} gameweek{h > 1 ? "s" : ""}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={run}
+            disabled={running}
+            className="btn-primary rounded-lg px-5 py-2.5"
+          >
+            {running ? "Crunching…" : result ? "Re-run" : "Optimize team 🚀"}
+          </button>
+        </div>
       </div>
 
       {/*

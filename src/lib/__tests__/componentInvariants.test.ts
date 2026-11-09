@@ -2360,18 +2360,58 @@ describe("the two planning windows do not read as one", () => {
    * nothing said so, and one number contradicting another on one screen is
    * indistinguishable from a bug.
    *
-   * What is pinned is the pairing, not either half alone. The failure mode is
-   * the two drifting back into looking like one setting: the label going
-   * generic again, or the planner's copy dropping the sentence that says its
-   * six is fixed. Either one on its own restores the confusion.
+   * THE FIRST FIX WAS WORDS ONLY, AND IT DID NOT HOLD. "Horizon:" became
+   * "Rank moves over:" and the planner gained "Always six, whatever the
+   * ranking window above is set to." Both shipped, both are true, and the
+   * same reader asked the same question again three weeks later from a
+   * screenshot showing both. So the words are necessary and are pinned below
+   * — but they are not what was wrong.
+   *
+   * What was wrong is POSITION. The selector sat at the top of the card,
+   * above the badges and the Optimize button, governing a section that is not
+   * on screen until Optimize has been pressed — a control with no visible
+   * owner at the top of a tab, which is the shape of a tab-wide setting. It
+   * now sits in the same group as the button it parameterises, so the number
+   * has an owner a reader can see without reading anything.
+   *
+   * All three are pinned together, because any one of them alone restores the
+   * confusion.
    */
   const src = read("OptimizePanel.tsx");
 
   it("the selector names what it actually governs", () => {
-    // Not "Horizon:", which reads as a setting for the whole tab.
-    expect(src).toContain("Rank moves over:");
+    // Not "Horizon:", which reads as a setting for the whole tab, and not a
+    // generic "moves" either — it governs the transfer ranking AND the chip
+    // scenarios, and the label is the only thing that says which.
+    expect(src).toContain("Rank transfers &amp; chips over:");
     expect(src).not.toMatch(/>\s*Horizon:\s*</);
     expect(src).toContain('aria-label="How many gameweeks to rank transfers and chips over"');
+  });
+
+  it("the selector sits with the button it parameterises, not above the card", () => {
+    /*
+     * PINNED ON ORDER, NOT ON A CLASS NAME. What matters is that nothing else
+     * in the card separates the control from the action it configures — a
+     * `ml-auto` or a flex direction can change without reintroducing the bug,
+     * and pinning the markup would fail on a harmless restyle while passing
+     * on a move back to the top.
+     *
+     * The badges row is the thing that used to sit between them, so it is the
+     * landmark: the selector must come AFTER it and the Optimize button must
+     * be the next control after the selector.
+     */
+    const badges = src.indexOf("← tap a chip to preview it");
+    const selector = src.indexOf('id="opt-horizon"');
+    const optimize = src.indexOf('{running ? "Crunching…" : result ? "Re-run" : "Optimize team 🚀"}');
+    for (const [name, at] of [["badges", badges], ["selector", selector], ["optimize", optimize]] as const) {
+      expect(at, name).toBeGreaterThan(0);
+    }
+    expect(selector).toBeGreaterThan(badges);
+    expect(optimize).toBeGreaterThan(selector);
+    // And nothing interactive is wedged between the two.
+    const between = src.slice(selector, optimize);
+    expect(between).not.toContain("<Badge");
+    expect(between).not.toContain("DeadlineNote");
   });
 
   it("the multi-gameweek planner says its six is fixed", () => {
