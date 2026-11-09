@@ -1,0 +1,37 @@
+# How low can the Model-accuracy card's "average miss" go at all?
+#
+# The card reports the model's mean absolute error against nothing, so a
+# reader has no way to tell 1.99 points from a good number or a bad one. This
+# measures the scale: the same error for predictors that are handed the answer
+# sheet, over the same gameweeks, from the official API only.
+#
+# It imports nothing from the model. The question is what the outcome
+# distribution permits, which is a fact about football rather than about this
+# app.
+#
+# On a runner because the sandbox cannot reach fantasy.premierleague.com.
+# Publishes nothing and reads only the official public API.
+name: Accuracy floor
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mae-floor
+  cancel-in-progress: true
+
+jobs:
+  floor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Price the average miss against predictors that cannot be beaten
+        run: npx vitest run -c vitest.maefloor.config.ts --reporter=verbose --silent=false
