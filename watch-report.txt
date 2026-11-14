@@ -1,0 +1,13 @@
+NEXT DEADLINE: GW11 at 2026-11-21T11:00:00Z (7d 5h away)
+SQUAD 946779: Mr. Excel — bank £0.9m, free transfers unknown from this endpoint (the app computes them)
+FLAGGED:
+  Guéhi (MCI): status d, 75% chance — Unspecified injury - 75% chance of playing
+  Xhaka (SUN): status d, 75% chance — Calf injury - 75% chance of playing
+PRICE MOVES:
+  De Cuyper (BHA): +0.1m this gameweek
+  Groß (BHA): +0.1m this gameweek
+  Xhaka (SUN): -0.1m this gameweek
+  Evanilson (BOU): +0.1m this gameweek
+  Calvert-Lewin (LEE): -0.1m this gameweek
+  Donnarumma (MCI): -0.1m this gameweek
+STATUS: SPEAK
