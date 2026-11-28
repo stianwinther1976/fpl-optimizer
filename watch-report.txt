@@ -1,0 +1,9 @@
+NEXT DEADLINE: GW13 at 2026-12-01T18:30:00Z (3d 11h away)
+SQUAD 946779: Mr. Excel — bank £0.4m, free transfers unknown from this endpoint (the app computes them)
+FLAGGED: none
+PRICE MOVES:
+  Verbruggen (BHA): +0.1m this gameweek
+  Palmer (CHE): -0.1m this gameweek
+  Wirtz (LIV): +0.1m this gameweek
+  Vuskovic (BHA): +0.1m this gameweek
+STATUS: SPEAK
